@@ -82,6 +82,7 @@ async function main(): Promise<void> {
 			completed: parsed.completed,
 			rulesetVersion: getRulesetVersion(db, agent),
 			ts: new Date().toISOString(),
+			config: "real",
 		});
 
 		// Distillation calls a model and takes far longer than the 2s hook

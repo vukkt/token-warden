@@ -155,3 +155,35 @@ differed from the spec's assumptions. Newest entries at the bottom of each phase
   `~/.claude/agent-memory`) so unit tests never write real agent memory.
 - **`ruleset_version` bumps only when the selector made at least one decision**; a no-op
   invocation (no candidates, nothing to audit) does not recompile MEMORY.md or bump.
+
+## Phase 4 — Visibility
+
+- **Command bodies use `${CLAUDE_SKILL_DIR}/..`, not `${CLAUDE_PLUGIN_ROOT}`.** Per current
+  skills docs, the substitution available inside command/skill markdown is
+  `${CLAUDE_SKILL_DIR}` (the directory containing the command file — `commands/` for us);
+  `${CLAUDE_PLUGIN_ROOT}` is only substituted in hooks/MCP/monitor configs. Headless
+  invocation uses the namespaced form `/token-warden:warden-status`; interactive sessions
+  surface the short `/warden-status` when unambiguous.
+- **`rules.decided_reason` added (migration 3).** The spec's status output requires
+  evictions "with reasons", which post-hoc delta inspection cannot reconstruct (regression
+  vs sub-threshold are indistinguishable). The selector now stores a human-readable reason
+  with every verdict.
+- **`runs.config` added (migration 4): 'real' | 'active' | 'candidate' | 'audit'.** The
+  first live status report showed the suite "current" total inflated +25% because the
+  latest completed golden runs happened to be candidate-configuration runs (including the
+  deliberately wasteful haiku rule). Status comparisons and learning curves now count only
+  `config='active'` runs; existing rows were backfilled from the selector's logged session
+  ids. This extends the spec's fixed `runs` schema — additive, default `'active'`.
+- **"Current suite total"** = per baselined task, the latest completed active-config golden
+  run's total, summed; compared against the frozen `run1_tokens` sum and the ratcheted
+  `best_tokens` sum.
+- **Learning curve granularity is per day** (avg completed active-config golden-run tokens,
+  with run counts), labeled with the agent's current ruleset version. Text only, no
+  charting, per spec.
+- **Meta-cost accounting lives in `bench.ts`**, not the command markdown: after every CLI
+  invocation it prints tokens spent benchmarking vs real-work tokens collected in the last
+  7 days (`task_hash IS NULL`), warning above the 10% threshold; with zero collected
+  real-work tokens any benchmarking warns. `--agent all` loops the four domain agents and
+  reports one combined meta-cost.
+- **`MIGRATION_COUNT` exported** so the schema-version test tracks new migrations without
+  hand-editing.

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	getRunBySession,
+	MIGRATION_COUNT,
 	type NewRun,
 	openDb,
 	upsertRun,
@@ -43,7 +44,7 @@ function makeRun(overrides: Partial<NewRun> = {}): NewRun {
 
 describe("openDb / migrations", () => {
 	it("creates all tables and stamps user_version", () => {
-		expect(db.pragma("user_version", { simple: true })).toBe(2);
+		expect(db.pragma("user_version", { simple: true })).toBe(MIGRATION_COUNT);
 		const tables = db
 			.prepare<[], { name: string }>(
 				"SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
@@ -64,7 +65,7 @@ describe("openDb / migrations", () => {
 		upsertRun(db, makeRun());
 		db.close();
 		db = openDb(join(dir, "warden.db"));
-		expect(db.pragma("user_version", { simple: true })).toBe(2);
+		expect(db.pragma("user_version", { simple: true })).toBe(MIGRATION_COUNT);
 		expect(getRunBySession(db, "s1")).toBeDefined();
 	});
 });

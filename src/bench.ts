@@ -33,6 +33,7 @@ import {
 	getRulesetVersion,
 	openDb,
 	type RuleRow,
+	type RunConfig,
 	recordBaseline,
 	upsertRun,
 	type WardenDb,
@@ -83,9 +84,12 @@ export function parseArgs(argv: string[]): BenchArgs {
 				throw new Error(`unknown flag: ${flag}`);
 		}
 	}
-	if (!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)) {
+	if (
+		args.agent !== "all" &&
+		!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)
+	) {
 		throw new Error(
-			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${args.agent}")`,
+			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")}, all (got "${args.agent}")`,
 		);
 	}
 	if (!Number.isInteger(args.runs) || args.runs < 1) {
@@ -93,6 +97,9 @@ export function parseArgs(argv: string[]): BenchArgs {
 	}
 	if (args.rule !== null && !Number.isInteger(args.rule)) {
 		throw new Error("--rule must be an integer rule id");
+	}
+	if (args.agent === "all" && args.rule !== null) {
+		throw new Error("--rule requires a specific --agent (rules are per-agent)");
 	}
 	return args;
 }
@@ -349,6 +356,7 @@ function runOnce(
 			completed,
 			rulesetVersion: options.rulesetVersion,
 			ts,
+			config: options.config,
 		});
 
 		// Only the plain active-set configuration touches baselines: the
@@ -401,6 +409,9 @@ export interface SuiteOptions {
 	rulesetVersion: number;
 	/** Printed as a prefix on progress lines. */
 	label: string;
+	/** Stored on each runs row so status can separate active-set golden runs
+	 * from candidate/audit measurement runs. */
+	config: RunConfig;
 }
 
 /**
@@ -439,46 +450,117 @@ export function runSuite(
 	return summaries;
 }
 
-function benchAgent(args: BenchArgs): void {
+export interface MetaCost {
+	benchTokens: number;
+	realWorkTokens: number;
+	/** benchTokens / realWorkTokens; null when no real work was collected. */
+	ratio: number | null;
+	/** True when benchmarking exceeded 10% of the week's real-work tokens. */
+	warn: boolean;
+}
+
+/** The optimizer reporting on its own overhead (spec §4.2). */
+export function metaCost(
+	benchTokens: number,
+	realWorkTokens: number,
+): MetaCost {
+	if (realWorkTokens <= 0) {
+		return {
+			benchTokens,
+			realWorkTokens: 0,
+			ratio: null,
+			warn: benchTokens > 0,
+		};
+	}
+	const ratio = benchTokens / realWorkTokens;
+	return { benchTokens, realWorkTokens, ratio, warn: ratio > 0.1 };
+}
+
+function realWorkTokensLast7Days(db: WardenDb): number {
+	const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+	const row = db
+		.prepare<unknown[], { total: number }>(
+			`SELECT COALESCE(SUM(input_tokens + output_tokens + cache_creation + cache_read), 0) AS total
+			 FROM runs WHERE task_hash IS NULL AND ts >= ?`,
+		)
+		.get(since);
+	return row?.total ?? 0;
+}
+
+/** Benchmark one agent; returns tokens spent benchmarking. */
+function benchAgent(db: WardenDb, agent: string, args: BenchArgs): number {
+	let tasks = loadGoldenTasks(agent);
+	if (args.task !== null) {
+		tasks = tasks.filter((t) => t.id === args.task);
+		if (tasks.length === 0) throw new Error(`no task with id ${args.task}`);
+	}
+
+	const rules = getActiveRules(db, agent);
+	if (args.rule !== null) {
+		const candidate = getRuleById(db, args.rule);
+		if (!candidate) throw new Error(`no rule with id ${args.rule}`);
+		if (candidate.agent !== agent) {
+			throw new Error(
+				`rule ${args.rule} belongs to agent "${candidate.agent}"`,
+			);
+		}
+		rules.push(candidate);
+	}
+
+	console.log(
+		`Benching agent=${agent} tasks=${tasks.length} runs=${args.runs}` +
+			` rules=${rules.length}${args.rule !== null ? ` (candidate ${args.rule})` : ""}`,
+	);
+
+	const summaries = runSuite(db, agent, tasks, {
+		rules,
+		runs: args.runs,
+		recordBaselines: args.rule === null,
+		rulesetVersion: getRulesetVersion(db, agent),
+		label: args.rule === null ? "active-set" : `candidate-${args.rule}`,
+		config: args.rule === null ? "active" : "candidate",
+	});
+
+	let benchTokens = 0;
+	for (const summary of summaries) {
+		for (const result of summary.results) benchTokens += result.tokens;
+		const baseline = getBaseline(db, agent, summary.taskId);
+		const baselineNote = baseline
+			? `run1=${baseline.run1_tokens} (${pctOfRun1(summary.meanCompletedTokens, baseline.run1_tokens)})` +
+				` best=${baseline.best_tokens}`
+			: "no baseline (no completed run yet)";
+		console.log(`  ${summary.taskId}: vs ${baselineNote}`);
+	}
+	return benchTokens;
+}
+
+function pctOfRun1(current: number, run1: number): string {
+	if (run1 === 0 || current === 0) return "n/a";
+	const change = ((current - run1) / run1) * 100;
+	return `${change > 0 ? "+" : ""}${change.toFixed(1)}% vs run1`;
+}
+
+function main(args: BenchArgs): void {
 	const db = openDb();
 	try {
-		let tasks = loadGoldenTasks(args.agent);
-		if (args.task !== null) {
-			tasks = tasks.filter((t) => t.id === args.task);
-			if (tasks.length === 0) throw new Error(`no task with id ${args.task}`);
+		const agents = args.agent === "all" ? [...DOMAIN_AGENTS] : [args.agent];
+		let benchTokens = 0;
+		for (const agent of agents) {
+			benchTokens += benchAgent(db, agent, args);
 		}
 
-		const rules = getActiveRules(db, args.agent);
-		if (args.rule !== null) {
-			const candidate = getRuleById(db, args.rule);
-			if (!candidate) throw new Error(`no rule with id ${args.rule}`);
-			if (candidate.agent !== args.agent) {
-				throw new Error(
-					`rule ${args.rule} belongs to agent "${candidate.agent}"`,
-				);
-			}
-			rules.push(candidate);
-		}
-
+		const cost = metaCost(benchTokens, realWorkTokensLast7Days(db));
+		const ratioText =
+			cost.ratio === null
+				? "no real-work tokens collected in the last 7 days"
+				: `${(cost.ratio * 100).toFixed(1)}% of the week's real-work tokens (${cost.realWorkTokens.toLocaleString("en-US")})`;
 		console.log(
-			`Benching agent=${args.agent} tasks=${tasks.length} runs=${args.runs}` +
-				` rules=${rules.length}${args.rule !== null ? ` (candidate ${args.rule})` : ""}`,
+			`Meta-cost: this benchmark session used ${cost.benchTokens.toLocaleString("en-US")} tokens — ${ratioText}.`,
 		);
-
-		const summaries = runSuite(db, args.agent, tasks, {
-			rules,
-			runs: args.runs,
-			recordBaselines: args.rule === null,
-			rulesetVersion: getRulesetVersion(db, args.agent),
-			label: args.rule === null ? "active-set" : `candidate-${args.rule}`,
-		});
-
-		for (const summary of summaries) {
-			const baseline = getBaseline(db, args.agent, summary.taskId);
-			const baselineNote = baseline
-				? `run1=${baseline.run1_tokens} best=${baseline.best_tokens}`
-				: "no baseline (no completed run yet)";
-			console.log(`  ${summary.taskId}: ${baselineNote}`);
+		if (cost.warn) {
+			console.log(
+				"⚠ Benchmarking overhead exceeded 10% of the week's collected real-work tokens.",
+			);
 		}
 	} finally {
 		db.close();
@@ -491,7 +573,7 @@ const invokedDirectly =
 
 if (invokedDirectly) {
 	try {
-		benchAgent(parseArgs(process.argv.slice(2)));
+		main(parseArgs(process.argv.slice(2)));
 	} catch (err) {
 		console.error(err instanceof Error ? err.message : String(err));
 		process.exit(1);

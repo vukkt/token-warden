@@ -55,6 +55,39 @@ export function verdict(rule: VerdictInput): "active" | "evicted" {
 	return weeklySavings >= weeklyRent * 2 ? "active" : "evicted";
 }
 
+export interface ReasonedVerdict {
+	status: "active" | "evicted";
+	reason: string;
+}
+
+/** Verdict plus the human-readable reason stored on the rule and shown in
+ * the /warden-status eviction ledger. */
+export function verdictWithReason(
+	delta: number | null,
+	contextCost: number,
+	regression: boolean,
+): ReasonedVerdict {
+	if (regression) {
+		return {
+			status: "evicted",
+			reason: "regression: a previously passing golden task failed",
+		};
+	}
+	if (delta === null) {
+		return { status: "evicted", reason: "no comparable completed runs" };
+	}
+	if (delta <= 0) {
+		return { status: "evicted", reason: `non-positive delta (${delta})` };
+	}
+	const status = verdict({ measuredDelta: delta, contextCost });
+	return status === "active"
+		? { status, reason: `savings ${delta} ≥ 2× context rent ${contextCost}` }
+		: {
+				status,
+				reason: `sub-threshold: savings ${delta} < 2× context rent ${contextCost}`,
+			};
+}
+
 export interface DeltaResult {
 	/** Mean tokens saved per golden run (positive = candidate is cheaper);
 	 * null when no task completed in both configurations. */
@@ -143,13 +176,19 @@ export function selectForAgent(
 				false,
 			);
 			const { delta, regression } = computeDelta(baseline, withCandidate);
-			const status = regression
-				? "evicted"
-				: verdict({
-						measuredDelta: delta,
-						contextCost: candidate.context_cost,
-					});
-			decideRule(db, candidate.id, status, delta, new Date().toISOString());
+			const { status, reason } = verdictWithReason(
+				delta,
+				candidate.context_cost,
+				regression,
+			);
+			decideRule(
+				db,
+				candidate.id,
+				status,
+				delta,
+				reason,
+				new Date().toISOString(),
+			);
 			decisions.push({
 				rule: candidate,
 				kind: "candidate",
@@ -169,13 +208,19 @@ export function selectForAgent(
 			// The rule's current worth: cost without it minus cost with it
 			// (baseline includes it). Removing a good rule makes runs dearer.
 			const { delta, regression } = computeDelta(summariesWithout, baseline);
-			const status = regression
-				? "evicted"
-				: verdict({
-						measuredDelta: delta,
-						contextCost: auditTarget.context_cost,
-					});
-			decideRule(db, auditTarget.id, status, delta, new Date().toISOString());
+			const { status, reason } = verdictWithReason(
+				delta,
+				auditTarget.context_cost,
+				regression,
+			);
+			decideRule(
+				db,
+				auditTarget.id,
+				status,
+				delta,
+				`re-audit: ${reason}`,
+				new Date().toISOString(),
+			);
 			decisions.push({
 				rule: auditTarget,
 				kind: "re-audit",
@@ -243,6 +288,11 @@ function main(args: SelectArgs): void {
 				recordBaselines,
 				rulesetVersion: getRulesetVersion(db, args.agent),
 				label,
+				config: recordBaselines
+					? "active"
+					: label.startsWith("audit-")
+						? "audit"
+						: "candidate",
 			});
 
 		console.log(

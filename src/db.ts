@@ -64,7 +64,16 @@ const MIGRATIONS: readonly string[] = [
 		updated_at TEXT NOT NULL
 	);
 	`,
+	`
+	ALTER TABLE rules ADD COLUMN decided_reason TEXT;
+	`,
+	`
+	ALTER TABLE runs ADD COLUMN config TEXT NOT NULL DEFAULT 'active';
+	`,
 ];
+
+/** Current schema version — what `PRAGMA user_version` reads after openDb. */
+export const MIGRATION_COUNT = MIGRATIONS.length;
 
 function migrate(db: WardenDb): void {
 	const current = db.pragma("user_version", { simple: true }) as number;
@@ -87,6 +96,12 @@ export function openDb(path: string = defaultDbPath()): WardenDb {
 	return db;
 }
 
+/** Which rule configuration produced a run: 'real' for collected work
+ * sessions, 'active' for plain active-set golden runs (the only kind that
+ * feeds baselines and learning curves), 'candidate'/'audit' for selector
+ * measurement runs. */
+export type RunConfig = "real" | "active" | "candidate" | "audit";
+
 export interface NewRun {
 	agent: string;
 	sessionId: string;
@@ -100,6 +115,7 @@ export interface NewRun {
 	completed: boolean;
 	rulesetVersion: number;
 	ts: string;
+	config?: RunConfig;
 }
 
 /** Row shape as stored (snake_case, ints for booleans). */
@@ -117,6 +133,7 @@ export interface RunRow {
 	completed: number;
 	ruleset_version: number;
 	ts: string;
+	config: string;
 }
 
 /**
@@ -130,8 +147,8 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 			`INSERT INTO runs (
 				agent, session_id, task_hash, input_tokens, output_tokens,
 				cache_creation, cache_read, tool_calls, file_rereads,
-				completed, ruleset_version, ts
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				completed, ruleset_version, ts, config
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(session_id) DO UPDATE SET
 				agent = excluded.agent,
 				task_hash = excluded.task_hash,
@@ -143,7 +160,8 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 				file_rereads = excluded.file_rereads,
 				completed = excluded.completed,
 				ruleset_version = excluded.ruleset_version,
-				ts = excluded.ts
+				ts = excluded.ts,
+				config = excluded.config
 			RETURNING id`,
 		)
 		.get(
@@ -159,6 +177,7 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 			run.completed ? 1 : 0,
 			run.rulesetVersion,
 			run.ts,
+			run.config ?? "active",
 		);
 	if (row === undefined) {
 		throw new Error("upsertRun: INSERT ... RETURNING produced no row");
@@ -185,6 +204,7 @@ export interface RuleRow {
 	source_run: number | null;
 	decided_at: string | null;
 	created_at: string;
+	decided_reason: string | null;
 }
 
 export function getRuleById(db: WardenDb, id: number): RuleRow | undefined {
@@ -298,11 +318,28 @@ export function decideRule(
 	id: number,
 	status: "active" | "evicted",
 	measuredDelta: number | null,
+	reason: string,
 	decidedAt: string,
 ): void {
 	db.prepare(
-		"UPDATE rules SET status = ?, measured_delta = ?, decided_at = ? WHERE id = ?",
-	).run(status, measuredDelta, decidedAt, id);
+		`UPDATE rules SET status = ?, measured_delta = ?, decided_reason = ?, decided_at = ?
+		 WHERE id = ?`,
+	).run(status, measuredDelta, reason, decidedAt, id);
+}
+
+/** Most recent evictions, newest first — the status command's ledger tail. */
+export function lastEvictions(
+	db: WardenDb,
+	agent: string,
+	limit: number,
+): RuleRow[] {
+	return db
+		.prepare<unknown[], RuleRow>(
+			`SELECT * FROM rules
+			 WHERE agent = ? AND status = 'evicted'
+			 ORDER BY decided_at DESC, id DESC LIMIT ?`,
+		)
+		.all(agent, limit);
 }
 
 export function getRulesetVersion(db: WardenDb, agent: string): number {
