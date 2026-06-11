@@ -1,0 +1,28 @@
+{
+	"name": "token-warden",
+	"version": "0.1.0",
+	"description": "Claude Code plugin that makes coding agents measurably cheaper over time: collect token costs, distill candidate rules, benchmark them on golden suites, and compile only the rules that earn their context rent into agent memory.",
+	"type": "module",
+	"private": true,
+	"engines": {
+		"node": ">=20"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"lint": "biome check .",
+		"test": "vitest run",
+		"bench": "tsx src/bench.ts"
+	},
+	"dependencies": {
+		"better-sqlite3": "^12.4.1",
+		"zod": "^4.1.12"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.8",
+		"@types/better-sqlite3": "^7.6.13",
+		"@types/node": "^24.10.1",
+		"tsx": "^4.20.6",
+		"typescript": "^5.9.3",
+		"vitest": "^3.2.4"
+	}
+}
