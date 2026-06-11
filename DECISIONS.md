@@ -187,3 +187,32 @@ differed from the spec's assumptions. Newest entries at the bottom of each phase
   reports one combined meta-cost.
 - **`MIGRATION_COUNT` exported** so the schema-version test tracks new migrations without
   hand-editing.
+
+## Phase 5 — Inter-agent approval gate
+
+- **Verified against current Agent Teams + hooks docs:** the flag is
+  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` (env or settings.json `env`); the inter-agent
+  message tool is **`SendMessage`** (always available to teammates even under `tools`
+  restrictions); and PreToolUse supports a genuine **`"ask"`** decision
+  (`hookSpecificOutput.permissionDecision: "ask"` + `permissionDecisionReason` shown to the
+  user) — the spec's deny-fallback was not needed.
+- **Approval state is observed, not asked.** An `ask` hook cannot learn the user's
+  decision. The gate logs the question with `approved = NULL` at PreToolUse; a PostToolUse
+  hook on the same matcher (`gate.ts --post`) marks the newest matching pending row
+  `approved = 1`, since PostToolUse only fires when the send actually executed. Rows that
+  stay NULL were denied or aborted.
+- **The SendMessage input schema is experimental**, so the gate extracts the recipient
+  from the first present of `recipient|to|agent|agent_name|name` and the body from
+  `message|content|body|text|prompt`. Sender comes from the hook payload's
+  `agent_type`/`agent_id` (subagent-defined teammates) and defaults to `"lead"` — the
+  lead's outbound messages are gated too.
+- **The gate fails OPEN**: any internal error logs to `gate.log` (next to the DB) and
+  exits 0 with no output, deferring to the normal permission flow. A broken gate must
+  never block team messaging; the gate is an observability/approval layer, not a security
+  boundary.
+- **Graceful degradation is structural**: without the env flag the SendMessage tool never
+  exists, so the matcher never fires — verified by running a plugin-loaded session with
+  the flag unset (works, zero question rows).
+- **`questions` table added (migration 5)** per spec, with per-sender asked/approved
+  counts wired into `/warden-status` (high outbound volume = that agent's memory is
+  missing something — a future distiller signal).

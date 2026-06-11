@@ -14,6 +14,7 @@ import {
 	getRulesetVersion,
 	lastEvictions,
 	openDb,
+	questionCounts,
 	type WardenDb,
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
@@ -194,6 +195,21 @@ export function renderStatus(db: WardenDb): string {
 		}
 	}
 	if (!anyEvicted) lines.push("  none");
+
+	lines.push("");
+	lines.push(
+		"Cross-agent questions (high volume = that agent's memory is missing something):",
+	);
+	const counts = questionCounts(db);
+	if (counts.length === 0) {
+		lines.push("  none recorded");
+	} else {
+		for (const count of counts) {
+			lines.push(
+				`  ${count.from_agent}: asked ${count.asked}, approved ${count.approved}`,
+			);
+		}
+	}
 
 	return lines.join("\n");
 }

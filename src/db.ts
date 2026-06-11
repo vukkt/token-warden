@@ -70,6 +70,16 @@ const MIGRATIONS: readonly string[] = [
 	`
 	ALTER TABLE runs ADD COLUMN config TEXT NOT NULL DEFAULT 'active';
 	`,
+	`
+	CREATE TABLE IF NOT EXISTS questions (
+		id INTEGER PRIMARY KEY,
+		from_agent TEXT NOT NULL,
+		to_agent TEXT NOT NULL,
+		body TEXT NOT NULL,
+		approved INTEGER,
+		ts TEXT NOT NULL
+	);
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -368,6 +378,74 @@ export function bumpRulesetVersion(
 		.get(agent, ts);
 	if (row === undefined) throw new Error("bumpRulesetVersion produced no row");
 	return row.version;
+}
+
+export interface QuestionRow {
+	id: number;
+	from_agent: string;
+	to_agent: string;
+	body: string;
+	/** 1 when the send executed (user approved), NULL while pending or when
+	 * the user denied/aborted — the gate can only observe execution. */
+	approved: number | null;
+	ts: string;
+}
+
+/** Log a cross-agent question at ask time (approval unknown yet). */
+export function insertQuestion(
+	db: WardenDb,
+	fromAgent: string,
+	toAgent: string,
+	body: string,
+	ts: string,
+): number {
+	const row = db
+		.prepare<unknown[], { id: number }>(
+			`INSERT INTO questions (from_agent, to_agent, body, approved, ts)
+			 VALUES (?, ?, ?, NULL, ?) RETURNING id`,
+		)
+		.get(fromAgent, toAgent, body, ts);
+	if (row === undefined) throw new Error("insertQuestion produced no row");
+	return row.id;
+}
+
+/** Mark the most recent pending question matching this send as approved —
+ * called from PostToolUse, which only fires when the tool actually ran. */
+export function approveLatestQuestion(
+	db: WardenDb,
+	fromAgent: string,
+	toAgent: string,
+	body: string,
+): boolean {
+	const result = db
+		.prepare(
+			`UPDATE questions SET approved = 1 WHERE id = (
+				SELECT id FROM questions
+				WHERE from_agent = ? AND to_agent = ? AND body = ? AND approved IS NULL
+				ORDER BY id DESC LIMIT 1
+			)`,
+		)
+		.run(fromAgent, toAgent, body);
+	return result.changes > 0;
+}
+
+export interface QuestionCount {
+	from_agent: string;
+	asked: number;
+	approved: number;
+}
+
+/** Outbound question volume per agent — high volume from an agent is a
+ * distiller signal that its memory is missing something. */
+export function questionCounts(db: WardenDb): QuestionCount[] {
+	return db
+		.prepare<unknown[], QuestionCount>(
+			`SELECT from_agent,
+				COUNT(*) AS asked,
+				COALESCE(SUM(approved = 1), 0) AS approved
+			 FROM questions GROUP BY from_agent ORDER BY asked DESC`,
+		)
+		.all();
 }
 
 /**
