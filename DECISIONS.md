@@ -116,3 +116,42 @@ differed from the spec's assumptions. Newest entries at the bottom of each phase
   `vitest.config.ts` include/exclude): it has its own suite that runs inside bench copies,
   and its deliberate flaws must not fail plugin CI. Fixture totals 29 files
   (3 routes/3 services/3 repos + React components/hook/context + tests + schema).
+
+## Phase 3 — Distiller and Selector
+
+- **Distillation runs detached, not inside the hook.** The Stop hook must finish in <2s
+  but distillation makes a model call (10–30s). `collect.ts` does the cheap p75 trigger
+  check in-process (SQL over the last 50 runs) and, when it fires, spawns
+  `tsx src/distill.ts --run <id> --transcript <path>` detached with stdio ignored, then
+  exits. `TOKEN_WARDEN_NO_DISTILL=1` disables the spawn (used by tests).
+- **Rolling p75** = nearest-rank 75th percentile over the agent's most recent 50 runs
+  (excluding the current one), requiring ≥5 priors per spec. The distiller re-checks the
+  trigger itself so a stale spawn can't distill a cheap run.
+- **Distiller transcript excerpt** is a compact action trace (`digestTranscript`): user and
+  assistant text truncated to 200 chars, tool calls as `TOOL <name> <input>` lines, capped
+  at 8KB keeping head (the task) and tail (where the session bogged down). Raw JSONL would
+  waste the haiku call's context on framing.
+- **Trigram similarity** = Jaccard over character trigrams of the lowercased,
+  punctuation-stripped body. Dedupe compares against ALL existing rules for the agent
+  (including evicted ones) so the distiller cannot resurrect an already-falsified rule.
+- **`ruleset_versions` table added (migration 2).** The spec's `runs.ruleset_version`
+  column needs a counter to reference; per-agent versions bump on every selector compile.
+  `collect.ts` and `bench.ts` stamp rows with the agent's current version.
+- **Selector cost bounding:** the active-set baseline suite is run ONCE per invocation and
+  shared by all candidates (max 3, oldest first); each candidate adds one suite run, and
+  the re-audit adds one more (active set minus the audited rule). Worst case per
+  invocation: 5 suite configurations.
+- **`measured_delta` is paired per task** — mean over tasks completed in both
+  configurations of (mean without − mean with) — rather than a pooled mean over all runs,
+  so a task mix change can't masquerade as savings. A task that completed in the baseline
+  but has zero completed candidate runs → immediate eviction regardless of tokens (spec
+  §3.2.2); tasks failing in *both* configs are excluded from the math.
+- **Re-audit target is chosen before any candidate is decided**, ordered by `decided_at`
+  ascending (round-robin: each audit refreshes `decided_at`). A rule activated in the
+  current invocation is therefore never instantly re-audited.
+- **Re-audit delta direction:** the rule's worth = mean(suite WITHOUT it) − mean(baseline
+  WITH it). The baseline summaries are reused as the "with" side — no extra suite run.
+- **`TOKEN_WARDEN_MEMORY_DIR` env override** for the compiled-memory root (default
+  `~/.claude/agent-memory`) so unit tests never write real agent memory.
+- **`ruleset_version` bumps only when the selector made at least one decision**; a no-op
+  invocation (no candidates, nothing to audit) does not recompile MEMORY.md or bump.

@@ -57,6 +57,54 @@ function hasTextContent(entry: Entry): boolean {
 	return false;
 }
 
+function truncate(text: string, max: number): string {
+	const oneLine = text.replace(/\s+/g, " ").trim();
+	return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
+}
+
+/**
+ * Render a compact, human-readable action trace of a transcript for the
+ * distiller's prompt: user/assistant text (truncated) and tool calls with
+ * their inputs. Capped to `maxChars` by keeping the head and tail — the
+ * start shows the task, the tail shows how the session bogged down.
+ */
+export function digestTranscript(jsonlText: string, maxChars = 8000): string {
+	const lines: string[] = [];
+	for (const line of jsonlText.split(/\r?\n/)) {
+		if (!line || line.trim() === "") continue;
+		let raw: unknown;
+		try {
+			raw = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		const result = entrySchema.safeParse(raw);
+		if (!result.success) continue;
+		const entry = result.data;
+		if (!CONVERSATIONAL.has(entry.type)) continue;
+		const content = entry.message?.content;
+		if (typeof content === "string") {
+			lines.push(`${entry.type.toUpperCase()}: ${truncate(content, 200)}`);
+		} else if (Array.isArray(content)) {
+			for (const block of content) {
+				if (block.type === "text" && block.text) {
+					lines.push(
+						`${entry.type.toUpperCase()}: ${truncate(block.text, 200)}`,
+					);
+				} else if (block.type === "tool_use") {
+					const input = truncate(JSON.stringify(block.input ?? {}), 160);
+					lines.push(`TOOL ${block.name ?? "unknown"} ${input}`);
+				}
+			}
+		}
+	}
+	const text = lines.join("\n");
+	if (text.length <= maxChars) return text;
+	const head = text.slice(0, Math.floor(maxChars * 0.4));
+	const tail = text.slice(-Math.floor(maxChars * 0.55));
+	return `${head}\n…[transcript truncated]…\n${tail}`;
+}
+
 /**
  * Parse one transcript JSONL into run aggregates.
  *

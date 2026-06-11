@@ -5,12 +5,17 @@
  * Hard requirements (spec §1.3): never block or fail the user's session.
  * Every failure path logs to collect.log (next to the DB) and exits 0.
  */
+import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { defaultDbPath, openDb, upsertRun } from "./db.js";
+import { defaultDbPath, getRulesetVersion, openDb, upsertRun } from "./db.js";
+import { shouldDistill } from "./distill.js";
 import { parseTranscript } from "./transcript.js";
 import { DOMAIN_AGENTS } from "./types.js";
+
+const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const hookPayloadSchema = z.looseObject({
 	session_id: z.string(),
@@ -61,10 +66,11 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	const agent = resolveAgent(payload.agent_type, parsed.agent);
 	const db = openDb();
 	try {
-		upsertRun(db, {
-			agent: resolveAgent(payload.agent_type, parsed.agent),
+		const runId = upsertRun(db, {
+			agent,
 			sessionId: payload.session_id,
 			taskHash: null,
 			inputTokens: parsed.inputTokens,
@@ -74,9 +80,36 @@ async function main(): Promise<void> {
 			toolCalls: parsed.toolCalls,
 			fileRereads: parsed.fileRereads,
 			completed: parsed.completed,
-			rulesetVersion: 0,
+			rulesetVersion: getRulesetVersion(db, agent),
 			ts: new Date().toISOString(),
 		});
+
+		// Distillation calls a model and takes far longer than the 2s hook
+		// budget, so it runs as a detached fire-and-forget child. The cheap
+		// p75 trigger check happens here to avoid pointless spawns.
+		const total =
+			parsed.inputTokens +
+			parsed.outputTokens +
+			parsed.cacheCreation +
+			parsed.cacheRead;
+		if (
+			process.env.TOKEN_WARDEN_NO_DISTILL !== "1" &&
+			shouldDistill(db, agent, runId, total)
+		) {
+			spawn(
+				"npx",
+				[
+					"tsx",
+					join(pluginRoot, "src", "distill.ts"),
+					"--run",
+					String(runId),
+					"--transcript",
+					payload.transcript_path,
+				],
+				{ cwd: pluginRoot, detached: true, stdio: "ignore" },
+			).unref();
+			logLine(`run ${runId} above p75 for ${agent}; distiller spawned`);
+		}
 	} finally {
 		db.close();
 	}

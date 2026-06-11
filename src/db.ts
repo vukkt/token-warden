@@ -57,6 +57,13 @@ const MIGRATIONS: readonly string[] = [
 		PRIMARY KEY (agent, task_hash)
 	);
 	`,
+	`
+	CREATE TABLE IF NOT EXISTS ruleset_versions (
+		agent TEXT PRIMARY KEY,
+		version INTEGER NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL
+	);
+	`,
 ];
 
 function migrate(db: WardenDb): void {
@@ -216,6 +223,114 @@ export function getBaseline(
 			"SELECT * FROM baselines WHERE agent = ? AND task_hash = ?",
 		)
 		.get(agent, taskHash);
+}
+
+export interface NewRule {
+	agent: string;
+	body: string;
+	contextCost: number;
+	sourceRun: number | null;
+	createdAt: string;
+}
+
+/** Insert a candidate rule. Candidates live only in SQLite until measured
+ * (invariant #1). */
+export function insertRule(db: WardenDb, rule: NewRule): number {
+	const row = db
+		.prepare<unknown[], { id: number }>(
+			`INSERT INTO rules (agent, body, status, context_cost, source_run, created_at)
+			 VALUES (?, ?, 'candidate', ?, ?, ?) RETURNING id`,
+		)
+		.get(
+			rule.agent,
+			rule.body,
+			rule.contextCost,
+			rule.sourceRun,
+			rule.createdAt,
+		);
+	if (row === undefined) throw new Error("insertRule produced no row");
+	return row.id;
+}
+
+export function listRulesByAgent(db: WardenDb, agent: string): RuleRow[] {
+	return db
+		.prepare<unknown[], RuleRow>(
+			"SELECT * FROM rules WHERE agent = ? ORDER BY id ASC",
+		)
+		.all(agent);
+}
+
+/** Oldest-first candidates, capped — the selector processes at most a few
+ * per invocation to bound benchmarking cost. */
+export function listCandidates(
+	db: WardenDb,
+	agent: string,
+	limit: number,
+): RuleRow[] {
+	return db
+		.prepare<unknown[], RuleRow>(
+			`SELECT * FROM rules
+			 WHERE agent = ? AND status = 'candidate'
+			 ORDER BY created_at ASC, id ASC LIMIT ?`,
+		)
+		.all(agent, limit);
+}
+
+/** The active rule least recently (re-)decided — the round-robin re-audit
+ * target. */
+export function oldestDecidedActiveRule(
+	db: WardenDb,
+	agent: string,
+): RuleRow | undefined {
+	return db
+		.prepare<unknown[], RuleRow>(
+			`SELECT * FROM rules
+			 WHERE agent = ? AND status = 'active'
+			 ORDER BY decided_at ASC, id ASC LIMIT 1`,
+		)
+		.get(agent);
+}
+
+/** Record a verdict. Evicted rules are never deleted — they are the
+ * negative dataset. */
+export function decideRule(
+	db: WardenDb,
+	id: number,
+	status: "active" | "evicted",
+	measuredDelta: number | null,
+	decidedAt: string,
+): void {
+	db.prepare(
+		"UPDATE rules SET status = ?, measured_delta = ?, decided_at = ? WHERE id = ?",
+	).run(status, measuredDelta, decidedAt, id);
+}
+
+export function getRulesetVersion(db: WardenDb, agent: string): number {
+	const row = db
+		.prepare<unknown[], { version: number }>(
+			"SELECT version FROM ruleset_versions WHERE agent = ?",
+		)
+		.get(agent);
+	return row?.version ?? 0;
+}
+
+export function bumpRulesetVersion(
+	db: WardenDb,
+	agent: string,
+	ts: string,
+): number {
+	const row = db
+		.prepare<unknown[], { version: number }>(
+			`INSERT INTO ruleset_versions (agent, version, updated_at)
+			 VALUES (?, 1, ?)
+			 ON CONFLICT(agent) DO UPDATE SET
+				version = version + 1,
+				updated_at = excluded.updated_at
+			 RETURNING version`,
+		)
+		.get(agent, ts);
+	if (row === undefined) throw new Error("bumpRulesetVersion produced no row");
+	return row.version;
 }
 
 /**

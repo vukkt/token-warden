@@ -30,6 +30,7 @@ import {
 	getActiveRules,
 	getBaseline,
 	getRuleById,
+	getRulesetVersion,
 	openDb,
 	type RuleRow,
 	recordBaseline,
@@ -266,7 +267,7 @@ function findTranscript(sessionId: string): string | null {
 	return null;
 }
 
-interface RunResult {
+export interface RunResult {
 	sessionId: string;
 	tokens: number;
 	completed: boolean;
@@ -277,7 +278,7 @@ function runOnce(
 	task: GoldenTask,
 	definition: AgentDefinition,
 	rules: RuleRow[],
-	isCandidateConfig: boolean,
+	options: SuiteOptions,
 ): RunResult {
 	const workDir = mkdtempSync(join(tmpdir(), `warden-bench-${task.id}-`));
 	try {
@@ -346,13 +347,13 @@ function runOnce(
 			toolCalls: parsed.toolCalls,
 			fileRereads: parsed.fileRereads,
 			completed,
-			rulesetVersion: 0,
+			rulesetVersion: options.rulesetVersion,
 			ts,
 		});
 
-		// Candidate-rule configurations never touch baselines: the frozen
-		// run1/best numbers must describe the active ruleset only.
-		if (completed && !isCandidateConfig) {
+		// Only the plain active-set configuration touches baselines: the
+		// frozen run1/best numbers must describe the active ruleset alone.
+		if (completed && options.recordBaselines) {
 			recordBaseline(db, task.agent, task.id, tokens, ts);
 		}
 
@@ -391,11 +392,56 @@ export function summarizeTask(
 	return { taskId, results, meanCompletedTokens: avg, highVariance };
 }
 
-function benchAgent(args: BenchArgs): void {
+export interface SuiteOptions {
+	/** Exact rule set to compile into the agent's MEMORY.md for these runs. */
+	rules: RuleRow[];
+	runs: number;
+	/** True only for the plain active-set configuration. */
+	recordBaselines: boolean;
+	rulesetVersion: number;
+	/** Printed as a prefix on progress lines. */
+	label: string;
+}
+
+/**
+ * Run the golden suite for one agent under an explicit rule configuration.
+ * The selector calls this directly (baseline, per-candidate, re-audit
+ * configurations); the bench CLI wraps it.
+ */
+export function runSuite(
+	db: WardenDb,
+	agent: string,
+	tasks: GoldenTask[],
+	options: SuiteOptions,
+): TaskSummary[] {
 	ensureFixtureDeps();
+	const definition = loadAgentDefinition(agent);
+	const summaries: TaskSummary[] = [];
+	for (const task of tasks) {
+		const results: RunResult[] = [];
+		for (let i = 1; i <= options.runs; i++) {
+			process.stdout.write(
+				`  [${options.label}] ${task.id} run ${i}/${options.runs}… `,
+			);
+			const result = runOnce(db, task, definition, options.rules, options);
+			results.push(result);
+			console.log(
+				`${result.completed ? "ok" : "FAILED-CHECK"} ${result.tokens} tokens (${result.sessionId})`,
+			);
+		}
+		const summary = summarizeTask(task.id, results);
+		console.log(
+			`  [${options.label}] ${task.id}: mean(completed)=${summary.meanCompletedTokens}` +
+				(summary.highVariance ? "  ⚠ runs differ by >25%" : ""),
+		);
+		summaries.push(summary);
+	}
+	return summaries;
+}
+
+function benchAgent(args: BenchArgs): void {
 	const db = openDb();
 	try {
-		const definition = loadAgentDefinition(args.agent);
 		let tasks = loadGoldenTasks(args.agent);
 		if (args.task !== null) {
 			tasks = tasks.filter((t) => t.id === args.task);
@@ -419,25 +465,20 @@ function benchAgent(args: BenchArgs): void {
 				` rules=${rules.length}${args.rule !== null ? ` (candidate ${args.rule})` : ""}`,
 		);
 
-		for (const task of tasks) {
-			const results: RunResult[] = [];
-			for (let i = 1; i <= args.runs; i++) {
-				process.stdout.write(`  ${task.id} run ${i}/${args.runs}… `);
-				const result = runOnce(db, task, definition, rules, args.rule !== null);
-				results.push(result);
-				console.log(
-					`${result.completed ? "ok" : "FAILED-CHECK"} ${result.tokens} tokens (${result.sessionId})`,
-				);
-			}
-			const summary = summarizeTask(task.id, results);
-			const baseline = getBaseline(db, task.agent, task.id);
+		const summaries = runSuite(db, args.agent, tasks, {
+			rules,
+			runs: args.runs,
+			recordBaselines: args.rule === null,
+			rulesetVersion: getRulesetVersion(db, args.agent),
+			label: args.rule === null ? "active-set" : `candidate-${args.rule}`,
+		});
+
+		for (const summary of summaries) {
+			const baseline = getBaseline(db, args.agent, summary.taskId);
 			const baselineNote = baseline
 				? `run1=${baseline.run1_tokens} best=${baseline.best_tokens}`
 				: "no baseline (no completed run yet)";
-			console.log(
-				`  ${task.id}: mean(completed)=${summary.meanCompletedTokens} | ${baselineNote}` +
-					(summary.highVariance ? "  ⚠ runs differ by >25%" : ""),
-			);
+			console.log(`  ${summary.taskId}: ${baselineNote}`);
 		}
 	} finally {
 		db.close();

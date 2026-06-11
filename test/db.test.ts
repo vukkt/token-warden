@@ -43,7 +43,7 @@ function makeRun(overrides: Partial<NewRun> = {}): NewRun {
 
 describe("openDb / migrations", () => {
 	it("creates all tables and stamps user_version", () => {
-		expect(db.pragma("user_version", { simple: true })).toBe(1);
+		expect(db.pragma("user_version", { simple: true })).toBe(2);
 		const tables = db
 			.prepare<[], { name: string }>(
 				"SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
@@ -51,7 +51,12 @@ describe("openDb / migrations", () => {
 			.all()
 			.map((row) => row.name);
 		expect(tables).toEqual(
-			expect.arrayContaining(["runs", "rules", "baselines"]),
+			expect.arrayContaining([
+				"runs",
+				"rules",
+				"baselines",
+				"ruleset_versions",
+			]),
 		);
 	});
 
@@ -59,7 +64,7 @@ describe("openDb / migrations", () => {
 		upsertRun(db, makeRun());
 		db.close();
 		db = openDb(join(dir, "warden.db"));
-		expect(db.pragma("user_version", { simple: true })).toBe(1);
+		expect(db.pragma("user_version", { simple: true })).toBe(2);
 		expect(getRunBySession(db, "s1")).toBeDefined();
 	});
 });

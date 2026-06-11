@@ -1,0 +1,196 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { openDb, upsertRun, type WardenDb } from "../src/db.js";
+import {
+	contextCost,
+	p75,
+	parseDistillArgs,
+	parseRulesJson,
+	shouldDistill,
+	trigramSimilarity,
+} from "../src/distill.js";
+import { digestTranscript } from "../src/transcript.js";
+
+describe("trigramSimilarity", () => {
+	it("is 1 for identical strings and 0 for disjoint ones", () => {
+		expect(trigramSimilarity("use grep first", "use grep first")).toBe(1);
+		expect(trigramSimilarity("aaa bbb", "zzz yyy")).toBe(0);
+	});
+
+	it("flags near-duplicates above the 0.85 threshold", () => {
+		const a = "Use Grep to locate symbols before reading any file.";
+		const b = "Use Grep to locate symbols before reading any files.";
+		expect(trigramSimilarity(a, b)).toBeGreaterThan(0.85);
+	});
+
+	it("keeps genuinely different rules below the threshold", () => {
+		const a = "Use Grep to locate symbols before reading any file.";
+		const b = "State a one-line plan before making the first edit.";
+		expect(trigramSimilarity(a, b)).toBeLessThan(0.85);
+	});
+
+	it("ignores case and punctuation", () => {
+		expect(
+			trigramSimilarity("Use grep first!", "use GREP first"),
+		).toBeGreaterThan(0.85);
+	});
+});
+
+describe("parseRulesJson", () => {
+	it("accepts a valid array of up to two rules", () => {
+		const rules = parseRulesJson(
+			'[{"body": "Use Grep before reading files."}, {"body": "Plan before editing anything."}]',
+		);
+		expect(rules).toHaveLength(2);
+	});
+
+	it("accepts an empty array and tolerates markdown fences", () => {
+		expect(parseRulesJson("[]")).toEqual([]);
+		expect(
+			parseRulesJson(
+				'```json\n[{"body": "Use Grep before reading files."}]\n```',
+			),
+		).toHaveLength(1);
+	});
+
+	it("returns null for non-JSON, wrong shapes, and oversized output", () => {
+		expect(parseRulesJson("I think the agent should...")).toBeNull();
+		expect(parseRulesJson('{"body": "not an array"}')).toBeNull();
+		expect(
+			parseRulesJson(
+				'[{"body":"Rule one is fine here."},{"body":"Rule two is fine here."},{"body":"Three rules is too many."}]',
+			),
+		).toBeNull();
+		expect(parseRulesJson('[{"body": "short"}]')).toBeNull();
+		expect(parseRulesJson(`[{"body": "${"x".repeat(201)}"}]`)).toBeNull();
+	});
+});
+
+describe("p75 / shouldDistill", () => {
+	it("computes nearest-rank p75", () => {
+		expect(p75([1, 2, 3, 4])).toBe(3);
+		expect(p75([10])).toBe(10);
+		expect(p75([])).toBe(0);
+	});
+
+	describe("with a seeded db", () => {
+		let dir: string;
+		let db: WardenDb;
+
+		beforeEach(() => {
+			dir = mkdtempSync(join(tmpdir(), "warden-distill-"));
+			db = openDb(join(dir, "warden.db"));
+		});
+
+		afterEach(() => {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		});
+
+		function seedRun(sessionId: string, inputTokens: number): number {
+			return upsertRun(db, {
+				agent: "backend",
+				sessionId,
+				taskHash: null,
+				inputTokens,
+				outputTokens: 0,
+				cacheCreation: 0,
+				cacheRead: 0,
+				toolCalls: 1,
+				fileRereads: 0,
+				completed: true,
+				rulesetVersion: 0,
+				ts: new Date().toISOString(),
+			});
+		}
+
+		it("requires at least five prior runs", () => {
+			for (let i = 0; i < 4; i++) seedRun(`s${i}`, 10_000);
+			const current = seedRun("current", 99_000);
+			expect(shouldDistill(db, "backend", current, 99_000)).toBe(false);
+		});
+
+		it("triggers only above the rolling p75", () => {
+			const totals = [10_000, 12_000, 14_000, 16_000, 18_000];
+			totals.forEach((t, i) => seedRun(`s${i}`, t));
+			const current = seedRun("current", 50_000);
+			expect(shouldDistill(db, "backend", current, 50_000)).toBe(true);
+			expect(shouldDistill(db, "backend", current, 11_000)).toBe(false);
+		});
+
+		it("only counts the same agent's runs", () => {
+			for (let i = 0; i < 10; i++) seedRun(`s${i}`, 10_000);
+			const current = seedRun("current", 99_000);
+			expect(shouldDistill(db, "sql", current, 99_000)).toBe(false);
+		});
+	});
+});
+
+describe("contextCost", () => {
+	it("charges one token per four characters, rounded up", () => {
+		expect(contextCost("abcd")).toBe(1);
+		expect(contextCost("abcde")).toBe(2);
+	});
+});
+
+describe("parseDistillArgs", () => {
+	it("requires --run and --transcript", () => {
+		expect(
+			parseDistillArgs(["--run", "7", "--transcript", "/t.jsonl"]),
+		).toEqual({ runId: 7, transcriptPath: "/t.jsonl" });
+		expect(() => parseDistillArgs(["--run", "7"])).toThrow(/--transcript/);
+		expect(() => parseDistillArgs(["--transcript", "/t.jsonl"])).toThrow(
+			/--run/,
+		);
+	});
+});
+
+describe("digestTranscript", () => {
+	const entry = (type: string, message: unknown) =>
+		JSON.stringify({ type, sessionId: "s", message });
+
+	it("renders text and tool calls compactly", () => {
+		const jsonl = [
+			entry("user", { content: "Fix the bug in the parser." }),
+			entry("assistant", {
+				id: "m1",
+				content: [
+					{
+						type: "tool_use",
+						id: "t1",
+						name: "Read",
+						input: { file_path: "/a.ts" },
+					},
+				],
+			}),
+			entry("assistant", {
+				id: "m2",
+				content: [{ type: "text", text: "Done." }],
+			}),
+			entry("system", { content: "ignored" }),
+		].join("\n");
+		const digest = digestTranscript(jsonl);
+		expect(digest).toContain("USER: Fix the bug in the parser.");
+		expect(digest).toContain('TOOL Read {"file_path":"/a.ts"}');
+		expect(digest).toContain("ASSISTANT: Done.");
+		expect(digest).not.toContain("ignored");
+	});
+
+	it("caps output keeping head and tail", () => {
+		const lines = Array.from({ length: 500 }, (_, i) =>
+			entry("assistant", {
+				id: `m${i}`,
+				content: [
+					{ type: "text", text: `step number ${i} of the long session` },
+				],
+			}),
+		).join("\n");
+		const digest = digestTranscript(lines, 2000);
+		expect(digest.length).toBeLessThan(2100);
+		expect(digest).toContain("step number 0");
+		expect(digest).toContain("step number 499");
+		expect(digest).toContain("[transcript truncated]");
+	});
+});
