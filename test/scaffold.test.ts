@@ -18,9 +18,14 @@ describe("plugin scaffold", () => {
 		});
 	});
 
-	it("hooks.json is valid JSON with an empty hooks map", async () => {
+	it("hooks.json registers the Stop collector via the plugin root", async () => {
 		const raw = await readFile(join(root, "hooks", "hooks.json"), "utf8");
-		const config: unknown = JSON.parse(raw);
-		expect(config).toEqual({ hooks: {} });
+		const config = JSON.parse(raw) as {
+			hooks: { Stop?: { hooks: { type: string; command: string }[] }[] };
+		};
+		const stop = config.hooks.Stop?.[0]?.hooks[0];
+		expect(stop?.type).toBe("command");
+		expect(stop?.command).toContain("CLAUDE_PLUGIN_ROOT");
+		expect(stop?.command).toContain("src/collect.ts");
 	});
 });
