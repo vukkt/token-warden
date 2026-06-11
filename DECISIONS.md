@@ -70,3 +70,49 @@ differed from the spec's assumptions. Newest entries at the bottom of each phase
 - **Transcripts with zero parseable conversational entries are skipped, not inserted** —
   a fully corrupt transcript logs a skip line rather than recording a row of zeros that
   would pollute p75 waste statistics.
+
+## Phase 2 — Agents, fixture, golden suites, bench runner
+
+- **Subagent frontmatter (verified against current sub-agents docs).** `name` and
+  `description` are required; `tools`, `model`, and `memory` are valid optional fields.
+  `memory` takes `user` | `project` | `local`; `user` resolves to
+  `~/.claude/agent-memory/<name>/` and the first 200 lines / 25KB of `MEMORY.md` there is
+  injected into the agent's system prompt. The spec's assumed schema matches current docs.
+- **Headless invocation (verified against current CLI reference).** `claude --agent <name>`
+  runs the *session* as that agent (not just delegation), combinable with `-p`,
+  `--permission-mode`, `--max-turns`, and `--output-format json` (whose result JSON carries
+  `session_id`). There is **no flag to point at a custom MEMORY.md** — see next item.
+- **Benchmark memory isolation via `memory: project`.** To bench a candidate rule without
+  touching real `~/.claude/agent-memory`, bench copies each agent definition into the temp
+  workdir's `.claude/agents/<name>.md` with `memory: user` rewritten to `memory: project`,
+  which resolves memory to `<workdir>/.claude/agent-memory/<name>/MEMORY.md` — exactly the
+  temporary compiled file bench writes. Project agents outrank plugin agents, so the temp
+  definition always wins, and bench needs no `--plugin-dir` at all (which also means the
+  Stop hook can't double-record bench sessions; and even if the plugin were installed
+  globally, bench's upsert runs after the hook and wins on the shared `session_id`).
+- **Bench agents run scoped, not with bypassPermissions.** Each temp workdir gets a
+  `.claude/settings.json` allowlisting only test-running Bash commands (`npx vitest`,
+  `npm test`, `npx tsc`, `ls`); the session runs `--permission-mode acceptEdits` so file
+  edits inside the copy are auto-approved and everything else is denied. Initially written
+  with `bypassPermissions`; tightened after Claude Code's auto-mode classifier rightly
+  flagged spawning unsandboxed bypass agents.
+- **`total tokens` = input + output + cache_creation + cache_read.** Baselines and savings
+  math need one number; this counts everything the model processed (context volume), which
+  is what memory rules actually influence. Recorded per run; `run1_tokens` freezes the first
+  *completed* run's total — incomplete runs never write baselines (fitness is tokens per
+  COMPLETED task, invariant #3).
+- **Baselines are only written by candidate-free configurations.** When `--rule` is given,
+  runs are recorded in `runs` but never touch `baselines`, so the frozen run1/best numbers
+  always describe the active ruleset alone.
+- **Golden-task frontmatter is single-line `key: "value"` pairs** parsed by a small
+  hand-rolled parser (no YAML dependency). Prompts are one to two sentences by design.
+- **`--task <id>` flag added to bench** (not in spec's CLI sketch) to allow re-running a
+  single golden task — used by the freeze-verification part of acceptance and cheap
+  spot-checks.
+- **BUGS.md and node_modules are excluded from fixture copies**; `node_modules` is
+  installed once in the committed fixture directory (gitignored) and symlinked into each
+  temp copy, keeping per-run setup under a second.
+- **Fixture is excluded from the plugin's own lint/test runs** (`biome` ignore +
+  `vitest.config.ts` include/exclude): it has its own suite that runs inside bench copies,
+  and its deliberate flaws must not fail plugin CI. Fixture totals 29 files
+  (3 routes/3 services/3 repos + React components/hook/context + tests + schema).

@@ -167,3 +167,74 @@ export function getRunBySession(
 		.prepare<unknown[], RunRow>("SELECT * FROM runs WHERE session_id = ?")
 		.get(sessionId);
 }
+
+export interface RuleRow {
+	id: number;
+	agent: string;
+	body: string;
+	status: string;
+	measured_delta: number | null;
+	context_cost: number;
+	source_run: number | null;
+	decided_at: string | null;
+	created_at: string;
+}
+
+export function getRuleById(db: WardenDb, id: number): RuleRow | undefined {
+	return db
+		.prepare<unknown[], RuleRow>("SELECT * FROM rules WHERE id = ?")
+		.get(id);
+}
+
+/** Active rules for an agent, best measured savings first — the order they
+ * are compiled into MEMORY.md. */
+export function getActiveRules(db: WardenDb, agent: string): RuleRow[] {
+	return db
+		.prepare<unknown[], RuleRow>(
+			`SELECT * FROM rules
+			 WHERE agent = ? AND status = 'active'
+			 ORDER BY measured_delta DESC, id ASC`,
+		)
+		.all(agent);
+}
+
+export interface BaselineRow {
+	agent: string;
+	task_hash: string;
+	run1_tokens: number;
+	best_tokens: number;
+	updated_at: string;
+}
+
+export function getBaseline(
+	db: WardenDb,
+	agent: string,
+	taskHash: string,
+): BaselineRow | undefined {
+	return db
+		.prepare<unknown[], BaselineRow>(
+			"SELECT * FROM baselines WHERE agent = ? AND task_hash = ?",
+		)
+		.get(agent, taskHash);
+}
+
+/**
+ * Record a completed golden run against the baseline. The first-ever record
+ * for an (agent, task) freezes `run1_tokens` permanently (design invariant
+ * #5); later records only ratchet `best_tokens` downward.
+ */
+export function recordBaseline(
+	db: WardenDb,
+	agent: string,
+	taskHash: string,
+	totalTokens: number,
+	ts: string,
+): void {
+	db.prepare(
+		`INSERT INTO baselines (agent, task_hash, run1_tokens, best_tokens, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(agent, task_hash) DO UPDATE SET
+			best_tokens = MIN(best_tokens, excluded.best_tokens),
+			updated_at = excluded.updated_at`,
+	).run(agent, taskHash, totalTokens, totalTokens, ts);
+}
