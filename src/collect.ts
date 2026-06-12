@@ -6,13 +6,13 @@
  * Every failure path logs to collect.log (next to the DB) and exits 0.
  */
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { defaultDbPath, getRulesetVersion, openDb, upsertRun } from "./db.js";
 import { shouldDistill } from "./distill.js";
-import { parseTranscript } from "./transcript.js";
+import { parseTranscriptFile } from "./transcript.js";
 import { DOMAIN_AGENTS } from "./types.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -56,8 +56,8 @@ function resolveAgent(
 
 async function main(): Promise<void> {
 	const payload = hookPayloadSchema.parse(JSON.parse(await readStdin()));
-	const jsonl = readFileSync(payload.transcript_path, "utf8");
-	const parsed = parseTranscript(jsonl);
+	// Streamed line-by-line: peak memory stays flat even for huge transcripts.
+	const parsed = await parseTranscriptFile(payload.transcript_path);
 
 	if (parsed.entryCount === 0) {
 		logLine(

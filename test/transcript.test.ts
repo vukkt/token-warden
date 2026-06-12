@@ -249,6 +249,19 @@ describe("parseTranscript edge cases", () => {
 		expect(parseTranscript(lines).agent).toBe("backend");
 	});
 
+	it("streaming file parser produces identical results to the string parser", async () => {
+		const { parseTranscriptFile } = await import("../src/transcript.js");
+		for (const name of [
+			"main-session.jsonl",
+			"interrupted-session.jsonl",
+			"subagent-session.jsonl",
+		]) {
+			const fromString = parseTranscript(await fixture(name));
+			const fromFile = await parseTranscriptFile(join(fixturesDir, name));
+			expect(fromFile, name).toEqual(fromString);
+		}
+	});
+
 	it("parses a 5MB transcript well under the 2s hook budget", async () => {
 		const line = (await fixture("main-session.jsonl")).split("\n")[2] ?? "";
 		const big = Array.from(

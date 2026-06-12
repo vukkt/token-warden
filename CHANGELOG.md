@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.2.4 — 2026-06-12
+
+Memory optimization of the transcript hot path (runs on every session end).
+
+- **Streaming transcript parser**: `collect.ts` now parses the transcript file
+  line-by-line (`parseTranscriptFile`) instead of reading it whole. Measured on
+  a 29 MB / 70k-entry transcript: **RSS 175 MB → 84 MB (−52%)**, heap
+  38 MB → 11 MB, 0.44 s wall — well inside the 2 s hook budget. The string and
+  streaming parsers share one accumulator and are tested to produce identical
+  results.
+- The per-message usage map now stores only the four token counters instead of
+  the full loose-parsed usage objects (which retained every unknown transcript
+  field).
+- `digestTranscript` buffers are bounded as lines are fed — O(maxChars) memory
+  regardless of transcript size, instead of accumulating every line before
+  truncating.
+- Line iteration no longer materializes a split() array of all lines.
+
 ## v0.2.3 — 2026-06-12
 
 Residual-risk hardening (see README "Security notes").

@@ -1,3 +1,5 @@
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 import { z } from "zod";
 import type { ParsedRun } from "./types.js";
 
@@ -42,7 +44,6 @@ const entrySchema = z.looseObject({
 });
 
 type Entry = z.infer<typeof entrySchema>;
-type Usage = z.infer<typeof usageSchema>;
 
 /** Entry types that are part of the conversation itself; everything else
  * (file-history-snapshot, system, attachment, mode, ...) is bookkeeping. */
@@ -62,15 +63,226 @@ function truncate(text: string, max: number): string {
 	return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
 }
 
+/** Strip a UTF-8 BOM — it would otherwise poison the first line. */
+function stripBom(text: string): string {
+	return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+/** Iterate lines of a string without materializing an array of all lines
+ * (a 30MB transcript split() costs tens of MB of extra peak memory). */
+function* iterateLines(text: string): Generator<string> {
+	const length = text.length;
+	let start = 0;
+	while (start < length) {
+		let newline = text.indexOf("\n", start);
+		if (newline === -1) newline = length;
+		let end = newline;
+		if (end > start && text.charCodeAt(end - 1) === 0x0d) end--;
+		yield text.slice(start, end);
+		start = newline + 1;
+	}
+}
+
+/** Only the four counters are kept per message — the loose-parsed usage
+ * object retains every unknown transcript field and would bloat the map. */
+interface UsageSums {
+	input: number;
+	output: number;
+	cacheCreation: number;
+	cacheRead: number;
+}
+
+/**
+ * Line-fed accumulator shared by the sync (string) and streaming (file)
+ * parsers. Tolerance contract: never throws on bad input; malformed lines
+ * are skipped and counted. Usage is deduplicated by message id because
+ * Claude Code writes one JSONL entry per streamed content block, repeating
+ * the same `usage` object on every entry of the same API message.
+ */
+class TranscriptAccumulator {
+	private malformedLines = 0;
+	private entryCount = 0;
+	private toolCalls = 0;
+	private lineIndex = 0;
+	private sessionId: string | null = null;
+	private agentName: string | null = null;
+	private agentId: string | null = null;
+	private isSidechain = false;
+	private lastConversational: Entry | null = null;
+	private readonly usageByMessage = new Map<string, UsageSums>();
+	private readonly seenToolUseIds = new Set<string>();
+	private readonly readCounts = new Map<string, number>();
+
+	feedLine(rawLine: string): void {
+		const line = this.lineIndex === 0 ? stripBom(rawLine) : rawLine;
+		this.lineIndex++;
+		if (!line || line.trim() === "") return;
+
+		let raw: unknown;
+		try {
+			raw = JSON.parse(line);
+		} catch {
+			this.malformedLines++;
+			return;
+		}
+		const result = entrySchema.safeParse(raw);
+		if (!result.success) {
+			this.malformedLines++;
+			return;
+		}
+		const entry = result.data;
+
+		this.sessionId ??= entry.sessionId ?? null;
+		this.agentId ??= entry.agentId ?? null;
+		this.agentName ??= entry.agentName ?? null;
+		if (entry.isSidechain === true) this.isSidechain = true;
+
+		if (!CONVERSATIONAL.has(entry.type)) return;
+		this.entryCount++;
+		this.lastConversational = entry;
+
+		if (entry.type !== "assistant") return;
+		const message = entry.message;
+		if (message?.usage) {
+			const key =
+				message.id ?? entry.requestId ?? entry.uuid ?? `line-${this.lineIndex}`;
+			this.usageByMessage.set(key, {
+				input: message.usage.input_tokens,
+				output: message.usage.output_tokens,
+				cacheCreation: message.usage.cache_creation_input_tokens,
+				cacheRead: message.usage.cache_read_input_tokens,
+			});
+		}
+		if (Array.isArray(message?.content)) {
+			for (const block of message.content) {
+				if (block.type !== "tool_use") continue;
+				if (block.id) {
+					if (this.seenToolUseIds.has(block.id)) continue;
+					this.seenToolUseIds.add(block.id);
+				}
+				this.toolCalls++;
+				if (block.name === "Read") {
+					const filePath = block.input?.file_path;
+					if (typeof filePath === "string") {
+						this.readCounts.set(
+							filePath,
+							(this.readCounts.get(filePath) ?? 0) + 1,
+						);
+					}
+				}
+			}
+		}
+	}
+
+	finish(): ParsedRun {
+		let inputTokens = 0;
+		let outputTokens = 0;
+		let cacheCreation = 0;
+		let cacheRead = 0;
+		for (const usage of this.usageByMessage.values()) {
+			inputTokens += usage.input;
+			outputTokens += usage.output;
+			cacheCreation += usage.cacheCreation;
+			cacheRead += usage.cacheRead;
+		}
+
+		let fileRereads = 0;
+		for (const count of this.readCounts.values()) {
+			if (count >= 2) fileRereads++;
+		}
+
+		// Completion heuristic (see DECISIONS.md): the transcript ends with
+		// an assistant message that contains text and is not an API error.
+		// Aborted sessions end with a user entry ("[Request interrupted by
+		// user]" or a dangling tool_result), failed ones with
+		// isApiErrorMessage on the tail.
+		const last = this.lastConversational;
+		const completed =
+			last !== null &&
+			last.type === "assistant" &&
+			last.isApiErrorMessage !== true &&
+			hasTextContent(last);
+
+		return {
+			agent: this.agentName ?? "main",
+			sessionId: this.sessionId,
+			inputTokens,
+			outputTokens,
+			cacheCreation,
+			cacheRead,
+			toolCalls: this.toolCalls,
+			fileRereads,
+			completed,
+			entryCount: this.entryCount,
+			malformedLines: this.malformedLines,
+			isSidechain: this.isSidechain,
+			agentId: this.agentId,
+		};
+	}
+}
+
+/** Parse one transcript JSONL (already in memory) into run aggregates. */
+export function parseTranscript(jsonlText: string): ParsedRun {
+	const accumulator = new TranscriptAccumulator();
+	for (const line of iterateLines(jsonlText)) {
+		accumulator.feedLine(line);
+	}
+	return accumulator.finish();
+}
+
+/**
+ * Parse a transcript file streaming line-by-line — peak memory stays
+ * O(longest line) instead of O(file), which matters in the Stop hook where
+ * transcripts can be tens of MB. Same tolerance contract as
+ * `parseTranscript`; the two produce identical results.
+ */
+export async function parseTranscriptFile(path: string): Promise<ParsedRun> {
+	const accumulator = new TranscriptAccumulator();
+	const lines = createInterface({
+		input: createReadStream(path, { encoding: "utf8" }),
+		crlfDelay: Number.POSITIVE_INFINITY,
+	});
+	for await (const line of lines) {
+		accumulator.feedLine(line);
+	}
+	return accumulator.finish();
+}
+
 /**
  * Render a compact, human-readable action trace of a transcript for the
  * distiller's prompt: user/assistant text (truncated) and tool calls with
- * their inputs. Capped to `maxChars` by keeping the head and tail — the
- * start shows the task, the tail shows how the session bogged down.
+ * their inputs. Capped to `maxChars` by keeping the head (the task) and the
+ * tail (where the session bogged down); buffers are bounded as lines are
+ * fed, so memory stays O(maxChars) regardless of transcript size.
  */
 export function digestTranscript(jsonlText: string, maxChars = 8000): string {
-	const lines: string[] = [];
-	for (const line of jsonlText.split(/\r?\n/)) {
+	const headBudget = Math.floor(maxChars * 0.4);
+	const tailBudget = Math.floor(maxChars * 0.55);
+	const head: string[] = [];
+	const tail: string[] = [];
+	let headLength = 0;
+	let tailLength = 0;
+	let dropped = false;
+
+	const push = (line: string) => {
+		if (headLength + line.length + 1 <= headBudget) {
+			head.push(line);
+			headLength += line.length + 1;
+			return;
+		}
+		tail.push(line);
+		tailLength += line.length + 1;
+		while (tailLength > tailBudget && tail.length > 1) {
+			const evicted = tail.shift() as string;
+			tailLength -= evicted.length + 1;
+			dropped = true;
+		}
+	};
+
+	let first = true;
+	for (const rawLine of iterateLines(jsonlText)) {
+		const line = first ? stripBom(rawLine) : rawLine;
+		first = false;
 		if (!line || line.trim() === "") continue;
 		let raw: unknown;
 		try {
@@ -84,143 +296,19 @@ export function digestTranscript(jsonlText: string, maxChars = 8000): string {
 		if (!CONVERSATIONAL.has(entry.type)) continue;
 		const content = entry.message?.content;
 		if (typeof content === "string") {
-			lines.push(`${entry.type.toUpperCase()}: ${truncate(content, 200)}`);
+			push(`${entry.type.toUpperCase()}: ${truncate(content, 200)}`);
 		} else if (Array.isArray(content)) {
 			for (const block of content) {
 				if (block.type === "text" && block.text) {
-					lines.push(
-						`${entry.type.toUpperCase()}: ${truncate(block.text, 200)}`,
-					);
+					push(`${entry.type.toUpperCase()}: ${truncate(block.text, 200)}`);
 				} else if (block.type === "tool_use") {
 					const input = truncate(JSON.stringify(block.input ?? {}), 160);
-					lines.push(`TOOL ${block.name ?? "unknown"} ${input}`);
-				}
-			}
-		}
-	}
-	const text = lines.join("\n");
-	if (text.length <= maxChars) return text;
-	const head = text.slice(0, Math.floor(maxChars * 0.4));
-	const tail = text.slice(-Math.floor(maxChars * 0.55));
-	return `${head}\n…[transcript truncated]…\n${tail}`;
-}
-
-/**
- * Parse one transcript JSONL into run aggregates.
- *
- * Tolerance contract: never throws on bad input. Malformed lines are skipped
- * and counted. Usage is deduplicated by message id because Claude Code writes
- * one JSONL entry per streamed content block, repeating the same `usage`
- * object on every entry of the same API message.
- */
-export function parseTranscript(jsonlText: string): ParsedRun {
-	// Tolerate a UTF-8 BOM — it would otherwise poison the first line.
-	const text =
-		jsonlText.charCodeAt(0) === 0xfeff ? jsonlText.slice(1) : jsonlText;
-	let malformedLines = 0;
-	let entryCount = 0;
-	let toolCalls = 0;
-	let sessionId: string | null = null;
-	let agentName: string | null = null;
-	let agentId: string | null = null;
-	let isSidechain = false;
-	let lastConversational: Entry | null = null;
-
-	const usageByMessage = new Map<string, Usage>();
-	const seenToolUseIds = new Set<string>();
-	const readCounts = new Map<string, number>();
-
-	const lines = text.split(/\r?\n/);
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (!line || line.trim() === "") continue;
-
-		let raw: unknown;
-		try {
-			raw = JSON.parse(line);
-		} catch {
-			malformedLines++;
-			continue;
-		}
-		const result = entrySchema.safeParse(raw);
-		if (!result.success) {
-			malformedLines++;
-			continue;
-		}
-		const entry = result.data;
-
-		sessionId ??= entry.sessionId ?? null;
-		agentId ??= entry.agentId ?? null;
-		agentName ??= entry.agentName ?? null;
-		if (entry.isSidechain === true) isSidechain = true;
-
-		if (!CONVERSATIONAL.has(entry.type)) continue;
-		entryCount++;
-		lastConversational = entry;
-
-		if (entry.type !== "assistant") continue;
-		const message = entry.message;
-		if (message?.usage) {
-			const key = message.id ?? entry.requestId ?? entry.uuid ?? `line-${i}`;
-			usageByMessage.set(key, message.usage);
-		}
-		if (Array.isArray(message?.content)) {
-			for (const block of message.content) {
-				if (block.type !== "tool_use") continue;
-				if (block.id) {
-					if (seenToolUseIds.has(block.id)) continue;
-					seenToolUseIds.add(block.id);
-				}
-				toolCalls++;
-				if (block.name === "Read") {
-					const filePath = block.input?.file_path;
-					if (typeof filePath === "string") {
-						readCounts.set(filePath, (readCounts.get(filePath) ?? 0) + 1);
-					}
+					push(`TOOL ${block.name ?? "unknown"} ${input}`);
 				}
 			}
 		}
 	}
 
-	let inputTokens = 0;
-	let outputTokens = 0;
-	let cacheCreation = 0;
-	let cacheRead = 0;
-	for (const usage of usageByMessage.values()) {
-		inputTokens += usage.input_tokens;
-		outputTokens += usage.output_tokens;
-		cacheCreation += usage.cache_creation_input_tokens;
-		cacheRead += usage.cache_read_input_tokens;
-	}
-
-	let fileRereads = 0;
-	for (const count of readCounts.values()) {
-		if (count >= 2) fileRereads++;
-	}
-
-	// Completion heuristic (see DECISIONS.md): the transcript ends with an
-	// assistant message that contains text and is not an API error. Aborted
-	// sessions end with a user entry ("[Request interrupted by user]" or a
-	// dangling tool_result), failed ones with isApiErrorMessage on the tail.
-	const completed =
-		lastConversational !== null &&
-		lastConversational.type === "assistant" &&
-		lastConversational.isApiErrorMessage !== true &&
-		hasTextContent(lastConversational);
-
-	return {
-		agent: agentName ?? "main",
-		sessionId,
-		inputTokens,
-		outputTokens,
-		cacheCreation,
-		cacheRead,
-		toolCalls,
-		fileRereads,
-		completed,
-		entryCount,
-		malformedLines,
-		isSidechain,
-		agentId,
-	};
+	if (!dropped) return [...head, ...tail].join("\n");
+	return [...head, "…[transcript truncated]…", ...tail].join("\n");
 }
