@@ -25,6 +25,10 @@ import {
 
 const GATED_TOOL = "SendMessage";
 const PREVIEW_CHARS = 200;
+/** Cap on the question body persisted to SQLite — a single chatty or
+ * hostile teammate message must not bloat the ledger. Applied identically
+ * at insert and approve time so the pending-row match still works. */
+export const STORED_BODY_CHARS = 2000;
 
 function logLine(message: string): void {
 	try {
@@ -129,12 +133,13 @@ async function main(): Promise<void> {
 
 	const db = openDb();
 	try {
+		const storedBody = truncateBody(message.body, STORED_BODY_CHARS);
 		if (isPost) {
 			const marked = approveLatestQuestion(
 				db,
 				message.from,
 				message.to,
-				message.body,
+				storedBody,
 			);
 			logLine(
 				`approved [${message.from} → ${message.to}]${marked ? "" : " (no pending row matched)"}`,
@@ -144,7 +149,7 @@ async function main(): Promise<void> {
 				db,
 				message.from,
 				message.to,
-				message.body,
+				storedBody,
 				new Date().toISOString(),
 			);
 			logLine(

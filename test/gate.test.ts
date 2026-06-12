@@ -166,6 +166,24 @@ describe("gate.ts process behavior", () => {
 		expect(existsSync(dbPath)).toBe(false);
 	});
 
+	it("caps the stored question body, and approval still matches", () => {
+		const huge = "q".repeat(100_000);
+		runGate(
+			sendMessagePayload({
+				tool_input: { recipient: "backend", message: huge },
+			}),
+		);
+		const stored = allQuestions()[0];
+		expect(stored?.body.length).toBeLessThanOrEqual(2000);
+		runGate(
+			sendMessagePayload({
+				tool_input: { recipient: "backend", message: huge },
+			}),
+			true,
+		);
+		expect(allQuestions()[0]?.approved).toBe(1);
+	});
+
 	it("fails open on garbage stdin", () => {
 		const result = runGate("definitely not json");
 		expect(result.status).toBe(0);

@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.2.2 — 2026-06-12
+
+Hardening fixes from an adversarial test pass.
+
+- **Gate: stored question bodies are capped at 2,000 chars.** A single huge
+  `SendMessage` body (tested at 5 MB) was persisted whole into the questions
+  ledger; insert and approve now truncate identically so pending-row matching
+  still works.
+- **Parser: UTF-8 BOM tolerated** — a BOM-prefixed transcript no longer counts
+  its first line as malformed.
+- Verified under attack and unchanged: corrupt/garbage DB file, read-only data
+  dir, directory-as-transcript, future-schema DB (plugin downgrade), 10
+  concurrent Stop hooks on one DB, SQL/shell/path-traversal strings in payload
+  fields, CRLF+emoji transcripts, 8 MB transcript in 0.25 s, missing `claude`
+  binary (distiller fails open), corrupt DB at session start (notifier stays
+  silent).
+
 ## v0.2.1 — 2026-06-12
 
 Repo hygiene and CI release.

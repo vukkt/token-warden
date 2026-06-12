@@ -114,6 +114,9 @@ export function digestTranscript(jsonlText: string, maxChars = 8000): string {
  * object on every entry of the same API message.
  */
 export function parseTranscript(jsonlText: string): ParsedRun {
+	// Tolerate a UTF-8 BOM — it would otherwise poison the first line.
+	const text =
+		jsonlText.charCodeAt(0) === 0xfeff ? jsonlText.slice(1) : jsonlText;
 	let malformedLines = 0;
 	let entryCount = 0;
 	let toolCalls = 0;
@@ -127,7 +130,7 @@ export function parseTranscript(jsonlText: string): ParsedRun {
 	const seenToolUseIds = new Set<string>();
 	const readCounts = new Map<string, number>();
 
-	const lines = jsonlText.split(/\r?\n/);
+	const lines = text.split(/\r?\n/);
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
 		if (!line || line.trim() === "") continue;

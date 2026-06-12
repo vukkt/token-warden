@@ -82,6 +82,21 @@ describe("parseTranscript edge cases", () => {
 		expect(run.entryCount).toBe(0);
 	});
 
+	it("tolerates a UTF-8 BOM before the first line", () => {
+		const jsonl = `﻿${entry({
+			type: "assistant",
+			uuid: "a1",
+			message: {
+				id: "m1",
+				content: [{ type: "text", text: "ok" }],
+				usage: { input_tokens: 7, output_tokens: 2 },
+			},
+		})}`;
+		const run = parseTranscript(jsonl);
+		expect(run.malformedLines).toBe(0);
+		expect(run.inputTokens).toBe(7);
+	});
+
 	it("skips blank lines without counting them as malformed", () => {
 		const lines = [
 			"",
