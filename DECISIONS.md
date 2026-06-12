@@ -224,6 +224,29 @@ differed from the spec's assumptions. Newest entries at the bottom of each phase
   `/plugin marketplace add vukkt/token-warden` + `/plugin install token-warden@vukkt-plugins`.
   Official Anthropic marketplace names are reserved; community distribution is
   self-hosted by design.
+## v0.2.0 — roadmap implementation
+
+- **Variance-aware verdicts.** `assessDelta` reports the standard error of the per-task
+  savings (sample SD / √n over tasks completed in both configs). When a verdict lies
+  within one SE of the 2×rent threshold, the selector spends one bounded top-up pass
+  (re-running the *measured* configuration only — the shared baseline is not topped up,
+  an accepted asymmetry to keep cost bounded) and re-decides on the pooled results.
+  Budget via `--top-up` (default 1; 0 disables). Verdicts still within noise are recorded
+  with an explicit "low confidence" annotation in `decided_reason` rather than deferred —
+  a candidate left pending would block the queue (max 3 per invocation, oldest first).
+- **Selection stays manual by design.** The roadmap's "scheduled selection" shipped as a
+  `SessionStart` nudge (`src/notify.ts`: one `additionalContext` line when candidates are
+  pending, silent otherwise, fails open) plus a `/warden-select` command — NOT an
+  auto-run, because selection spends real benchmark tokens and that remains a user
+  decision. The SessionStart hook skips the npm bootstrap (`[ -d node_modules ] || true`):
+  session startup must never wait on an install; the Stop hook handles bootstrapping.
+- **Question-driven distillation** feeds the agent's 5 most recent outbound cross-agent
+  questions into the distiller prompt as a memory-gap signal.
+- **`runs.project` added (migration 6)** from the Stop payload's `cwd`; status shows
+  real-work token volume per project. Pre-existing rows have NULL project ("(unknown)").
+- **Golden suite changes deliberately deferred.** Replacing or editing a task would
+  orphan its frozen baseline; legitimate growth means adding new task files with fresh
+  task ids. Not done now to keep measurement continuity while the system accrues data.
 - **The Stop hook self-bootstraps dependencies.** Marketplace installs copy the plugin to
   `~/.claude/plugins/cache` without `node_modules`, which would make collect.ts a silent
   no-op. The hook command now runs `npm install` once when `node_modules` is missing

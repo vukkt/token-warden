@@ -11,6 +11,17 @@
 				]
 			}
 		],
+		"SessionStart": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && [ -d node_modules ] && npx tsx src/notify.ts || true",
+						"timeout": 10
+					}
+				]
+			}
+		],
 		"PreToolUse": [
 			{
 				"matcher": "SendMessage",

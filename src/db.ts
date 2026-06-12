@@ -80,6 +80,9 @@ const MIGRATIONS: readonly string[] = [
 		ts TEXT NOT NULL
 	);
 	`,
+	`
+	ALTER TABLE runs ADD COLUMN project TEXT;
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -126,6 +129,8 @@ export interface NewRun {
 	rulesetVersion: number;
 	ts: string;
 	config?: RunConfig;
+	/** Working directory of the session for real-work runs; null for golden runs. */
+	project?: string | null;
 }
 
 /** Row shape as stored (snake_case, ints for booleans). */
@@ -144,6 +149,7 @@ export interface RunRow {
 	ruleset_version: number;
 	ts: string;
 	config: string;
+	project: string | null;
 }
 
 /**
@@ -157,8 +163,8 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 			`INSERT INTO runs (
 				agent, session_id, task_hash, input_tokens, output_tokens,
 				cache_creation, cache_read, tool_calls, file_rereads,
-				completed, ruleset_version, ts, config
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				completed, ruleset_version, ts, config, project
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(session_id) DO UPDATE SET
 				agent = excluded.agent,
 				task_hash = excluded.task_hash,
@@ -171,7 +177,8 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 				completed = excluded.completed,
 				ruleset_version = excluded.ruleset_version,
 				ts = excluded.ts,
-				config = excluded.config
+				config = excluded.config,
+				project = excluded.project
 			RETURNING id`,
 		)
 		.get(
@@ -188,6 +195,7 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 			run.rulesetVersion,
 			run.ts,
 			run.config ?? "active",
+			run.project ?? null,
 		);
 	if (row === undefined) {
 		throw new Error("upsertRun: INSERT ... RETURNING produced no row");
@@ -427,6 +435,52 @@ export function approveLatestQuestion(
 		)
 		.run(fromAgent, toAgent, body);
 	return result.changes > 0;
+}
+
+/** Recent outbound questions from one agent — a distiller signal that its
+ * memory is missing knowledge it keeps asking other agents for. */
+export function recentQuestionsFrom(
+	db: WardenDb,
+	agent: string,
+	limit: number,
+): string[] {
+	return db
+		.prepare<unknown[], { body: string }>(
+			"SELECT body FROM questions WHERE from_agent = ? ORDER BY id DESC LIMIT ?",
+		)
+		.all(agent, limit)
+		.map((row) => row.body);
+}
+
+export interface ProjectUsage {
+	project: string | null;
+	runs: number;
+	tokens: number;
+}
+
+/** Real-work token volume per project, heaviest first. */
+export function projectUsage(db: WardenDb, limit: number): ProjectUsage[] {
+	return db
+		.prepare<unknown[], ProjectUsage>(
+			`SELECT project,
+				COUNT(*) AS runs,
+				COALESCE(SUM(input_tokens + output_tokens + cache_creation + cache_read), 0) AS tokens
+			 FROM runs WHERE task_hash IS NULL
+			 GROUP BY project ORDER BY tokens DESC LIMIT ?`,
+		)
+		.all(limit);
+}
+
+/** Pending candidate counts per agent — the SessionStart nudge. */
+export function candidateCounts(
+	db: WardenDb,
+): { agent: string; pending: number }[] {
+	return db
+		.prepare<unknown[], { agent: string; pending: number }>(
+			`SELECT agent, COUNT(*) AS pending FROM rules
+			 WHERE status = 'candidate' GROUP BY agent ORDER BY pending DESC`,
+		)
+		.all();
 }
 
 export interface QuestionCount {

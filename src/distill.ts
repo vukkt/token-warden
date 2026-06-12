@@ -21,6 +21,7 @@ import {
 	listRulesByAgent,
 	openDb,
 	type RunRow,
+	recentQuestionsFrom,
 	type WardenDb,
 } from "./db.js";
 import { digestTranscript } from "./transcript.js";
@@ -136,9 +137,21 @@ export function contextCost(body: string): number {
 	return Math.ceil(body.length / 4);
 }
 
-function buildPrompt(run: RunRow, digest: string): string {
+export function buildPrompt(
+	run: RunRow,
+	digest: string,
+	recentQuestions: string[] = [],
+): string {
 	const total =
 		run.input_tokens + run.output_tokens + run.cache_creation + run.cache_read;
+	const questionSection =
+		recentQuestions.length > 0
+			? [
+					"Questions this agent recently had to ask other agents (a sign its own knowledge or approach has gaps):",
+					...recentQuestions.map((q) => `- ${q}`),
+					"",
+				]
+			: [];
 	return [
 		`An AI coding agent ("${run.agent}") just finished a session that used an unusually high number of tokens compared to its history.`,
 		"",
@@ -148,6 +161,7 @@ function buildPrompt(run: RunRow, digest: string): string {
 		`- files read two or more times: ${run.file_rereads}`,
 		`- task completed: ${run.completed === 1 ? "yes" : "no"}`,
 		"",
+		...questionSection,
 		"Action trace (truncated):",
 		digest,
 		"",
@@ -214,7 +228,11 @@ function distill(args: DistillArgs): void {
 			readFileSync(args.transcriptPath, "utf8"),
 			MAX_DIGEST_CHARS,
 		);
-		const prompt = buildPrompt(run, digest);
+		const prompt = buildPrompt(
+			run,
+			digest,
+			recentQuestionsFrom(db, run.agent, 5),
+		);
 
 		const claude = spawnSync(
 			"claude",

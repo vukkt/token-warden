@@ -22,6 +22,7 @@ import {
 	type GoldenTask,
 	loadGoldenTasks,
 	runSuite,
+	summarizeTask,
 	type TaskSummary,
 } from "./bench.js";
 import {
@@ -97,12 +98,12 @@ export interface DeltaResult {
 	regression: boolean;
 }
 
-/** Pair task summaries by id and average the per-task savings, counting
- * only tasks with completed runs on both sides (invariant #3). */
-export function computeDelta(
+/** Per-task savings for tasks completed in both configurations
+ * (invariant #3), plus the regression flag. */
+function perTaskSavings(
 	without: TaskSummary[],
 	withRule: TaskSummary[],
-): DeltaResult {
+): { savings: number[]; regression: boolean } {
 	const withById = new Map(withRule.map((s) => [s.taskId, s]));
 	const savings: number[] = [];
 	let regression = false;
@@ -117,9 +118,75 @@ export function computeDelta(
 		}
 		savings.push(base.meanCompletedTokens - other.meanCompletedTokens);
 	}
+	return { savings, regression };
+}
+
+/** Pair task summaries by id and average the per-task savings. */
+export function computeDelta(
+	without: TaskSummary[],
+	withRule: TaskSummary[],
+): DeltaResult {
+	const { savings, regression } = perTaskSavings(without, withRule);
 	if (savings.length === 0) return { delta: null, regression };
 	const delta = Math.round(savings.reduce((a, b) => a + b, 0) / savings.length);
 	return { delta, regression };
+}
+
+export interface DeltaAssessment extends DeltaResult {
+	/** Standard error of the mean per-task savings; null with <2 comparable
+	 * tasks. */
+	standardError: number | null;
+	/** True when the keep/evict verdict could flip within one standard
+	 * error — the signal to spend a top-up measurement. */
+	uncertain: boolean;
+}
+
+/**
+ * Variance-aware delta: alongside the point estimate, report whether the
+ * verdict is within noise of the 2×rent threshold. LLM run-to-run variance
+ * is the dominant error source at small effect sizes.
+ */
+export function assessDelta(
+	without: TaskSummary[],
+	withRule: TaskSummary[],
+	contextCost: number,
+): DeltaAssessment {
+	const { savings, regression } = perTaskSavings(without, withRule);
+	if (savings.length === 0) {
+		return { delta: null, regression, standardError: null, uncertain: false };
+	}
+	const mean = savings.reduce((a, b) => a + b, 0) / savings.length;
+	const delta = Math.round(mean);
+	let standardError: number | null = null;
+	if (savings.length >= 2) {
+		const variance =
+			savings.reduce((acc, s) => acc + (s - mean) ** 2, 0) /
+			(savings.length - 1);
+		standardError = Math.sqrt(variance / savings.length);
+	}
+	const threshold = 2 * contextCost;
+	const uncertain =
+		!regression &&
+		standardError !== null &&
+		Math.abs(mean - threshold) < standardError;
+	return { delta, regression, standardError, uncertain };
+}
+
+/** Combine two measurement passes of the same configuration: pool the raw
+ * results per task and re-summarize. */
+export function mergeSummaries(
+	first: TaskSummary[],
+	second: TaskSummary[],
+): TaskSummary[] {
+	const secondById = new Map(second.map((s) => [s.taskId, s]));
+	return first.map((summary) => {
+		const extra = secondById.get(summary.taskId);
+		if (!extra) return summary;
+		return summarizeTask(summary.taskId, [
+			...summary.results,
+			...extra.results,
+		]);
+	});
 }
 
 /** Where compiled agent memory lives. Overridable for tests so they never
@@ -145,6 +212,11 @@ export interface Decision {
 	delta: number | null;
 	regression: boolean;
 	status: "active" | "evicted";
+	/** True when the verdict was within one standard error of flipping
+	 * after all measurements (decided at low confidence). */
+	uncertain: boolean;
+	/** True when an extra measurement pass was spent on this decision. */
+	toppedUp: boolean;
 }
 
 export interface SelectionReport {
@@ -154,15 +226,48 @@ export interface SelectionReport {
 	rulesetVersion: number | null;
 }
 
+export interface SelectOptions {
+	/** Extra measurement passes allowed per decision when the verdict is
+	 * within one standard error of flipping. Bounded cost: each top-up is
+	 * one more suite invocation of the measured configuration. */
+	topUpBudget?: number;
+}
+
 export function selectForAgent(
 	db: WardenDb,
 	agent: string,
 	runner: SuiteRunner,
+	options: SelectOptions = {},
 ): SelectionReport {
+	const topUpBudget = options.topUpBudget ?? 1;
 	const candidates = listCandidates(db, agent, MAX_CANDIDATES_PER_INVOCATION);
 	// Captured before any decision so a rule activated this invocation is
 	// not immediately re-audited.
 	const auditTarget = oldestDecidedActiveRule(db, agent);
+
+	/** Measure `measured` vs `reference`, topping up the measured side when
+	 * the verdict is within noise of the threshold. Used for candidates
+	 * (reference = baseline) and re-audits (reference = without-rule). */
+	function assessWithTopUp(
+		reference: () => TaskSummary[],
+		measureOnce: (suffix: string) => TaskSummary[],
+		contextCost: number,
+		invert: boolean,
+	): { assessment: DeltaAssessment; toppedUp: boolean } {
+		let measured = measureOnce("");
+		const assess = () =>
+			invert
+				? assessDelta(measured, reference(), contextCost)
+				: assessDelta(reference(), measured, contextCost);
+		let assessment = assess();
+		let toppedUp = false;
+		if (assessment.uncertain && topUpBudget > 0) {
+			measured = mergeSummaries(measured, measureOnce("-topup"));
+			assessment = assess();
+			toppedUp = true;
+		}
+		return { assessment, toppedUp };
+	}
 
 	const decisions: Decision[] = [];
 	if (candidates.length > 0 || auditTarget !== undefined) {
@@ -170,23 +275,30 @@ export function selectForAgent(
 		const baseline = runner(activeSet, "active-set", true);
 
 		for (const candidate of candidates) {
-			const withCandidate = runner(
-				[...activeSet, candidate],
-				`candidate-${candidate.id}`,
+			const { assessment, toppedUp } = assessWithTopUp(
+				() => baseline,
+				(suffix) =>
+					runner(
+						[...activeSet, candidate],
+						`candidate-${candidate.id}${suffix}`,
+						false,
+					),
+				candidate.context_cost,
 				false,
 			);
-			const { delta, regression } = computeDelta(baseline, withCandidate);
+			const { delta, regression, uncertain } = assessment;
 			const { status, reason } = verdictWithReason(
 				delta,
 				candidate.context_cost,
 				regression,
 			);
+			const fullReason = annotateConfidence(reason, toppedUp, uncertain);
 			decideRule(
 				db,
 				candidate.id,
 				status,
 				delta,
-				reason,
+				fullReason,
 				new Date().toISOString(),
 			);
 			decisions.push({
@@ -195,30 +307,40 @@ export function selectForAgent(
 				delta,
 				regression,
 				status,
+				uncertain,
+				toppedUp,
 			});
 		}
 
 		if (auditTarget !== undefined) {
 			const withoutIt = activeSet.filter((rule) => rule.id !== auditTarget.id);
-			const summariesWithout = runner(
-				withoutIt,
-				`audit-${auditTarget.id}`,
-				false,
-			);
 			// The rule's current worth: cost without it minus cost with it
-			// (baseline includes it). Removing a good rule makes runs dearer.
-			const { delta, regression } = computeDelta(summariesWithout, baseline);
+			// (baseline includes it). Removing a good rule makes runs dearer,
+			// so the measured (toppable) side is the without-configuration.
+			const { assessment, toppedUp } = assessWithTopUp(
+				() => baseline,
+				(suffix) =>
+					runner(withoutIt, `audit-${auditTarget.id}${suffix}`, false),
+				auditTarget.context_cost,
+				true,
+			);
+			const { delta, regression, uncertain } = assessment;
 			const { status, reason } = verdictWithReason(
 				delta,
 				auditTarget.context_cost,
 				regression,
+			);
+			const fullReason = annotateConfidence(
+				`re-audit: ${reason}`,
+				toppedUp,
+				uncertain,
 			);
 			decideRule(
 				db,
 				auditTarget.id,
 				status,
 				delta,
-				`re-audit: ${reason}`,
+				fullReason,
 				new Date().toISOString(),
 			);
 			decisions.push({
@@ -227,6 +349,8 @@ export function selectForAgent(
 				delta,
 				regression,
 				status,
+				uncertain,
+				toppedUp,
 			});
 		}
 	}
@@ -251,16 +375,20 @@ export function selectForAgent(
 interface SelectArgs {
 	agent: string;
 	runs: number;
+	topUp: number;
 }
 
 export function parseSelectArgs(argv: string[]): SelectArgs {
-	const args: SelectArgs = { agent: "", runs: 2 };
+	const args: SelectArgs = { agent: "", runs: 2, topUp: 1 };
 	for (let i = 0; i < argv.length; i++) {
 		if (argv[i] === "--agent") {
 			args.agent = argv[i + 1] ?? "";
 			i++;
 		} else if (argv[i] === "--runs") {
 			args.runs = Number(argv[i + 1]);
+			i++;
+		} else if (argv[i] === "--top-up") {
+			args.topUp = Number(argv[i + 1]);
 			i++;
 		} else {
 			throw new Error(`unknown flag: ${argv[i]}`);
@@ -274,7 +402,22 @@ export function parseSelectArgs(argv: string[]): SelectArgs {
 	if (!Number.isInteger(args.runs) || args.runs < 1) {
 		throw new Error("--runs must be a positive integer");
 	}
+	if (!Number.isInteger(args.topUp) || args.topUp < 0) {
+		throw new Error("--top-up must be a non-negative integer");
+	}
 	return args;
+}
+
+function annotateConfidence(
+	reason: string,
+	toppedUp: boolean,
+	uncertain: boolean,
+): string {
+	if (!toppedUp && !uncertain) return reason;
+	const notes: string[] = [];
+	if (toppedUp) notes.push("after variance top-up");
+	if (uncertain) notes.push("low confidence: within one SE of flipping");
+	return `${reason} (${notes.join("; ")})`;
 }
 
 function main(args: SelectArgs): void {
@@ -296,9 +439,11 @@ function main(args: SelectArgs): void {
 			});
 
 		console.log(
-			`Selecting for agent=${args.agent} (runs=${args.runs} per config)`,
+			`Selecting for agent=${args.agent} (runs=${args.runs} per config, top-up budget ${args.topUp})`,
 		);
-		const report = selectForAgent(db, args.agent, runner);
+		const report = selectForAgent(db, args.agent, runner, {
+			topUpBudget: args.topUp,
+		});
 
 		if (report.decisions.length === 0) {
 			console.log("No candidates and no active rules to audit; nothing to do.");
@@ -308,7 +453,9 @@ function main(args: SelectArgs): void {
 			console.log(
 				`  [${decision.kind}] rule ${decision.rule.id} → ${decision.status.toUpperCase()}` +
 					` (delta=${decision.delta ?? "n/a"}, rent=${decision.rule.context_cost}` +
-					`${decision.regression ? ", REGRESSION" : ""}): "${decision.rule.body}"`,
+					`${decision.regression ? ", REGRESSION" : ""}` +
+					`${decision.toppedUp ? ", topped-up" : ""}` +
+					`${decision.uncertain ? ", LOW-CONFIDENCE" : ""}): "${decision.rule.body}"`,
 			);
 		}
 		console.log(

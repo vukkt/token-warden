@@ -6,16 +6,15 @@ import { describe, expect, it } from "vitest";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("plugin scaffold", () => {
-	it("plugin.json has the required manifest fields", async () => {
-		const raw = await readFile(
-			join(root, ".claude-plugin", "plugin.json"),
-			"utf8",
-		);
-		const manifest: unknown = JSON.parse(raw);
-		expect(manifest).toMatchObject({
-			name: "token-warden",
-			version: "0.1.0",
-		});
+	it("plugin.json has the required fields and matches the package version", async () => {
+		const manifest = JSON.parse(
+			await readFile(join(root, ".claude-plugin", "plugin.json"), "utf8"),
+		) as { name: string; version: string };
+		const pkg = JSON.parse(
+			await readFile(join(root, "package.json"), "utf8"),
+		) as { version: string };
+		expect(manifest.name).toBe("token-warden");
+		expect(manifest.version).toBe(pkg.version);
 	});
 
 	it("hooks.json registers the Stop collector via the plugin root", async () => {

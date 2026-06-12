@@ -14,6 +14,7 @@ import {
 	getRulesetVersion,
 	lastEvictions,
 	openDb,
+	projectUsage,
 	questionCounts,
 	type WardenDb,
 } from "./db.js";
@@ -176,8 +177,10 @@ export function renderStatus(db: WardenDb): string {
 	for (const agent of DOMAIN_AGENTS) {
 		for (const rule of getActiveRules(db, agent)) {
 			anyActive = true;
+			const provenance =
+				rule.source_run !== null ? ` born-of=run#${rule.source_run}` : "";
 			lines.push(
-				`  [${agent} #${rule.id}] delta=+${rule.measured_delta} rent=${rule.context_cost} "${rule.body}"`,
+				`  [${agent} #${rule.id}] delta=+${rule.measured_delta} rent=${rule.context_cost}${provenance} "${rule.body}"`,
 			);
 		}
 	}
@@ -195,6 +198,19 @@ export function renderStatus(db: WardenDb): string {
 		}
 	}
 	if (!anyEvicted) lines.push("  none");
+
+	lines.push("");
+	lines.push("Real-work tokens by project:");
+	const projects = projectUsage(db, 5);
+	if (projects.length === 0) {
+		lines.push("  none recorded");
+	} else {
+		for (const usage of projects) {
+			lines.push(
+				`  ${usage.project ?? "(unknown)"} — ${usage.runs} session(s), ${formatTokens(usage.tokens)} tokens`,
+			);
+		}
+	}
 
 	lines.push("");
 	lines.push(

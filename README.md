@@ -181,8 +181,13 @@ Active rules land in the agent's memory; the next session starts cheaper.
 
 | Command | What it does |
 |---|---|
-| `/warden-status` | Read-only report: per-agent run/rule counts, suite total vs. frozen baseline (absolute + %), learning curve over time, active rules with measured deltas, recent evictions with reasons, cross-agent question volume |
+| `/warden-status` | Read-only report: per-agent run/rule counts, suite total vs. frozen baseline (absolute + %), learning curve over time, active rules with measured deltas and provenance, recent evictions with reasons, real-work tokens by project, cross-agent question volume |
 | `/warden-bench <agent\|all> [--runs N] [--task id]` | Runs the golden suite, compares against `run1` and `best`, and reports benchmarking meta-cost (warns above 10% of the week's real-work tokens) |
+| `/warden-select <agent> [--runs N] [--top-up N]` | Measures pending candidates, evicts or activates them, re-audits the oldest active rule, and recompiles the agent's memory |
+
+When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
+nudge into new sessions — selection itself always stays a user decision, because it
+spends real benchmark tokens.
 
 Headless or when names collide, use the namespaced forms
 (`/token-warden:warden-status`). CLI equivalents:
@@ -229,8 +234,13 @@ savings math.
 **Variance and honesty.** Each configuration runs twice and pairs of runs differing by
 more than 25% are flagged in the output. LLM variance is the dominant error source at
 small effect sizes — the recorded demonstration below shows it evicting a rule. The
-benchmark also reports its own **meta-cost** after every invocation: when benchmarking
-exceeds 10% of the week's collected real-work tokens, it tells you to bench less.
+selector is variance-aware: it computes the standard error of the per-task savings, and
+when a verdict sits within one standard error of the keep/evict threshold it spends one
+bounded **top-up pass** (extra suite runs of the measured configuration, budget
+configurable via `--top-up`, default 1) before deciding; verdicts that remain within
+noise are recorded with an explicit low-confidence annotation. The benchmark also
+reports its own **meta-cost** after every invocation: when benchmarking exceeds 10% of
+the week's collected real-work tokens, it tells you to bench less.
 
 ---
 
@@ -382,22 +392,29 @@ excluded from plugin CI — its deliberate flaws are benchmark material, not bug
 
 ## Roadmap
 
-Candidate directions, roughly ordered by expected value:
+Shipped since v0.1.0:
 
-- **Variance-aware verdicts** — more runs (or sequential testing) when the measured delta
-  is within noise of the threshold, instead of a fixed `--runs 2`; the recorded
-  demonstration shows why.
-- **Scheduled selection** — run the selector automatically (cron/routine) when candidates
-  accumulate, instead of manually.
-- **Question-driven distillation** — the gate already counts per-agent questions; feed
-  high question volume into the distiller as a memory-gap signal (the schema is wired,
-  the prompt isn't).
-- **Golden suite growth** — heavy tasks (`testing-02` ≈ 150k tokens/run) deserve splitting,
-  and each agent could use tasks that specifically exercise its active rules.
-- **Cross-project learning curves** — `runs` already records every project's sessions;
-  status could break down real-work savings per project as rules mature.
-- **Rule provenance in status** — link each active rule to its source run and show the
-  before/after transcripts.
+- ✅ **Variance-aware verdicts** — standard-error analysis of per-task savings with a
+  bounded top-up pass when a verdict is within noise of the threshold (`--top-up`).
+- ✅ **Selection nudge** — a `SessionStart` hook surfaces pending candidates;
+  `/warden-select` runs the measurement on demand.
+- ✅ **Question-driven distillation** — an agent's recent cross-agent questions are fed
+  to the distiller as a memory-gap signal.
+- ✅ **Per-project tracking** — real-work sessions record their project; status breaks
+  down token volume per project.
+- ✅ **Rule provenance** — active rules show the run they were distilled from.
+
+Open directions:
+
+- **Golden suite growth** — heavy tasks (`testing-02` ≈ 150k tokens/run) deserve
+  splitting into new tasks (existing baselines stay frozen; replacing a task would
+  invalidate its denominator, so growth means *adding* task files, never editing them).
+- **Fully scheduled selection** — auto-running the selector on a cron/routine once
+  variance handling has earned trust; today it deliberately stays a user decision.
+- **Cross-project learning curves** — real-work savings per project as rules mature,
+  now that the data is recorded.
+- **Transcript provenance** — link a rule's `born-of` run to its archived transcript
+  digest for post-hoc review.
 
 ## License
 

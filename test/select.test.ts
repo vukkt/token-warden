@@ -81,11 +81,11 @@ describe("computeDelta", () => {
 });
 
 describe("parseSelectArgs", () => {
-	it("parses agent and runs", () => {
-		expect(parseSelectArgs(["--agent", "sql", "--runs", "3"])).toEqual({
-			agent: "sql",
-			runs: 3,
-		});
+	it("parses agent, runs, and top-up budget", () => {
+		expect(
+			parseSelectArgs(["--agent", "sql", "--runs", "3", "--top-up", "2"]),
+		).toEqual({ agent: "sql", runs: 3, topUp: 2 });
+		expect(parseSelectArgs(["--agent", "sql"]).topUp).toBe(1);
 	});
 
 	it("rejects unknown agents and flags", () => {

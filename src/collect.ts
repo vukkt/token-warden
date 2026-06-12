@@ -20,6 +20,7 @@ const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const hookPayloadSchema = z.looseObject({
 	session_id: z.string(),
 	transcript_path: z.string(),
+	cwd: z.string().nullish(),
 	hook_event_name: z.string().nullish(),
 	/** Present on agent-related hook events; absent on plain Stop. */
 	agent_type: z.string().nullish(),
@@ -83,6 +84,7 @@ async function main(): Promise<void> {
 			rulesetVersion: getRulesetVersion(db, agent),
 			ts: new Date().toISOString(),
 			config: "real",
+			project: payload.cwd ?? null,
 		});
 
 		// Distillation calls a model and takes far longer than the 2s hook
