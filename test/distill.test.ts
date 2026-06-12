@@ -114,7 +114,9 @@ describe("p75 / shouldDistill", () => {
 
 		it("triggers only above the rolling p75", () => {
 			const totals = [10_000, 12_000, 14_000, 16_000, 18_000];
-			totals.forEach((t, i) => seedRun(`s${i}`, t));
+			for (const [i, total] of totals.entries()) {
+				seedRun(`s${i}`, total);
+			}
 			const current = seedRun("current", 50_000);
 			expect(shouldDistill(db, "backend", current, 50_000)).toBe(true);
 			expect(shouldDistill(db, "backend", current, 11_000)).toBe(false);
