@@ -33,6 +33,7 @@ positive return.
 - [A recorded demonstration](#a-recorded-demonstration)
 - [Testing](#testing)
 - [Data layout](#data-layout)
+- [Security notes](#security-notes)
 - [Roadmap](#roadmap)
 
 ---
@@ -85,7 +86,8 @@ sessions and applied to future ones — past work is never re-done.
             into the agent's system prompt next session
 ```
 
-**1 · Collect.** A `Stop` hook fires after every turn and parses the session transcript
+**1 · Collect.** `Stop` and `SubagentStop` hooks fire after every turn (main session and
+subagent work respectively) and parse the session transcript
 into one ledger row: input/output/cache tokens (deduplicated by API message id — the
 transcript repeats usage per streamed block), tool-call count, files read more than once,
 and whether the session completed. The hook is hard-capped under the 2-second budget,
@@ -116,7 +118,7 @@ compiled into `MEMORY.md`, which Claude Code injects into the agent's system pro
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 22+
 - Claude Code v2.1+ (`claude --version`)
 - macOS or Linux (Windows via WSL — benchmarks need a POSIX shell)
 
@@ -260,6 +262,7 @@ the week's collected real-work tokens, it tells you to bench less.
 | `src/select.ts` | Keep/evict verdicts; round-robin re-audit; `MEMORY.md` compiler |
 | `src/status.ts` | Read-only reporting behind `/warden-status` |
 | `src/gate.ts` | Inter-agent `SendMessage` approval gate (Agent Teams) |
+| `src/notify.ts` | SessionStart nudge when candidates await measurement |
 
 Data model (`~/.token-warden/warden.db`): `runs` (one row per session or golden run,
 tagged `real`/`active`/`candidate`/`audit`), `rules` (the ledger — candidates, active
@@ -369,7 +372,8 @@ candidate, one re-audit). Mean completed tokens per task:
 npm run typecheck && npm run lint && npm run test
 ```
 
-86 unit tests across 9 files. The transcript parser carries the densest coverage
+The unit suite (count in the CI badge above — hard-coding it here rotted once already)
+spans every module. The transcript parser carries the densest coverage
 (usage dedup, completion heuristics, malformed-line tolerance, a 5 MB / 2 s performance
 budget) against committed anonymized fixtures. The hook entrypoints (`collect.ts`,
 `gate.ts`) are tested as real child processes against temp databases, including

@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.0 — 2026-06-12
+
+Full-repo audit (two parallel review agents + live verification). Headline fix:
+**subagent sessions are now collected** — previously only the main session's
+`Stop` hook was registered, so the four domain agents' real work never reached
+the ledger and the learning loop could not engage on real work at all.
+
+- `SubagentStop` hook: derives the subagent's sidechain transcript from the
+  parent path (verified live), records it under a `session#agent_id` key, and
+  never double-counts when no sidechain exists.
+- Distillation correctness: domain agents only (others are unmeasurable), p75
+  priors computed over real-work runs only, and at most one distillation per
+  run (Stop fires every turn and previously could spawn a haiku call per turn).
+- Bench: golden runs can no longer trigger a globally-installed plugin's own
+  distiller (`TOKEN_WARDEN_NO_DISTILL` set in the spawn env); `--agent all
+  --task` rejected up front; variance warning now works for any n≥2 runs.
+- Hardening: `WARDEN_SESSIONS_PER_WEEK` validated; NULL projects no longer
+  silently dropped from per-project curves; status CLI error handling; dead
+  exports removed.
+- Infra: vitest 4 (0 npm-audit findings, was 5 high), Biome pinned, Node ≥22
+  (20 is EOL), CI concurrency + timeouts, Dependabot (fixture excluded —
+  frozen by design). README staleness fixed (test counts, ToC, module table).
+
 ## v0.3.0 — 2026-06-12
 
 Cross-project learning curves — the test of the system's core thesis: do

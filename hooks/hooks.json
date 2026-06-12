@@ -11,6 +11,17 @@
 				]
 			}
 		],
+		"SubagentStop": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && [ -d node_modules ] && npx tsx src/collect.ts || true",
+						"timeout": 30
+					}
+				]
+			}
+		],
 		"SessionStart": [
 			{
 				"hooks": [

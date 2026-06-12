@@ -3,9 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	decideRule,
 	getRunBySession,
+	insertRule,
+	listCandidates,
 	MIGRATION_COUNT,
 	type NewRun,
+	oldestDecidedActiveRule,
 	openDb,
 	upsertRun,
 	type WardenDb,
@@ -108,5 +112,36 @@ describe("upsertRun", () => {
 			.get();
 		expect(count?.n).toBe(2);
 		expect(getRunBySession(db, "s2")?.agent).toBe("backend");
+	});
+});
+
+describe("rule queue ordering", () => {
+	function seedRule(body: string, createdAt: string): number {
+		return insertRule(db, {
+			agent: "sql",
+			body,
+			contextCost: 8,
+			sourceRun: null,
+			createdAt,
+		});
+	}
+
+	it("listCandidates returns oldest first, capped", () => {
+		const ids = [
+			seedRule("Rule body number one here.", "2026-06-03"),
+			seedRule("Rule body number two here.", "2026-06-01"),
+			seedRule("Rule body number three here.", "2026-06-02"),
+			seedRule("Rule body number four here.", "2026-06-04"),
+		];
+		const picked = listCandidates(db, "sql", 3).map((r) => r.id);
+		expect(picked).toEqual([ids[1], ids[2], ids[0]]);
+	});
+
+	it("oldestDecidedActiveRule round-robins by decided_at", () => {
+		const first = seedRule("Rule body number one here.", "t");
+		const second = seedRule("Rule body number two here.", "t");
+		decideRule(db, first, "active", 100, "ok", "2026-06-02");
+		decideRule(db, second, "active", 100, "ok", "2026-06-01");
+		expect(oldestDecidedActiveRule(db, "sql")?.id).toBe(second);
 	});
 });

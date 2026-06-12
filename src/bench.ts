@@ -101,6 +101,11 @@ export function parseArgs(argv: string[]): BenchArgs {
 	if (args.agent === "all" && args.rule !== null) {
 		throw new Error("--rule requires a specific --agent (rules are per-agent)");
 	}
+	if (args.agent === "all" && args.task !== null) {
+		throw new Error(
+			"--task requires a specific --agent (task ids are per-agent)",
+		);
+	}
 	return args;
 }
 
@@ -313,6 +318,10 @@ function runOnce(
 				encoding: "utf8",
 				timeout: CLAUDE_TIMEOUT_MS,
 				maxBuffer: 64 * 1024 * 1024,
+				// If the plugin is installed globally, its Stop hook fires
+				// inside this benchmark session; this stops that hook from
+				// spawning haiku distillers off golden runs.
+				env: { ...process.env, TOKEN_WARDEN_NO_DISTILL: "1" },
 			},
 		);
 		if (claude.error) throw claude.error;
@@ -392,10 +401,9 @@ export function summarizeTask(
 		.map((r) => r.tokens);
 	const avg = mean(completedTokens);
 	let highVariance = false;
-	if (completedTokens.length === 2) {
-		const [a, b] = completedTokens as [number, number];
-		const center = (a + b) / 2;
-		highVariance = center > 0 && Math.abs(a - b) / center > VARIANCE_WARN_RATIO;
+	if (completedTokens.length >= 2 && avg > 0) {
+		const spread = Math.max(...completedTokens) - Math.min(...completedTokens);
+		highVariance = spread / avg > VARIANCE_WARN_RATIO;
 	}
 	return { taskId, results, meanCompletedTokens: avg, highVariance };
 }

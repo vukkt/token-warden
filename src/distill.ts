@@ -25,6 +25,7 @@ import {
 	type WardenDb,
 } from "./db.js";
 import { digestTranscript } from "./transcript.js";
+import { DOMAIN_AGENTS } from "./types.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -65,16 +66,31 @@ export function shouldDistill(
 	runId: number,
 	totalTokens: number,
 ): boolean {
+	// Real-work sessions only: golden/bench runs have a different cost
+	// profile and would drag the percentile, over- or under-triggering
+	// distillation on ordinary sessions.
 	const priors = db
 		.prepare<unknown[], { total: number }>(
 			`SELECT input_tokens + output_tokens + cache_creation + cache_read AS total
-			 FROM runs WHERE agent = ? AND id != ?
+			 FROM runs WHERE agent = ? AND id != ? AND task_hash IS NULL
 			 ORDER BY ts DESC LIMIT ?`,
 		)
 		.all(agent, runId, ROLLING_WINDOW)
 		.map((row) => row.total);
 	if (priors.length < MIN_PRIOR_RUNS) return false;
 	return totalTokens > p75(priors);
+}
+
+/** Stop fires after every turn, so one long expensive session would spawn a
+ * distiller per turn over the same transcript. Any rule already born from
+ * this run is the persistent "been here" marker. */
+export function alreadyDistilled(db: WardenDb, runId: number): boolean {
+	const row = db
+		.prepare<unknown[], { n: number }>(
+			"SELECT COUNT(*) AS n FROM rules WHERE source_run = ?",
+		)
+		.get(runId);
+	return (row?.n ?? 0) > 0;
 }
 
 function characterTrigrams(text: string): Set<string> {
@@ -219,6 +235,16 @@ function distill(args: DistillArgs): void {
 			.get(args.runId);
 		if (!run) {
 			logLine(`run ${args.runId} not found; nothing to distill`);
+			return;
+		}
+		if (!(DOMAIN_AGENTS as readonly string[]).includes(run.agent)) {
+			logLine(
+				`run ${run.id}: agent "${run.agent}" has no golden suite; rules would be unmeasurable — skipping`,
+			);
+			return;
+		}
+		if (alreadyDistilled(db, run.id)) {
+			logLine(`run ${run.id}: already distilled; skipping`);
 			return;
 		}
 		const total =

@@ -302,10 +302,15 @@ const invokedDirectly =
 	import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
-	const db = openDb();
 	try {
-		console.log(renderStatus(db));
-	} finally {
-		db.close();
+		const db = openDb();
+		try {
+			console.log(renderStatus(db));
+		} finally {
+			db.close();
+		}
+	} catch (err) {
+		console.error(err instanceof Error ? err.message : String(err));
+		process.exit(1);
 	}
 }

@@ -153,10 +153,25 @@ describe("gate.ts process behavior", () => {
 		expect(allQuestions()[0]?.approved).toBe(1);
 	});
 
-	it("a denied question stays unapproved", () => {
+	it("a denied question stays unapproved even after unrelated approvals", () => {
 		runGate(sendMessagePayload());
-		// No PostToolUse fires when the user denies the send.
+		// No PostToolUse fires for the denied send; a different approved send
+		// must not match the pending row.
+		runGate(
+			sendMessagePayload({
+				tool_input: { recipient: "backend", message: "A different question?" },
+			}),
+			true,
+		);
 		expect(allQuestions()[0]?.approved).toBeNull();
+	});
+
+	it("approves the most recent matching pending question", () => {
+		runGate(sendMessagePayload());
+		runGate(sendMessagePayload());
+		runGate(sendMessagePayload(), true);
+		const rows = allQuestions();
+		expect(rows.map((r) => r.approved)).toEqual([null, 1]);
 	});
 
 	it("ignores non-SendMessage tools without output or rows", () => {

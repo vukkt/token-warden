@@ -217,6 +217,41 @@ differed from the spec's assumptions. Newest entries at the bottom of each phase
   counts wired into `/warden-status` (high outbound volume = that agent's memory is
   missing something — a future distiller signal).
 
+## v0.4.0 — full-repo audit (two parallel review agents + live verification)
+
+- **SubagentStop registered — the audit's biggest catch.** Only `Stop` was wired, which
+  fires for the main session; domain-agent real work was never collected, so real-work
+  learning curves and real-work distillation could structurally never happen. Verified
+  live: the SubagentStop payload carries the PARENT transcript path; the subagent's own
+  transcript is derived as `<parent minus .jsonl>/subagents/agent-<agent_id>.jsonl` and
+  recorded under a `session_id#agent_id` key (idempotent per subagent, never colliding
+  with the parent row). If no sidechain transcript exists, the event is skipped — never
+  double-counted. Subagent events trust the harness's `agent_type` verbatim (it names the
+  agent definition); plain Stop keeps the domain-allowlist fallback.
+- **Distillation is now gated to domain agents** (others' rules could never be measured —
+  candidates would queue forever and the SessionStart nudge would point at a command that
+  errors; notify filters likewise), **p75 priors count real-work runs only**
+  (`task_hash IS NULL` — golden runs have a different cost profile), and **a run is
+  distilled at most once** (`alreadyDistilled`: any rule with `source_run = run.id` is the
+  persistent marker; Stop fires every turn and would otherwise spawn a haiku call per turn
+  of a long expensive session).
+- **Bench hardening:** the headless claude spawn sets `TOKEN_WARDEN_NO_DISTILL=1` (a
+  globally installed plugin's own Stop hook would otherwise distill golden runs);
+  `--agent all --task` is rejected up front instead of failing after spending tokens;
+  the >25% variance warning now works for any n≥2 runs (was: exactly 2).
+- **Correctness sweep:** `WARDEN_SESSIONS_PER_WEEK` is validated (0/negative/NaN would
+  invert or trivialize the keep inequality); `realWorkCurveByProject` COALESCEs NULL
+  projects (SQL `IN` drops NULLs silently); status CLI errors print a message instead of
+  a raw stack; dead exports removed (`computeDelta`, `AgentName`, `RuleStatus`).
+- **Infra:** vitest 4 (clears 5 high npm-audit findings), Biome pinned exactly,
+  engines `>=22` + CI matrix [22, 24] (Node 20 is EOL), CI concurrency group +
+  job timeouts, Dependabot (npm + actions; fixture deliberately excluded — frozen).
+- **Declined (judgment):** shared CLI flag-parser refactor (three small hand-rolled
+  loops are tested and readable; consolidation risk > duplication cost); lone-`\r` line
+  endings in `iterateLines` (doc claim softened instead — Claude Code never writes them);
+  merging gate's `truncateBody` with transcript's `truncate` (cross-module util for two
+  one-liners isn't worth the coupling).
+
 ## Post-release — distribution
 
 - **The repo is its own marketplace.** `.claude-plugin/marketplace.json` (marketplace

@@ -198,4 +198,53 @@ describe("buildNudge", () => {
 	it("is null when nothing is pending", () => {
 		expect(buildNudge([])).toBeNull();
 	});
+
+	it("ignores non-domain agents whose rules cannot be measured", () => {
+		expect(buildNudge([{ agent: "main", pending: 5 }])).toBeNull();
+		expect(
+			buildNudge([
+				{ agent: "main", pending: 5 },
+				{ agent: "sql", pending: 1 },
+			]),
+		).toContain("1 candidate rule(s) pending measurement (sql: 1)");
+	});
+});
+
+describe("candidate cap per invocation", () => {
+	let dir2: string;
+	let db2: WardenDb;
+
+	beforeEach(() => {
+		dir2 = mkdtempSync(join(tmpdir(), "warden-cap-"));
+		db2 = openDb(join(dir2, "warden.db"));
+		process.env.TOKEN_WARDEN_MEMORY_DIR = join(dir2, "agent-memory");
+	});
+
+	afterEach(() => {
+		db2.close();
+		rmSync(dir2, { recursive: true, force: true });
+		delete process.env.TOKEN_WARDEN_MEMORY_DIR;
+	});
+
+	it("decides at most 3 candidates, oldest first; the rest stay queued", () => {
+		const ids: number[] = [];
+		for (let i = 0; i < 4; i++) {
+			ids.push(
+				insertRule(db2, {
+					agent: "sql",
+					body: `Candidate rule number ${i} body.`,
+					contextCost: 5,
+					sourceRun: null,
+					createdAt: `2026-06-0${i + 1}`,
+				}),
+			);
+		}
+		const runner: SuiteRunner = (rules) =>
+			rules.length === 0 ? [summary("t1", [10_000])] : [summary("t1", [5_000])];
+		const report = selectForAgent(db2, "sql", runner);
+		expect(report.decisions.filter((d) => d.kind === "candidate")).toHaveLength(
+			3,
+		);
+		expect(getRuleById(db2, ids[3] ?? -1)?.status).toBe("candidate");
+	});
 });

@@ -1,0 +1,13 @@
+# benchmarks/fixture/ is deliberately NOT listed: the fixture is frozen by
+# design (baselines must stay comparable) and its dependencies are part of
+# the frozen surface.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: monthly
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

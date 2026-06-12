@@ -15,7 +15,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
 	assertPosixPlatform,
@@ -50,7 +50,10 @@ export interface VerdictInput {
  * context rent. SESSIONS_PER_WEEK cancels algebraically but is kept so the
  * policy reads as the spec states it. */
 export function verdict(rule: VerdictInput): "active" | "evicted" {
-	const sessionsPerWeek = Number(process.env.WARDEN_SESSIONS_PER_WEEK ?? 20);
+	// A zero/negative/NaN override would invert or trivialize the
+	// inequality; fall back to the default instead.
+	const raw = Number(process.env.WARDEN_SESSIONS_PER_WEEK ?? 20);
+	const sessionsPerWeek = Number.isFinite(raw) && raw > 0 ? raw : 20;
 	if (rule.measuredDelta === null || rule.measuredDelta <= 0) return "evicted";
 	const weeklySavings = rule.measuredDelta * sessionsPerWeek;
 	const weeklyRent = rule.contextCost * sessionsPerWeek;
@@ -120,17 +123,6 @@ function perTaskSavings(
 		savings.push(base.meanCompletedTokens - other.meanCompletedTokens);
 	}
 	return { savings, regression };
-}
-
-/** Pair task summaries by id and average the per-task savings. */
-export function computeDelta(
-	without: TaskSummary[],
-	withRule: TaskSummary[],
-): DeltaResult {
-	const { savings, regression } = perTaskSavings(without, withRule);
-	if (savings.length === 0) return { delta: null, regression };
-	const delta = Math.round(savings.reduce((a, b) => a + b, 0) / savings.length);
-	return { delta, regression };
 }
 
 export interface DeltaAssessment extends DeltaResult {
@@ -360,7 +352,7 @@ export function selectForAgent(
 	const finalActive = getActiveRules(db, agent);
 	if (decisions.length > 0) {
 		const memoryPath = memoryFilePath(agent);
-		mkdirSync(join(memoryPath, ".."), { recursive: true });
+		mkdirSync(dirname(memoryPath), { recursive: true });
 		writeFileSync(memoryPath, compileMemoryMd(finalActive));
 		rulesetVersion = bumpRulesetVersion(db, agent, new Date().toISOString());
 	}

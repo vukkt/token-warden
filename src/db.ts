@@ -492,22 +492,24 @@ export function realWorkCurveByProject(
 	db: WardenDb,
 	limit: number,
 ): ProjectCurvePoint[] {
+	// COALESCE so NULL-project rows group as "(unknown)" instead of being
+	// silently dropped by IN's three-valued NULL semantics.
 	return db
 		.prepare<unknown[], ProjectCurvePoint>(
-			`SELECT project,
+			`SELECT COALESCE(project, '(unknown)') AS project,
 				ruleset_version AS rulesetVersion,
 				COUNT(*) AS runs,
 				CAST(AVG(input_tokens + output_tokens + cache_creation + cache_read) AS INTEGER) AS avgTokens
 			 FROM runs
 			 WHERE task_hash IS NULL AND completed = 1 AND agent != 'main'
-				AND project IN (
-					SELECT project FROM runs
+				AND COALESCE(project, '(unknown)') IN (
+					SELECT COALESCE(project, '(unknown)') FROM runs
 					WHERE task_hash IS NULL AND completed = 1 AND agent != 'main'
-					GROUP BY project
+					GROUP BY COALESCE(project, '(unknown)')
 					ORDER BY SUM(input_tokens + output_tokens + cache_creation + cache_read) DESC
 					LIMIT ?
 				)
-			 GROUP BY project, ruleset_version
+			 GROUP BY COALESCE(project, '(unknown)'), ruleset_version
 			 ORDER BY project, ruleset_version`,
 		)
 		.all(limit);

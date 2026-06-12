@@ -6,7 +6,7 @@
  * Every failure path logs to collect.log (next to the DB) and exits 0.
  */
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -22,8 +22,9 @@ const hookPayloadSchema = z.looseObject({
 	transcript_path: z.string(),
 	cwd: z.string().nullish(),
 	hook_event_name: z.string().nullish(),
-	/** Present on agent-related hook events; absent on plain Stop. */
+	/** Present on agent-related hook events (SubagentStop); absent on Stop. */
 	agent_type: z.string().nullish(),
+	agent_id: z.string().nullish(),
 });
 
 function logLine(message: string): void {
@@ -54,10 +55,46 @@ function resolveAgent(
 	return parsedAgent;
 }
 
+/** SubagentStop payloads carry the PARENT transcript path (verified live);
+ * the subagent's own transcript sits beside it at
+ * `<parent minus .jsonl>/subagents/agent-<agent_id>.jsonl`. */
+function subagentTranscriptPath(
+	parentTranscript: string,
+	agentId: string,
+): string {
+	return join(
+		parentTranscript.replace(/\.jsonl$/, ""),
+		"subagents",
+		`agent-${agentId}.jsonl`,
+	);
+}
+
 async function main(): Promise<void> {
 	const payload = hookPayloadSchema.parse(JSON.parse(await readStdin()));
+
+	// SubagentStop events record the subagent's work under a suffixed session
+	// key (the subagent shares the parent's session_id) using the subagent's
+	// own sidechain transcript — the payload's transcript_path is the parent
+	// conversation and must not be double-counted under another name.
+	const isSubagentEvent = payload.hook_event_name === "SubagentStop";
+	let transcriptPath = payload.transcript_path;
+	if (isSubagentEvent) {
+		const derived =
+			payload.agent_id != null
+				? subagentTranscriptPath(payload.transcript_path, payload.agent_id)
+				: null;
+		if (derived === null || !existsSync(derived)) {
+			logLine(
+				`skip subagent event session=${payload.session_id}: no sidechain transcript` +
+					`${derived ? ` at ${derived}` : " (no agent_id in payload)"}`,
+			);
+			return;
+		}
+		transcriptPath = derived;
+	}
+
 	// Streamed line-by-line: peak memory stays flat even for huge transcripts.
-	const parsed = await parseTranscriptFile(payload.transcript_path);
+	const parsed = await parseTranscriptFile(transcriptPath);
 
 	if (parsed.entryCount === 0) {
 		logLine(
@@ -66,13 +103,27 @@ async function main(): Promise<void> {
 		);
 		return;
 	}
+	if (isSubagentEvent && !parsed.isSidechain && parsed.agentId === null) {
+		logLine(
+			`skip subagent event session=${payload.session_id}: transcript is not a sidechain`,
+		);
+		return;
+	}
 
-	const agent = resolveAgent(payload.agent_type, parsed.agent);
+	const sessionKey = isSubagentEvent
+		? `${payload.session_id}#${payload.agent_id}`
+		: payload.session_id;
+	// Subagent events trust the harness-provided agent_type verbatim (it
+	// names the agent definition); plain Stop falls back to the parsed
+	// transcript, mapping unknown names to 'main'.
+	const agent = isSubagentEvent
+		? (payload.agent_type ?? parsed.agent)
+		: resolveAgent(payload.agent_type, parsed.agent);
 	const db = openDb();
 	try {
 		const runId = upsertRun(db, {
 			agent,
-			sessionId: payload.session_id,
+			sessionId: sessionKey,
 			taskHash: null,
 			inputTokens: parsed.inputTokens,
 			outputTokens: parsed.outputTokens,
@@ -95,8 +146,12 @@ async function main(): Promise<void> {
 			parsed.outputTokens +
 			parsed.cacheCreation +
 			parsed.cacheRead;
+		// Only domain agents are distilled: rules for any other agent (incl.
+		// 'main') have no golden suite and could never be measured, so their
+		// candidates would queue forever.
 		if (
 			process.env.TOKEN_WARDEN_NO_DISTILL !== "1" &&
+			(DOMAIN_AGENTS as readonly string[]).includes(agent) &&
 			shouldDistill(db, agent, runId, total)
 		) {
 			spawn(

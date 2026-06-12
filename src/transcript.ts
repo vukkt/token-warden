@@ -234,7 +234,9 @@ export function parseTranscript(jsonlText: string): ParsedRun {
  * Parse a transcript file streaming line-by-line — peak memory stays
  * O(longest line) instead of O(file), which matters in the Stop hook where
  * transcripts can be tens of MB. Same tolerance contract as
- * `parseTranscript`; the two produce identical results.
+ * `parseTranscript`; the two produce identical results for LF/CRLF input
+ * (readline additionally treats a lone \r as a terminator — irrelevant for
+ * transcripts Claude Code writes).
  */
 export async function parseTranscriptFile(path: string): Promise<ParsedRun> {
 	const accumulator = new TranscriptAccumulator();

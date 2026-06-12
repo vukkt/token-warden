@@ -12,7 +12,7 @@ import {
 	type WardenDb,
 } from "../src/db.js";
 import {
-	computeDelta,
+	assessDelta,
 	memoryFilePath,
 	parseSelectArgs,
 	type SuiteRunner,
@@ -47,11 +47,11 @@ describe("verdict", () => {
 	});
 });
 
-describe("computeDelta", () => {
+describe("assessDelta (delta math)", () => {
 	it("averages per-task savings across tasks completed in both configs", () => {
 		const without = [summary("t1", 1000), summary("t2", 2000)];
 		const withRule = [summary("t1", 800), summary("t2", 1900)];
-		expect(computeDelta(without, withRule)).toEqual({
+		expect(assessDelta(without, withRule, 10)).toMatchObject({
 			delta: 150,
 			regression: false,
 		});
@@ -60,14 +60,13 @@ describe("computeDelta", () => {
 	it("flags a regression when a previously passing task fails", () => {
 		const without = [summary("t1", 1000), summary("t2", 2000)];
 		const withRule = [summary("t1", 800), summary("t2", 0, false)];
-		const result = computeDelta(without, withRule);
-		expect(result.regression).toBe(true);
+		expect(assessDelta(without, withRule, 10).regression).toBe(true);
 	});
 
 	it("ignores tasks that did not complete in the baseline", () => {
 		const without = [summary("t1", 0, false), summary("t2", 2000)];
 		const withRule = [summary("t1", 999), summary("t2", 1500)];
-		expect(computeDelta(without, withRule)).toEqual({
+		expect(assessDelta(without, withRule, 10)).toMatchObject({
 			delta: 500,
 			regression: false,
 		});
@@ -75,8 +74,8 @@ describe("computeDelta", () => {
 
 	it("returns null delta when nothing is comparable", () => {
 		expect(
-			computeDelta([summary("t1", 0, false)], [summary("t1", 500)]),
-		).toEqual({ delta: null, regression: false });
+			assessDelta([summary("t1", 0, false)], [summary("t1", 500)], 10),
+		).toMatchObject({ delta: null, regression: false });
 	});
 });
 

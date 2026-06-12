@@ -138,6 +138,42 @@ describe("p75 / shouldDistill", () => {
 			const current = seedRun("current", 99_000);
 			expect(shouldDistill(db, "sql", current, 99_000)).toBe(false);
 		});
+
+		it("excludes golden/bench runs from the priors", () => {
+			// Only 4 real-work priors — the golden run must not count as a 5th.
+			for (let i = 0; i < 4; i++) seedRun(`s${i}`, 10_000);
+			upsertRun(db, {
+				agent: "backend",
+				sessionId: "golden",
+				taskHash: "backend-01",
+				inputTokens: 10_000,
+				outputTokens: 0,
+				cacheCreation: 0,
+				cacheRead: 0,
+				toolCalls: 1,
+				fileRereads: 0,
+				completed: true,
+				rulesetVersion: 0,
+				ts: new Date().toISOString(),
+			});
+			const current = seedRun("current", 99_000);
+			expect(shouldDistill(db, "backend", current, 99_000)).toBe(false);
+		});
+
+		it("alreadyDistilled flags runs that produced a rule", async () => {
+			const { alreadyDistilled } = await import("../src/distill.js");
+			const { insertRule } = await import("../src/db.js");
+			const runId = seedRun("expensive", 90_000);
+			expect(alreadyDistilled(db, runId)).toBe(false);
+			insertRule(db, {
+				agent: "backend",
+				body: "A rule distilled from this run.",
+				contextCost: 8,
+				sourceRun: runId,
+				createdAt: "t",
+			});
+			expect(alreadyDistilled(db, runId)).toBe(true);
+		});
 	});
 });
 
