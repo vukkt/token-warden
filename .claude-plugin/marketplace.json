@@ -1,0 +1,15 @@
+{
+	"name": "vukkt-plugins",
+	"description": "Plugins by Vuk Topalovic — currently token-warden, a measurement and selection layer that makes Claude Code subagents measurably cheaper over time.",
+	"owner": {
+		"name": "Vuk Topalovic",
+		"email": "vuk.topalovic@gmail.com"
+	},
+	"plugins": [
+		{
+			"name": "token-warden",
+			"source": "./",
+			"description": "Measurement and selection layer for Claude Code subagents: records token cost per session, distills candidate efficiency rules from expensive runs, benchmarks them on golden task suites, and compiles only rules that earn their context rent into agent memory."
+		}
+	]
+}

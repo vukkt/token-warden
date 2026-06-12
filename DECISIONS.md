@@ -216,3 +216,18 @@ differed from the spec's assumptions. Newest entries at the bottom of each phase
 - **`questions` table added (migration 5)** per spec, with per-sender asked/approved
   counts wired into `/warden-status` (high outbound volume = that agent's memory is
   missing something — a future distiller signal).
+
+## Post-release — distribution
+
+- **The repo is its own marketplace.** `.claude-plugin/marketplace.json` (marketplace
+  name `vukkt-plugins`, plugin source `./`) lets users install via
+  `/plugin marketplace add vukkt/token-warden` + `/plugin install token-warden@vukkt-plugins`.
+  Official Anthropic marketplace names are reserved; community distribution is
+  self-hosted by design.
+- **The Stop hook self-bootstraps dependencies.** Marketplace installs copy the plugin to
+  `~/.claude/plugins/cache` without `node_modules`, which would make collect.ts a silent
+  no-op. The hook command now runs `npm install` once when `node_modules` is missing
+  (timeout raised to 120s to cover that first run; steady-state runtime is unchanged,
+  well under 2s). The gate hooks deliberately do NOT bootstrap — a PreToolUse hook
+  blocking a SendMessage for a minute would be terrible UX, and the gate fails open
+  by design until deps exist.

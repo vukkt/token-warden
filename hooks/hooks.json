@@ -5,8 +5,8 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && npx tsx src/collect.ts",
-						"timeout": 10
+						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && { [ -d node_modules ] || npm install --no-audit --no-fund --silent; } && npx tsx src/collect.ts",
+						"timeout": 120
 					}
 				]
 			}
