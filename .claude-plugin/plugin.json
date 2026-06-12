@@ -8,5 +8,6 @@
 		"email": "vuk.topalovic@gmail.com"
 	},
 	"license": "MIT",
+	"repository": "https://github.com/vukkt/token-warden",
 	"keywords": ["tokens", "cost", "benchmarking", "agent-memory", "optimization"]
 }
