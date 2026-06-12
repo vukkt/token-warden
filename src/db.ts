@@ -452,6 +452,67 @@ export function recentQuestionsFrom(
 		.map((row) => row.body);
 }
 
+export interface RealWorkPoint {
+	rulesetVersion: number;
+	runs: number;
+	avgTokens: number;
+}
+
+/**
+ * The cross-project learning curve for one agent: average completed
+ * real-work session cost per ruleset version. This is the test of the
+ * system's core thesis — golden-suite gains must show up in real work.
+ * 'main' never has compiled rules, so it has no curve.
+ */
+export function realWorkCurveByAgent(
+	db: WardenDb,
+	agent: string,
+): RealWorkPoint[] {
+	return db
+		.prepare<unknown[], RealWorkPoint>(
+			`SELECT ruleset_version AS rulesetVersion,
+				COUNT(*) AS runs,
+				CAST(AVG(input_tokens + output_tokens + cache_creation + cache_read) AS INTEGER) AS avgTokens
+			 FROM runs
+			 WHERE agent = ? AND task_hash IS NULL AND completed = 1
+			 GROUP BY ruleset_version ORDER BY ruleset_version`,
+		)
+		.all(agent);
+}
+
+export interface ProjectCurvePoint extends RealWorkPoint {
+	project: string | null;
+}
+
+/**
+ * Per-project learning curves, pooled across the domain agents (main is
+ * excluded — no rules apply to it). Projects ordered by total volume.
+ */
+export function realWorkCurveByProject(
+	db: WardenDb,
+	limit: number,
+): ProjectCurvePoint[] {
+	return db
+		.prepare<unknown[], ProjectCurvePoint>(
+			`SELECT project,
+				ruleset_version AS rulesetVersion,
+				COUNT(*) AS runs,
+				CAST(AVG(input_tokens + output_tokens + cache_creation + cache_read) AS INTEGER) AS avgTokens
+			 FROM runs
+			 WHERE task_hash IS NULL AND completed = 1 AND agent != 'main'
+				AND project IN (
+					SELECT project FROM runs
+					WHERE task_hash IS NULL AND completed = 1 AND agent != 'main'
+					GROUP BY project
+					ORDER BY SUM(input_tokens + output_tokens + cache_creation + cache_read) DESC
+					LIMIT ?
+				)
+			 GROUP BY project, ruleset_version
+			 ORDER BY project, ruleset_version`,
+		)
+		.all(limit);
+}
+
 export interface ProjectUsage {
 	project: string | null;
 	runs: number;

@@ -16,6 +16,9 @@ import {
 	openDb,
 	projectUsage,
 	questionCounts,
+	type RealWorkPoint,
+	realWorkCurveByAgent,
+	realWorkCurveByProject,
 	type WardenDb,
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
@@ -148,6 +151,21 @@ function formatTokens(n: number): string {
 	return n.toLocaleString("en-US");
 }
 
+/** "v0 48,770 (n=3) → v2 31,002 (n=5)  [-36.4% vs v0]" */
+export function formatRealWorkCurve(points: RealWorkPoint[]): string {
+	const sequence = points
+		.map(
+			(p) => `v${p.rulesetVersion} ${formatTokens(p.avgTokens)} (n=${p.runs})`,
+		)
+		.join(" → ");
+	const first = points[0];
+	const last = points[points.length - 1];
+	if (points.length < 2 || first === undefined || last === undefined) {
+		return sequence;
+	}
+	return `${sequence}  [${pctChange(last.avgTokens, first.avgTokens)} vs v${first.rulesetVersion}]`;
+}
+
 export function renderStatus(db: WardenDb): string {
 	const lines: string[] = [];
 	lines.push("token-warden status");
@@ -214,6 +232,39 @@ export function renderStatus(db: WardenDb): string {
 		}
 	}
 	if (!anyEvicted) lines.push("  none");
+
+	lines.push("");
+	lines.push(
+		"Real-work learning (avg completed session tokens per ruleset version; domain agents only — rules never apply to 'main'):",
+	);
+	let anyRealWork = false;
+	for (const agent of DOMAIN_AGENTS) {
+		const curve = realWorkCurveByAgent(db, agent);
+		if (curve.length === 0) continue;
+		anyRealWork = true;
+		lines.push(`  ${agent}: ${formatRealWorkCurve(curve)}`);
+	}
+	if (!anyRealWork) {
+		lines.push("  no completed real-work sessions from domain agents yet");
+	}
+
+	lines.push("");
+	lines.push("Real-work learning by project (domain agents pooled):");
+	const projectCurves = realWorkCurveByProject(db, 5);
+	if (projectCurves.length === 0) {
+		lines.push("  none recorded yet");
+	} else {
+		const byProject = new Map<string, RealWorkPoint[]>();
+		for (const point of projectCurves) {
+			const key = point.project ?? "(unknown)";
+			const list = byProject.get(key) ?? [];
+			list.push(point);
+			byProject.set(key, list);
+		}
+		for (const [project, points] of byProject) {
+			lines.push(`  ${displayText(project)}: ${formatRealWorkCurve(points)}`);
+		}
+	}
 
 	lines.push("");
 	lines.push("Real-work tokens by project:");

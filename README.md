@@ -425,6 +425,10 @@ Shipped since v0.1.0:
 - ✅ **Per-project tracking** — real-work sessions record their project; status breaks
   down token volume per project.
 - ✅ **Rule provenance** — active rules show the run they were distilled from.
+- ✅ **Cross-project learning curves** — `/warden-status` charts average completed
+  real-work session cost per ruleset version, per agent and per project (domain agents
+  only; `main` never has compiled rules). This is the test of the system's core thesis:
+  golden-suite gains must show up in real work.
 
 Open directions:
 
@@ -433,8 +437,6 @@ Open directions:
   invalidate its denominator, so growth means *adding* task files, never editing them).
 - **Fully scheduled selection** — auto-running the selector on a cron/routine once
   variance handling has earned trust; today it deliberately stays a user decision.
-- **Cross-project learning curves** — real-work savings per project as rules mature,
-  now that the data is recorded.
 - **Transcript provenance** — link a rule's `born-of` run to its archived transcript
   digest for post-hoc review.
 

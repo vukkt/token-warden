@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.0 — 2026-06-12
+
+Cross-project learning curves — the test of the system's core thesis: do
+golden-suite gains transfer to real work?
+
+- `/warden-status` now charts **average completed real-work session cost per
+  ruleset version**, per domain agent and per project (top 5 by volume), with
+  the percentage change since the first version, e.g.
+  `sql: v0 48,770 (n=3) → v2 31,002 (n=5)  [-36.4% vs v0]`.
+- Methodology: completed sessions only (invariant #3), golden runs excluded,
+  and `main` excluded — compiled rules never apply to it, so including it
+  would only add noise.
+
 ## v0.2.4 — 2026-06-12
 
 Memory optimization of the transcript hot path (runs on every session end).
