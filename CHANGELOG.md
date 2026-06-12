@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.1 — 2026-06-12
+
+Repo hygiene and CI release.
+
+- MIT `LICENSE` file, `CHANGELOG.md`, and full package metadata
+  (license/author/repository); GitHub description and topics set.
+- GitHub Actions CI: typecheck, lint, and tests on Node 20 and 24, plus the
+  fixture's own suite; `actions/checkout@v5` and `actions/setup-node@v5`.
+- Lint fix surfaced by CI's clean install: replaced a value-returning
+  `forEach` callback in a test with `for…of`.
+- README badges (CI, license).
+
 ## v0.2.0 — 2026-06-12
 
 - **Variance-aware verdicts**: the selector computes the standard error of per-task
