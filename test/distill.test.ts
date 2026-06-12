@@ -66,6 +66,17 @@ describe("parseRulesJson", () => {
 		expect(parseRulesJson('[{"body": "short"}]')).toBeNull();
 		expect(parseRulesJson(`[{"body": "${"x".repeat(201)}"}]`)).toBeNull();
 	});
+
+	it("rejects bodies containing control characters or newlines", () => {
+		expect(
+			parseRulesJson(
+				'[{"body": "Legit looking rule\\nwith an injected line."}]',
+			),
+		).toBeNull();
+		expect(
+			parseRulesJson('[{"body": "Rule with escape \\u001b[31m inside it."}]'),
+		).toBeNull();
+	});
 });
 
 describe("p75 / shouldDistill", () => {

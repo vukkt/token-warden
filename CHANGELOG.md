@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.3 — 2026-06-12
+
+Residual-risk hardening (see README "Security notes").
+
+- **Prompt-injection defense in depth**: the distiller rejects rule bodies
+  containing control characters or newlines; `renderStatus` sanitizes every
+  untrusted string it displays (ANSI/control stripped, newlines collapsed,
+  length clamped) so collected data cannot forge report sections; the
+  `/warden-status` command instructs the relaying model to treat report
+  contents as data, never instructions.
+- **Bench suites survive broken runs**: a crashed `claude` invocation,
+  vanished transcript, or timeout is recorded as a failed result
+  (`RUN-ERROR`) and the suite continues instead of aborting.
+- **Explicit POSIX guard**: `bench` and `select` fail fast on Windows with a
+  WSL pointer instead of cryptic downstream errors; requirement documented.
+
 ## v0.2.2 — 2026-06-12
 
 Hardening fixes from an adversarial test pass.

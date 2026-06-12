@@ -22,6 +22,22 @@ import { DOMAIN_AGENTS } from "./types.js";
 
 const TOTAL_SQL = "input_tokens + output_tokens + cache_creation + cache_read";
 
+/**
+ * Neutralize untrusted strings before rendering: rule bodies and eviction
+ * reasons are model-generated, project paths and question senders come from
+ * the environment. Stripping ANSI/control characters and collapsing
+ * newlines means collected data cannot fake report lines or sections;
+ * clamping keeps one weird value from flooding the report.
+ */
+export function displayText(value: string, max = 300): string {
+	const cleaned = value
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point
+		.replace(/\x1b\[[0-9;]*[A-Za-z]|[\x00-\x1f\x7f]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	return cleaned.length <= max ? cleaned : `${cleaned.slice(0, max - 1)}…`;
+}
+
 /** Signed percent change of current vs baseline, e.g. "-5.7%". */
 export function pctChange(current: number, baseline: number): string {
 	if (baseline === 0) return "n/a";
@@ -180,7 +196,7 @@ export function renderStatus(db: WardenDb): string {
 			const provenance =
 				rule.source_run !== null ? ` born-of=run#${rule.source_run}` : "";
 			lines.push(
-				`  [${agent} #${rule.id}] delta=+${rule.measured_delta} rent=${rule.context_cost}${provenance} "${rule.body}"`,
+				`  [${agent} #${rule.id}] delta=+${rule.measured_delta} rent=${rule.context_cost}${provenance} "${displayText(rule.body)}"`,
 			);
 		}
 	}
@@ -193,7 +209,7 @@ export function renderStatus(db: WardenDb): string {
 		for (const rule of lastEvictions(db, agent, 5)) {
 			anyEvicted = true;
 			lines.push(
-				`  [${agent} #${rule.id}] delta=${rule.measured_delta ?? "n/a"} — ${rule.decided_reason ?? "no reason recorded"} — "${rule.body}"`,
+				`  [${agent} #${rule.id}] delta=${rule.measured_delta ?? "n/a"} — ${displayText(rule.decided_reason ?? "no reason recorded")} — "${displayText(rule.body)}"`,
 			);
 		}
 	}
@@ -207,7 +223,7 @@ export function renderStatus(db: WardenDb): string {
 	} else {
 		for (const usage of projects) {
 			lines.push(
-				`  ${usage.project ?? "(unknown)"} — ${usage.runs} session(s), ${formatTokens(usage.tokens)} tokens`,
+				`  ${displayText(usage.project ?? "(unknown)")} — ${usage.runs} session(s), ${formatTokens(usage.tokens)} tokens`,
 			);
 		}
 	}
@@ -222,7 +238,7 @@ export function renderStatus(db: WardenDb): string {
 	} else {
 		for (const count of counts) {
 			lines.push(
-				`  ${count.from_agent}: asked ${count.asked}, approved ${count.approved}`,
+				`  ${displayText(count.from_agent, 60)}: asked ${count.asked}, approved ${count.approved}`,
 			);
 		}
 	}

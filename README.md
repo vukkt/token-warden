@@ -118,6 +118,7 @@ compiled into `MEMORY.md`, which Claude Code injects into the agent's system pro
 
 - Node.js 20+
 - Claude Code v2.1+ (`claude --version`)
+- macOS or Linux (Windows via WSL — benchmarks need a POSIX shell)
 
 ### 1 · Clone and install
 
@@ -392,6 +393,24 @@ excluded from plugin CI — its deliberate flaws are benchmark material, not bug
 | `benchmarks/fixture/` | The frozen benchmark codebase |
 
 ---
+
+## Security notes
+
+The ledger contains untrusted text: rule bodies and eviction reasons are
+model-generated, project paths and question senders come from the environment.
+Defenses, in order:
+
+1. The distiller rejects rule bodies containing control characters or
+   newlines at the source.
+2. `renderStatus` sanitizes every untrusted string it displays (ANSI/control
+   characters stripped, newlines collapsed, length clamped), so collected data
+   cannot forge report sections.
+3. The `/warden-status` command instructs the relaying Claude to treat report
+   contents as data, never as instructions.
+
+The inter-agent gate is an observability and approval layer, not a security
+boundary — it fails open by design so a broken gate can never block team
+messaging.
 
 ## Roadmap
 

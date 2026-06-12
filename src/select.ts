@@ -18,6 +18,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+	assertPosixPlatform,
 	compileMemoryMd,
 	type GoldenTask,
 	loadGoldenTasks,
@@ -473,6 +474,7 @@ const invokedDirectly =
 
 if (invokedDirectly) {
 	try {
+		assertPosixPlatform();
 		main(parseSelectArgs(process.argv.slice(2)));
 	} catch (err) {
 		console.error(err instanceof Error ? err.message : String(err));

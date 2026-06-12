@@ -434,7 +434,18 @@ export function runSuite(
 			process.stdout.write(
 				`  [${options.label}] ${task.id} run ${i}/${options.runs}… `,
 			);
-			const result = runOnce(db, task, definition, options.rules, options);
+			// One broken run (claude crash, vanished transcript, timeout) must
+			// not abort the suite: record it as a failed result and move on.
+			// Failed results are excluded from all savings math anyway.
+			let result: RunResult;
+			try {
+				result = runOnce(db, task, definition, options.rules, options);
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				console.log(`RUN-ERROR ${detail.split("\n")[0]}`);
+				results.push({ sessionId: "run-error", tokens: 0, completed: false });
+				continue;
+			}
 			results.push(result);
 			console.log(
 				`${result.completed ? "ok" : "FAILED-CHECK"} ${result.tokens} tokens (${result.sessionId})`,
@@ -571,8 +582,19 @@ const invokedDirectly =
 	process.argv[1] !== undefined &&
 	import.meta.url === pathToFileURL(process.argv[1]).href;
 
+/** Benchmarks copy fixtures, symlink node_modules, and run success checks
+ * via `bash -c` — POSIX only. Fail fast with a useful message on Windows. */
+export function assertPosixPlatform(): void {
+	if (process.platform === "win32") {
+		throw new Error(
+			"token-warden benchmarks require a POSIX environment (macOS/Linux); on Windows, run inside WSL",
+		);
+	}
+}
+
 if (invokedDirectly) {
 	try {
+		assertPosixPlatform();
 		main(parseArgs(process.argv.slice(2)));
 	} catch (err) {
 		console.error(err instanceof Error ? err.message : String(err));

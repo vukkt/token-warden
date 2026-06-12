@@ -107,7 +107,16 @@ export function trigramSimilarity(a: string, b: string): number {
 const rulesSchema = z
 	.array(
 		z.object({
-			body: z.string().trim().min(10).max(200),
+			// Single printable line: control characters (including newlines)
+			// are rejected so a rule body can never fake structure in the
+			// compiled MEMORY.md or the status report.
+			body: z
+				.string()
+				.trim()
+				.min(10)
+				.max(200)
+				// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control chars is the point
+				.regex(/^[^\x00-\x1f\x7f]+$/),
 		}),
 	)
 	.max(2);
