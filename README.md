@@ -1,5 +1,8 @@
 # token-warden
 
+[![CI](https://github.com/vukkt/token-warden/actions/workflows/ci.yml/badge.svg)](https://github.com/vukkt/token-warden/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **A Claude Code plugin that makes coding agents measurably cheaper over time.**
 
 Most "agent memory" accumulates advice nobody ever verifies. token-warden treats agent

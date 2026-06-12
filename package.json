@@ -4,6 +4,15 @@
 	"description": "Claude Code plugin that makes coding agents measurably cheaper over time: collect token costs, distill candidate rules, benchmark them on golden suites, and compile only the rules that earn their context rent into agent memory.",
 	"type": "module",
 	"private": true,
+	"license": "MIT",
+	"author": {
+		"name": "Vuk Topalovic",
+		"email": "vuk.topalovic@gmail.com"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/vukkt/token-warden.git"
+	},
 	"engines": {
 		"node": ">=20"
 	},
