@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.1 — 2026-06-13
+
+Dependency reconciliation after the first Dependabot batch.
+
+- Merged `actions/setup-node` v5 → v6; verified main builds clean under the
+  TypeScript 5.9 → 6.0 and `@types/node` 24 → 25 major bumps that landed
+  alongside it (typecheck exit 0, 120 tests pass).
+- Migrated `biome.json` to the 2.5.0 schema (`preset: "recommended"` replaces
+  the deprecated `recommended` field) — the biome 2.5.0 bump had left the
+  config drifting and printing lint infos on every run.
+- README roadmap refreshed: subagent collection moved to shipped; added a
+  "Bigger directions" tier (model-migration benchmarking, prompt A/B testing,
+  team-shared rule ledgers, real-time cost anomaly alerting).
+
 ## v0.4.0 — 2026-06-12
 
 Full-repo audit (two parallel review agents + live verification). Headline fix:

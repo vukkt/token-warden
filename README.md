@@ -420,6 +420,9 @@ messaging.
 
 Shipped since v0.1.0:
 
+- ✅ **Subagent collection** — `Stop` *and* `SubagentStop` hooks, so the four domain
+  agents' real work reaches the ledger (previously only the main session was collected and
+  the learning loop could not engage on real work at all).
 - ✅ **Variance-aware verdicts** — standard-error analysis of per-task savings with a
   bounded top-up pass when a verdict is within noise of the threshold (`--top-up`).
 - ✅ **Selection nudge** — a `SessionStart` hook surfaces pending candidates;
@@ -434,7 +437,7 @@ Shipped since v0.1.0:
   only; `main` never has compiled rules). This is the test of the system's core thesis:
   golden-suite gains must show up in real work.
 
-Open directions:
+Near-term:
 
 - **Golden suite growth** — heavy tasks (`testing-02` ≈ 150k tokens/run) deserve
   splitting into new tasks (existing baselines stay frozen; replacing a task would
@@ -443,6 +446,21 @@ Open directions:
   variance handling has earned trust; today it deliberately stays a user decision.
 - **Transcript provenance** — link a rule's `born-of` run to its archived transcript
   digest for post-hoc review.
+
+Bigger directions — the reusable asset here is the *frozen-benchmark + measured-verdict*
+discipline, which generalizes well beyond efficiency rules:
+
+- **Model-migration benchmarking** — the frozen golden suite is exactly the fixed workload
+  you need when a new model ships: `warden-bench` could answer "is the new model cheaper on
+  *my* workload" with the rigor rules already get.
+- **Prompt / agent-definition A/B testing** — the benchmark measures any context change,
+  not just rules; treat an agent's system prompt as a candidate and let the selector keep
+  edits that earn their place.
+- **Team-shared rule ledgers** — commit measured rules to a repo (via project-scoped
+  memory) with token-warden as the CI gate, so a PR adding a rule must carry its measured
+  delta. Memory review becomes code review.
+- **Real-time cost anomaly alerting** — the p75 machinery already detects expensive
+  sessions; a Stop-hook message could tell the session itself where its tokens went.
 
 ## License
 
