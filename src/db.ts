@@ -121,7 +121,8 @@ export type RunConfig =
 	| "active"
 	| "candidate"
 	| "audit"
-	| "modelbench";
+	| "modelbench"
+	| "promptbench";
 
 export interface NewRun {
 	agent: string;

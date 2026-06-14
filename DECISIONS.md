@@ -289,6 +289,41 @@ baked in below.
 - **Naming:** `RunConfig` value is `"modelbench"` (compound, unlike the other single-word
   values) chosen for clarity over consistency — it unambiguously says what the rows are.
 
+## v0.6.0 — prompt/agent-definition A/B testing (roadmap #2)
+
+Implementing #1 (model-bench) de-risked #2 to a thin consumer of the same engine, exactly
+as the post-#1 reflection predicted.
+
+- **Extracted the generic A/B core into `src/compare.ts`** rather than copy it. `compareRuns`
+  was already configuration-agnostic; it became `compareConfigs(subject, dimension,
+  baselineLabel, candidateLabel, …)` with the report/verdict parameterized by a `dimension`
+  word ("model"/"prompt"). `modelbench.ts` is now a thin runner over `compare.ts`; its
+  core-logic tests moved to `compare.test.ts`. Behaviour preserved (tests green across the
+  refactor), no duplication — the "tight, no copy-paste" bar the project holds.
+- **The prompt is varied via a `definitionOverride` on `SuiteOptions`**, the symmetric seam
+  to the model override added in v0.5.0. `runSuite` uses
+  `options.definitionOverride ?? loadAgentDefinition(agent)`. `loadAgentDefinition` was split
+  into `parseAgentDefinition(raw, source)` (exported, reused for variant files) + a thin
+  file loader; the same `memory: user → project` rewrite applies to variants so they never
+  touch real agent memory.
+- **Model held constant in prompt-bench.** Both passes run under the agent's current model
+  (`model: baseModel`) even if the variant file's frontmatter names a different one — the
+  prompt must be the only variable. The candidate's variant `model:` is therefore ignored
+  by design.
+- **`config='promptbench'` added; the golden-run count switched from a blacklist to a
+  whitelist.** `status.runCounts` now counts `config IN ('active','candidate','audit')` as
+  golden instead of `config != 'modelbench'`, so every current and future A/B comparison
+  config is excluded from an agent's golden history automatically (more robust than chasing
+  each new config with a `!=`).
+- **Same processing-token metric for both tools.** Prompt-bench runs are same-model (caching
+  is comparable, like the selector), so the cross-model cache distortion is milder here —
+  but using one metric across all comparison tools keeps a single mental model, and turn-count
+  differences from a prompt change still inflate cache-read, so the cache-neutral measure
+  remains the cleaner primary.
+- **Winning variants are not auto-applied.** `agents/<name>.md` is committed source; the user
+  edits it themselves if they accept a variant. (Automated prompt evolution — proposing the
+  variant and applying winners — is the natural follow-up, noted in the roadmap.)
+
 ## Post-release — distribution
 
 - **The repo is its own marketplace.** `.claude-plugin/marketplace.json` (marketplace

@@ -215,21 +215,30 @@ function ensureFixtureDeps(): void {
 	}
 }
 
-interface AgentDefinition {
+export interface AgentDefinition {
 	content: string;
 	model: string;
 }
 
-export function loadAgentDefinition(agent: string): AgentDefinition {
-	const raw = readFileSync(join(pluginRoot, "agents", `${agent}.md`), "utf8");
-	// Benchmarks must not read or write real ~/.claude/agent-memory: rewrite
-	// the memory scope to `project` so MEMORY.md resolves inside the temp dir.
+/** Parse a raw agent-definition markdown into a benchable definition.
+ * Benchmarks must not read or write real ~/.claude/agent-memory, so the
+ * memory scope is rewritten to `project` (MEMORY.md then resolves inside the
+ * temp dir). Used for both the shipped agents and prompt-variant files. */
+export function parseAgentDefinition(
+	raw: string,
+	source: string,
+): AgentDefinition {
 	const content = raw.replace(/^memory:\s*\w+\s*$/m, "memory: project");
 	if (!content.includes("memory: project")) {
-		throw new Error(`agents/${agent}.md has no memory field to rewrite`);
+		throw new Error(`${source} has no "memory:" frontmatter field to rewrite`);
 	}
 	const model = raw.match(/^model:\s*(\S+)\s*$/m)?.[1] ?? "sonnet";
 	return { content, model };
+}
+
+export function loadAgentDefinition(agent: string): AgentDefinition {
+	const path = join(pluginRoot, "agents", `${agent}.md`);
+	return parseAgentDefinition(readFileSync(path, "utf8"), path);
 }
 
 /** Bash commands golden-task agents legitimately need. Everything else is
@@ -425,6 +434,10 @@ export interface SuiteOptions {
 	/** Override the model the agent runs under (defaults to the agent's
 	 * frontmatter model). Used by model-migration benchmarking. */
 	model?: string;
+	/** Replace the agent definition installed for the run (defaults to the
+	 * shipped agents/<name>.md). Used by prompt/agent-definition A/B testing
+	 * to run a variant prompt. */
+	definitionOverride?: AgentDefinition;
 }
 
 /**
@@ -439,7 +452,7 @@ export function runSuite(
 	options: SuiteOptions,
 ): TaskSummary[] {
 	ensureFixtureDeps();
-	const definition = loadAgentDefinition(agent);
+	const definition = options.definitionOverride ?? loadAgentDefinition(agent);
 	const summaries: TaskSummary[] = [];
 	for (const task of tasks) {
 		const results: RunResult[] = [];

@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.6.0 — 2026-06-14
+
+Prompt / agent-definition A/B testing (roadmap #2): measure a proposed edit to
+an agent's system prompt instead of guessing whether it helps.
+
+- New `/warden-promptbench <agent> --variant <file.md>` and `src/promptbench.ts`.
+  Runs the agent's golden suite under the shipped definition (baseline) and a
+  variant agent file (candidate), holding the agent's active rules AND model
+  constant so only the prompt varies. A winning variant is reported, not
+  auto-applied.
+- **Extracted the comparison engine into `src/compare.ts`** — the
+  processing-token verdict, variance top-up, per-task report, and caveats are
+  now shared by model and prompt benchmarking. `modelbench.ts` became a thin
+  consumer; no behaviour changed (the core's tests moved with it).
+- New `RunConfig` value `'promptbench'`; the status golden-run count now
+  whitelists history configs (`active`/`candidate`/`audit`) so any A/B
+  comparison kind is excluded automatically.
+- `parseAgentDefinition` and a `definitionOverride` on `SuiteOptions` let
+  `runSuite` run an arbitrary agent definition (the seam prompt-bench varies).
+
 ## v0.5.0 — 2026-06-14
 
 Model-migration benchmarking (roadmap #1): "is model B cheaper than model A on

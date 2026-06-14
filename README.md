@@ -191,6 +191,7 @@ Active rules land in the agent's memory; the next session starts cheaper.
 | `/warden-bench <agent\|all> [--runs N] [--task id]` | Runs the golden suite, compares against `run1` and `best`, and reports benchmarking meta-cost (warns above 10% of the week's real-work tokens) |
 | `/warden-select <agent> [--runs N] [--top-up N]` | Measures pending candidates, evicts or activates them, re-audits the oldest active rule, and recompiles the agent's memory |
 | `/warden-modelbench <agent> --model <id> [--baseline <id>] [--runs N]` | Runs the agent's golden suite under two models (candidate vs. the agent's current model, rules held constant) and reports which uses fewer tokens for that workload |
+| `/warden-promptbench <agent> --variant <file.md> [--runs N]` | Runs the agent's golden suite under two prompts (a variant agent definition vs. the shipped one, rules and model held constant) and reports which uses fewer tokens |
 
 When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
 nudge into new sessions — selection itself always stays a user decision, because it
@@ -204,6 +205,7 @@ npx tsx src/status.ts                              # status report
 npm run bench -- --agent sql [--rule N]            # benchmark runner
 npx tsx src/select.ts --agent sql                  # selector (measure + evict + compile)
 npx tsx src/modelbench.ts --agent sql --model haiku  # compare a model against the agent's default
+npx tsx src/promptbench.ts --agent sql --variant v.md  # compare a prompt variant against the shipped one
 ```
 
 ---
@@ -265,7 +267,9 @@ the week's collected real-work tokens, it tells you to bench less.
 | `src/status.ts` | Read-only reporting behind `/warden-status` |
 | `src/gate.ts` | Inter-agent `SendMessage` approval gate (Agent Teams) |
 | `src/notify.ts` | SessionStart nudge when candidates await measurement |
+| `src/compare.ts` | Generic A/B comparison engine (processing-token verdict, variance top-up) shared by model and prompt benchmarking |
 | `src/modelbench.ts` | Model-migration benchmarking: candidate model vs. agent default |
+| `src/promptbench.ts` | Prompt A/B benchmarking: variant agent definition vs. shipped |
 
 Data model (`~/.token-warden/warden.db`): `runs` (one row per session or golden run,
 tagged `real`/`active`/`candidate`/`audit`), `rules` (the ledger — candidates, active
@@ -445,6 +449,11 @@ Shipped since v0.1.0:
   new model ships. The verdict uses processing tokens (input + output + cache_creation);
   cache-read is reported separately because it skews raw cross-model totals, and token
   counts are never converted to dollars (models are priced differently per token).
+- ✅ **Prompt / agent-definition A/B testing** — `/warden-promptbench` runs an agent's
+  golden suite under a variant agent definition vs. the shipped one (rules and model held
+  constant), so a proposed prompt edit can be kept or rejected on measured token savings
+  rather than vibes. The comparison engine (`compare.ts`) is shared with model
+  benchmarking: the discipline generalizes from "rule selection" to "any context change."
 
 Near-term:
 
@@ -453,6 +462,9 @@ Near-term:
   invalidate its denominator, so growth means *adding* task files, never editing them).
 - **Fully scheduled selection** — auto-running the selector on a cron/routine once
   variance handling has earned trust; today it deliberately stays a user decision.
+- **Automated prompt evolution** — `/warden-promptbench` measures a *given* variant today;
+  a distiller-for-prompts could propose the variant (as the rule distiller proposes rules)
+  and apply winners back to `agents/<name>.md`.
 - **Transcript provenance** — link a rule's `born-of` run to its archived transcript
   digest for post-hoc review.
 

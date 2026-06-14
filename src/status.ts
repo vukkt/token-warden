@@ -95,14 +95,17 @@ interface RunCounts {
 }
 
 function runCounts(db: WardenDb, agent: string): RunCounts {
-	// Exclude model-migration runs: they carry a task_hash but are not part
-	// of the agent's own golden-suite history.
+	// "golden" counts the agent's own golden-suite history only. A/B
+	// comparison runs (modelbench/promptbench) also carry a task_hash but are
+	// not history, so the golden count whitelists the history configs — new
+	// comparison kinds are then excluded automatically.
 	const row = db
 		.prepare<unknown[], { real: number; golden: number }>(
 			`SELECT
 				COALESCE(SUM(task_hash IS NULL), 0) AS real,
-				COALESCE(SUM(task_hash IS NOT NULL), 0) AS golden
-			 FROM runs WHERE agent = ? AND config != 'modelbench'`,
+				COALESCE(SUM(task_hash IS NOT NULL
+					AND config IN ('active', 'candidate', 'audit')), 0) AS golden
+			 FROM runs WHERE agent = ?`,
 		)
 		.get(agent);
 	return row ?? { real: 0, golden: 0 };
