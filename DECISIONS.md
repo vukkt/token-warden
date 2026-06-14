@@ -252,6 +252,43 @@ differed from the spec's assumptions. Newest entries at the bottom of each phase
   merging gate's `truncateBody` with transcript's `truncate` (cross-module util for two
   one-liners isn't worth the coupling).
 
+## v0.5.0 — model-migration benchmarking (roadmap #1)
+
+Built with an independent design-critique agent before implementation; its findings are
+baked in below.
+
+- **Reuses the existing machinery, adds almost no new concepts.** A new `model?` field on
+  `SuiteOptions` threads a model override through `runSuite` → `runOnce` (defaulting to the
+  agent's frontmatter model). `src/modelbench.ts` mirrors `select.ts`: a pure, DB-free
+  `compareRuns(...)` core plus a thin CLI that wires the real `runSuite`. The verdict reuses
+  `assessDelta(baseline, candidate, 0)` — at contextCost 0 its `uncertain` flag becomes
+  exactly "|Δ| < standard error", i.e. indistinguishable from zero, which is precisely the
+  model-comparison question.
+- **Verdict metric is PROCESSING tokens (input + output + cache_creation), not the raw
+  four-component total.** The critique's key catch: across two *different* models the
+  `cache_read` component (billed ~10%, dominant in these runs, and partly a
+  turn-count/scheduling artifact) distorts a 1:1 token sum. Comparing on processing tokens
+  removes that distortion; cache-read is reported per task so nothing is hidden. Token
+  counts are never converted to dollars (spec forbids that fiction; models are priced
+  differently per token, so the report states the caveat explicitly).
+- **Isolation:** modelbench rows carry `task_hash` (excluded from real-work queries) AND
+  `config='modelbench'` (excluded from the `config='active'` baseline/curve queries) and
+  pass `recordBaselines: false`. The one query filtering on neither — `status.runCounts`,
+  which counts `task_hash IS NOT NULL` as "golden" — was patched to exclude `modelbench`
+  so the comparison doesn't inflate an agent's golden-run count.
+- **Variance discipline preserved:** like the selector, modelbench tops up (re-runs *both*
+  models and pools via the same `mergeSummaries`/`assessDelta` path) when the verdict lands
+  within noise; `--top-up` defaults to 1. A single-task comparison (`--task`, n<2 tasks)
+  can't compute a standard error, so the verdict is labelled "indicative only" rather than
+  implying confidence.
+- **`runs.model` column added (migration 7), nullable.** Justification (the critique asked
+  whether it earns its place): nothing *queries* it today, but it makes every benchmark row
+  self-describing about which model produced it — forensic provenance for "which model was
+  this comparison?", and a guard rail since baselines are implicitly model-specific. Bench
+  populates it for all golden runs going forward; real-work collection leaves it NULL.
+- **Naming:** `RunConfig` value is `"modelbench"` (compound, unlike the other single-word
+  values) chosen for clarity over consistency — it unambiguously says what the rows are.
+
 ## Post-release — distribution
 
 - **The repo is its own marketplace.** `.claude-plugin/marketplace.json` (marketplace

@@ -83,6 +83,9 @@ const MIGRATIONS: readonly string[] = [
 	`
 	ALTER TABLE runs ADD COLUMN project TEXT;
 	`,
+	`
+	ALTER TABLE runs ADD COLUMN model TEXT;
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -113,7 +116,12 @@ export function openDb(path: string = defaultDbPath()): WardenDb {
  * sessions, 'active' for plain active-set golden runs (the only kind that
  * feeds baselines and learning curves), 'candidate'/'audit' for selector
  * measurement runs. */
-export type RunConfig = "real" | "active" | "candidate" | "audit";
+export type RunConfig =
+	| "real"
+	| "active"
+	| "candidate"
+	| "audit"
+	| "modelbench";
 
 export interface NewRun {
 	agent: string;
@@ -131,6 +139,9 @@ export interface NewRun {
 	config?: RunConfig;
 	/** Working directory of the session for real-work runs; null for golden runs. */
 	project?: string | null;
+	/** Model that produced the run; token counts are only comparable within a
+	 * model. Null when unknown (real-work collection does not record it). */
+	model?: string | null;
 }
 
 /** Row shape as stored (snake_case, ints for booleans). */
@@ -150,6 +161,7 @@ export interface RunRow {
 	ts: string;
 	config: string;
 	project: string | null;
+	model: string | null;
 }
 
 /**
@@ -163,8 +175,8 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 			`INSERT INTO runs (
 				agent, session_id, task_hash, input_tokens, output_tokens,
 				cache_creation, cache_read, tool_calls, file_rereads,
-				completed, ruleset_version, ts, config, project
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				completed, ruleset_version, ts, config, project, model
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(session_id) DO UPDATE SET
 				agent = excluded.agent,
 				task_hash = excluded.task_hash,
@@ -178,7 +190,8 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 				ruleset_version = excluded.ruleset_version,
 				ts = excluded.ts,
 				config = excluded.config,
-				project = excluded.project
+				project = excluded.project,
+				model = excluded.model
 			RETURNING id`,
 		)
 		.get(
@@ -196,6 +209,7 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 			run.ts,
 			run.config ?? "active",
 			run.project ?? null,
+			run.model ?? null,
 		);
 	if (row === undefined) {
 		throw new Error("upsertRun: INSERT ... RETURNING produced no row");

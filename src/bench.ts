@@ -220,7 +220,7 @@ interface AgentDefinition {
 	model: string;
 }
 
-function loadAgentDefinition(agent: string): AgentDefinition {
+export function loadAgentDefinition(agent: string): AgentDefinition {
 	const raw = readFileSync(join(pluginRoot, "agents", `${agent}.md`), "utf8");
 	// Benchmarks must not read or write real ~/.claude/agent-memory: rewrite
 	// the memory scope to `project` so MEMORY.md resolves inside the temp dir.
@@ -297,6 +297,7 @@ function runOnce(
 		copyFixture(workDir);
 		installAgent(workDir, task.agent, definition, rules);
 
+		const model = options.model ?? definition.model;
 		const claude = spawnSync(
 			"claude",
 			[
@@ -305,7 +306,7 @@ function runOnce(
 				"--agent",
 				task.agent,
 				"--model",
-				definition.model,
+				model,
 				"--permission-mode",
 				"acceptEdits",
 				"--max-turns",
@@ -366,6 +367,7 @@ function runOnce(
 			rulesetVersion: options.rulesetVersion,
 			ts,
 			config: options.config,
+			model,
 		});
 
 		// Only the plain active-set configuration touches baselines: the
@@ -420,6 +422,9 @@ export interface SuiteOptions {
 	/** Stored on each runs row so status can separate active-set golden runs
 	 * from candidate/audit measurement runs. */
 	config: RunConfig;
+	/** Override the model the agent runs under (defaults to the agent's
+	 * frontmatter model). Used by model-migration benchmarking. */
+	model?: string;
 }
 
 /**
@@ -495,7 +500,7 @@ export function metaCost(
 	return { benchTokens, realWorkTokens, ratio, warn: ratio > 0.1 };
 }
 
-function realWorkTokensLast7Days(db: WardenDb): number {
+export function realWorkTokensLast7Days(db: WardenDb): number {
 	const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 	const row = db
 		.prepare<unknown[], { total: number }>(

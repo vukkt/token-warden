@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.0 — 2026-06-14
+
+Model-migration benchmarking (roadmap #1): "is model B cheaper than model A on
+this agent's workload?", answered with the same measured rigor as rule selection.
+
+- New `/warden-modelbench <agent> --model <id> [--baseline <id>] [--runs N]`
+  and `src/modelbench.ts`. Runs an agent's golden suite under two models with
+  the agent's active rules held constant, so only the model varies.
+- Verdict uses **processing tokens** (input + output + cache_creation), not the
+  raw four-component total — cache-read tokens (cheap re-reads, dominant in the
+  sum, partly a scheduling artifact) distort a cross-model comparison and are
+  reported separately instead. No dollar conversion (models are priced
+  differently per token).
+- Reuses `runSuite` (via a new optional `model` override) and the selector's
+  `assessDelta`/variance top-up; `compareRuns` is a pure, fully unit-tested
+  core. Runs recorded with `config='modelbench'`, isolated from baselines,
+  learning curves, p75, and golden-run counts.
+- Schema migration 7: nullable `runs.model` column (forensic provenance;
+  populated for all golden runs).
+
 ## v0.4.1 — 2026-06-13
 
 Dependency reconciliation after the first Dependabot batch.

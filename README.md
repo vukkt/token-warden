@@ -190,6 +190,7 @@ Active rules land in the agent's memory; the next session starts cheaper.
 | `/warden-status` | Read-only report: per-agent run/rule counts, suite total vs. frozen baseline (absolute + %), learning curve over time, active rules with measured deltas and provenance, recent evictions with reasons, real-work tokens by project, cross-agent question volume |
 | `/warden-bench <agent\|all> [--runs N] [--task id]` | Runs the golden suite, compares against `run1` and `best`, and reports benchmarking meta-cost (warns above 10% of the week's real-work tokens) |
 | `/warden-select <agent> [--runs N] [--top-up N]` | Measures pending candidates, evicts or activates them, re-audits the oldest active rule, and recompiles the agent's memory |
+| `/warden-modelbench <agent> --model <id> [--baseline <id>] [--runs N]` | Runs the agent's golden suite under two models (candidate vs. the agent's current model, rules held constant) and reports which uses fewer tokens for that workload |
 
 When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
 nudge into new sessions — selection itself always stays a user decision, because it
@@ -199,9 +200,10 @@ Headless or when names collide, use the namespaced forms
 (`/token-warden:warden-status`). CLI equivalents:
 
 ```bash
-npx tsx src/status.ts                      # status report
-npm run bench -- --agent sql [--rule N]    # benchmark runner
-npx tsx src/select.ts --agent sql          # selector (measure + evict + compile)
+npx tsx src/status.ts                              # status report
+npm run bench -- --agent sql [--rule N]            # benchmark runner
+npx tsx src/select.ts --agent sql                  # selector (measure + evict + compile)
+npx tsx src/modelbench.ts --agent sql --model haiku  # compare a model against the agent's default
 ```
 
 ---
@@ -263,6 +265,7 @@ the week's collected real-work tokens, it tells you to bench less.
 | `src/status.ts` | Read-only reporting behind `/warden-status` |
 | `src/gate.ts` | Inter-agent `SendMessage` approval gate (Agent Teams) |
 | `src/notify.ts` | SessionStart nudge when candidates await measurement |
+| `src/modelbench.ts` | Model-migration benchmarking: candidate model vs. agent default |
 
 Data model (`~/.token-warden/warden.db`): `runs` (one row per session or golden run,
 tagged `real`/`active`/`candidate`/`audit`), `rules` (the ledger — candidates, active
@@ -436,6 +439,12 @@ Shipped since v0.1.0:
   real-work session cost per ruleset version, per agent and per project (domain agents
   only; `main` never has compiled rules). This is the test of the system's core thesis:
   golden-suite gains must show up in real work.
+- ✅ **Model-migration benchmarking** — `/warden-modelbench` runs an agent's golden suite
+  under a candidate model vs. its current one (rules held constant) and reports which uses
+  fewer tokens for that workload. The frozen suite *is* the fixed workload you need when a
+  new model ships. The verdict uses processing tokens (input + output + cache_creation);
+  cache-read is reported separately because it skews raw cross-model totals, and token
+  counts are never converted to dollars (models are priced differently per token).
 
 Near-term:
 
