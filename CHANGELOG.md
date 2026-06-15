@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.12.0 — 2026-06-15
+
+Team-shared rule ledgers (roadmap #3), increment 3: the CI gate — **#3 complete.**
+
+- New `src/verify-ledger.ts` (`npx tsx src/verify-ledger.ts [file...]`) validates
+  committed `.warden/*.rules.md` ledgers and exits non-zero if any is corrupt
+  or hand-edited, so a CI job can gate the PR. Deterministic and offline —
+  spends no model tokens and needs no secrets; reuses increment 2's
+  `parseLedgerFile`.
+- A deeper gate that re-benchmarks each rule's claimed delta in CI is possible
+  but requires a model-token budget and credentials, so it is a documented
+  deployment choice rather than a default.
+- Roadmap status: of the six directions, #1, #2, #3, #4 (plus automated prompt
+  evolution) are shipped; #5 (skill/MCP cost attribution) and #6 (rule
+  marketplaces) remain.
+
 ## v0.11.0 — 2026-06-15
 
 Team-shared rule ledgers (roadmap #3), increment 2: import + re-verify.

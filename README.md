@@ -456,12 +456,13 @@ Near-term:
 Bigger directions — the reusable asset is the *frozen-benchmark + measured-verdict*
 discipline, which generalizes well beyond efficiency rules:
 
-- **Team-shared rule ledgers** *(in progress)* — `/warden-share` exports an agent's
-  measured rules to a committed, reviewable artifact (increment 1) and `/warden-adopt`
-  imports a shared ledger as local candidates that are **re-measured** on the importer's
-  own suite before they count (increment 2 — the foreign delta is never trusted). Still to
-  come: a CI gate so a PR adding a rule must reproduce its claimed saving in the pipeline.
-  Memory review becomes code review.
+- ✅ **Team-shared rule ledgers** — `/warden-share` exports an agent's measured rules to a
+  committed, reviewable artifact; `/warden-adopt` imports a shared ledger as local
+  candidates that are **re-measured** on the importer's own suite (the foreign delta is
+  never trusted); and `npx tsx src/verify-ledger.ts` is a deterministic, offline CI gate
+  that fails a PR which corrupts or hand-edits a committed ledger. Memory review becomes
+  code review. (A deeper gate that re-benchmarks each rule's delta in CI is possible but
+  needs a model-token budget — a deployment choice, not shipped by default.)
 - **Skill / MCP cost attribution** — break a session's tokens down per tool and per MCP
   server ("your browser-automation MCP costs 40% of every frontend session"). The one
   remaining direction the A/B comparison engine does not serve — it is decomposition, not
