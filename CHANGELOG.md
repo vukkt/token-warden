@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.9.1 — 2026-06-15
+
+Documentation fixes (no code changes).
+
+- **Roadmap de-drifted.** Model-migration benchmarking, prompt A/B testing, and
+  cost-anomaly alerting were still listed as future "bigger directions" while
+  already shipped (v0.5/v0.6/v0.9). Removed them, and collapsed the
+  ever-growing "shipped since v0.1.0" list into a one-line pointer to this
+  changelog — the canonical record of what shipped — so the two stop drifting.
+- **Testing section** wording corrected: the CI badge shows pass/fail, not a
+  test count; the prose now gives an approximate count and says so.
+
 ## v0.9.0 — 2026-06-15
 
 Real-time cost anomaly alerting (roadmap #4).
