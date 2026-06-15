@@ -24,26 +24,16 @@ import {
 	type GoldenTask,
 	loadAgentDefinition,
 	loadGoldenTasks,
-	metaCost,
 	parseAgentDefinition,
-	realWorkTokensLast7Days,
 	runSuite,
 	type TaskSummary,
 } from "./bench.js";
-import {
-	type Comparison,
-	compareConfigs,
-	formatComparison,
-	gatherRuns,
-	poolRuns,
-	totalBenchTokens,
-} from "./compare.js";
+import { formatComparison, reportMetaCost, runComparison } from "./compare.js";
 import {
 	getActiveRules,
 	getRulesetVersion,
 	openDb,
 	type RuleRow,
-	type WardenDb,
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
 
@@ -107,23 +97,6 @@ export function parsePromptbenchArgs(argv: string[]): PromptbenchArgs {
 	return args;
 }
 
-function reportMetaCost(db: WardenDb, benchTokens: number): void {
-	const cost = metaCost(benchTokens, realWorkTokensLast7Days(db));
-	const ratioText =
-		cost.ratio === null
-			? "no real-work tokens collected in the last 7 days"
-			: `${(cost.ratio * 100).toFixed(1)}% of the week's real-work tokens`;
-	console.log("");
-	console.log(
-		`Meta-cost: this comparison used ${cost.benchTokens.toLocaleString("en-US")} tokens — ${ratioText}.`,
-	);
-	if (cost.warn) {
-		console.log(
-			"⚠ Benchmarking overhead exceeded 10% of the week's collected real-work tokens.",
-		);
-	}
-}
-
 function main(args: PromptbenchArgs): void {
 	if (!existsSync(args.variant)) {
 		throw new Error(`variant file not found: ${args.variant}`);
@@ -167,37 +140,19 @@ function main(args: PromptbenchArgs): void {
 				` (model ${baseModel}, runs=${args.runs} per prompt, top-up ${args.topUp})`,
 		);
 
-		let baselineRuns = gatherRuns(db, run("baseline"));
-		let candidateRuns = gatherRuns(db, run("candidate", variant));
-		const compare = (): Comparison =>
-			compareConfigs(
-				args.agent,
-				"prompt",
-				"current",
-				candidateLabel,
-				baselineRuns,
-				candidateRuns,
-			);
-		let cmp = compare();
-
-		if (cmp.uncertain && args.topUp > 0) {
-			console.log(
-				"  verdict within noise — spending one variance top-up pass…",
-			);
-			baselineRuns = poolRuns(
-				baselineRuns,
-				gatherRuns(db, run("baseline-topup")),
-			);
-			candidateRuns = poolRuns(
-				candidateRuns,
-				gatherRuns(db, run("candidate-topup", variant)),
-			);
-			cmp = compare();
-		}
+		const { comparison, benchTokens } = runComparison(db, {
+			subject: args.agent,
+			dimension: "prompt",
+			baselineLabel: "current",
+			candidateLabel,
+			topUp: args.topUp,
+			runBaseline: (label) => run(label),
+			runCandidate: (label) => run(label, variant),
+		});
 
 		console.log("");
-		console.log(formatComparison(cmp));
-		reportMetaCost(db, totalBenchTokens(baselineRuns, candidateRuns));
+		console.log(formatComparison(comparison));
+		reportMetaCost(db, benchTokens);
 	} finally {
 		db.close();
 	}

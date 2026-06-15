@@ -13,7 +13,13 @@
  * separately so nothing is hidden. Token counts are never converted to
  * dollars.
  */
-import { type RunResult, summarizeTask, type TaskSummary } from "./bench.js";
+import {
+	metaCost,
+	type RunResult,
+	realWorkTokensLast7Days,
+	summarizeTask,
+	type TaskSummary,
+} from "./bench.js";
 import { getRunBySession, type WardenDb } from "./db.js";
 import { assessDelta, type DeltaAssessment } from "./select.js";
 import { pctChange } from "./status.js";
@@ -273,4 +279,84 @@ export function totalBenchTokens(...sides: VariantRuns[][]): number {
 		.flat()
 		.flatMap((m) => m.runs)
 		.reduce((sum, r) => sum + r.totalTokens, 0);
+}
+
+export interface ComparisonSpec {
+	subject: string;
+	dimension: string;
+	baselineLabel: string;
+	candidateLabel: string;
+	/** Extra measurement passes (of both sides) when the verdict is within
+	 * noise; 0 disables. */
+	topUp: number;
+	/** Run one suite pass of the baseline configuration. `label` prefixes the
+	 * progress output. */
+	runBaseline: (label: string) => TaskSummary[];
+	runCandidate: (label: string) => TaskSummary[];
+}
+
+export interface ComparisonResult {
+	comparison: Comparison;
+	/** Total tokens spent across both sides — for the meta-cost line. */
+	benchTokens: number;
+}
+
+/**
+ * Orchestrate a full A/B comparison: run both configurations, score them,
+ * and — when the verdict lands within noise — spend one bounded variance
+ * top-up pass on both sides before re-scoring. Shared by model, prompt, and
+ * prompt-evolution benchmarking so the top-up discipline lives in one place.
+ */
+export function runComparison(
+	db: WardenDb,
+	spec: ComparisonSpec,
+): ComparisonResult {
+	let baselineRuns = gatherRuns(db, spec.runBaseline("baseline"));
+	let candidateRuns = gatherRuns(db, spec.runCandidate("candidate"));
+	const score = (): Comparison =>
+		compareConfigs(
+			spec.subject,
+			spec.dimension,
+			spec.baselineLabel,
+			spec.candidateLabel,
+			baselineRuns,
+			candidateRuns,
+		);
+	let comparison = score();
+
+	if (comparison.uncertain && spec.topUp > 0) {
+		console.log("  verdict within noise — spending one variance top-up pass…");
+		baselineRuns = poolRuns(
+			baselineRuns,
+			gatherRuns(db, spec.runBaseline("baseline-topup")),
+		);
+		candidateRuns = poolRuns(
+			candidateRuns,
+			gatherRuns(db, spec.runCandidate("candidate-topup")),
+		);
+		comparison = score();
+	}
+
+	return {
+		comparison,
+		benchTokens: totalBenchTokens(baselineRuns, candidateRuns),
+	};
+}
+
+/** Print the benchmarking overhead line shared by all comparison CLIs. */
+export function reportMetaCost(db: WardenDb, benchTokens: number): void {
+	const cost = metaCost(benchTokens, realWorkTokensLast7Days(db));
+	const ratioText =
+		cost.ratio === null
+			? "no real-work tokens collected in the last 7 days"
+			: `${(cost.ratio * 100).toFixed(1)}% of the week's real-work tokens`;
+	console.log("");
+	console.log(
+		`Meta-cost: this comparison used ${cost.benchTokens.toLocaleString("en-US")} tokens — ${ratioText}.`,
+	);
+	if (cost.warn) {
+		console.log(
+			"⚠ Benchmarking overhead exceeded 10% of the week's collected real-work tokens.",
+		);
+	}
 }

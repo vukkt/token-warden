@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.7.0 — 2026-06-15
+
+Automated prompt evolution: propose a token-cheaper rewrite of an agent's
+prompt, measure it, and recommend it only if it provably wins.
+
+- New `/warden-evolve <agent>` and `src/evolve.ts`. One model call proposes a
+  tighter variant of `agents/<name>.md` (protected frontmatter —
+  name/tools/model/memory — enforced unchanged; rejected before measurement
+  otherwise), the variant is benchmarked against the shipped prompt through the
+  shared engine, and a measurable winner (no regressions, beyond noise) is
+  written to `~/.token-warden/proposals/` with a recommendation. **Never
+  auto-applied** — the agent files are committed source and three golden tasks
+  cannot fully capture an agent's behavior, so a human reviews and applies.
+- Consolidated the duplicated comparison orchestration (run both sides + the
+  variance top-up loop) into `runComparison` in `compare.ts`; `modelbench.ts`
+  and `promptbench.ts` now share it, and `reportMetaCost` moved there too. No
+  behaviour changed.
+
 ## v0.6.0 — 2026-06-14
 
 Prompt / agent-definition A/B testing (roadmap #2): measure a proposed edit to

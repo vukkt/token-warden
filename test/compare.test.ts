@@ -1,13 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { TaskSummary } from "../src/bench.js";
 import {
 	compareConfigs,
 	formatComparison,
 	poolRuns,
 	type RunDatum,
+	runComparison,
 	totalBenchTokens,
 	type VariantRuns,
 	verdictLine,
 } from "../src/compare.js";
+import { openDb, upsertRun, type WardenDb } from "../src/db.js";
 
 /** Build one task's runs from (processing, cacheRead, completed) triples. */
 function task(
@@ -111,6 +117,104 @@ describe("totalBenchTokens", () => {
 		expect(
 			totalBenchTokens([task("t1", [[100, 50]])], [task("t1", [[200, 30]])]),
 		).toBe(380);
+	});
+});
+
+describe("runComparison", () => {
+	let dir: string;
+	let db: WardenDb;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-runcompare-"));
+		db = openDb(join(dir, "warden.db"));
+	});
+
+	afterEach(() => {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	let session = 0;
+	/** Write a real runs row and return a one-result TaskSummary pointing at
+	 * it, so runComparison's gatherRuns(getRunBySession) finds the tokens. */
+	function summaryFor(
+		taskId: string,
+		input: number,
+		completed: boolean,
+	): TaskSummary {
+		session++;
+		const sessionId = `s-${session}`;
+		upsertRun(db, {
+			agent: "sql",
+			sessionId,
+			taskHash: taskId,
+			inputTokens: input,
+			outputTokens: 0,
+			cacheCreation: 0,
+			cacheRead: 0,
+			toolCalls: 1,
+			fileRereads: 0,
+			completed,
+			rulesetVersion: 0,
+			ts: new Date().toISOString(),
+			config: "modelbench",
+		});
+		return {
+			taskId,
+			results: [{ sessionId, tokens: input, completed }],
+			meanCompletedTokens: completed ? input : 0,
+			highVariance: false,
+		};
+	}
+
+	it("runs both sides, gathers from the db, and scores the verdict", () => {
+		const cmp = runComparison(db, {
+			subject: "sql",
+			dimension: "model",
+			baselineLabel: "sonnet",
+			candidateLabel: "haiku",
+			topUp: 0,
+			runBaseline: () => [
+				summaryFor("t1", 1000, true),
+				summaryFor("t2", 1000, true),
+			],
+			runCandidate: () => [
+				summaryFor("t1", 600, true),
+				summaryFor("t2", 600, true),
+			],
+		});
+		expect(cmp.comparison.delta).toBe(400);
+		expect(cmp.comparison.comparableTasks).toBe(2);
+		expect(cmp.benchTokens).toBe(3200);
+	});
+
+	it("spends a top-up pass when the first verdict is within noise", () => {
+		const labels: string[] = [];
+		runComparison(db, {
+			subject: "sql",
+			dimension: "model",
+			baselineLabel: "sonnet",
+			candidateLabel: "haiku",
+			topUp: 1,
+			runBaseline: (label) => {
+				labels.push(`b:${label}`);
+				return [
+					summaryFor("t1", 1000, true),
+					summaryFor("t2", 1000, true),
+					summaryFor("t3", 1000, true),
+				];
+			},
+			runCandidate: (label) => {
+				labels.push(`c:${label}`);
+				return [
+					summaryFor("t1", 1010, true),
+					summaryFor("t2", 980, true),
+					summaryFor("t3", 1030, true),
+				];
+			},
+		});
+		expect(labels).toContain("b:baseline-topup");
+		expect(labels).toContain("c:candidate-topup");
 	});
 });
 

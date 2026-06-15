@@ -7,8 +7,8 @@
  *      [--baseline <id>] [--runs <n>] [--top-up <n>] [--task <id>]
  *
  * Holds the agent's active rules constant and varies only the model. The
- * comparison engine lives in compare.ts (shared with prompt benchmarking);
- * this module just runs the two model configurations and wires them in. Both
+ * comparison engine lives in compare.ts (shared with prompt benchmarking and
+ * prompt evolution); this module just runs the two model configurations. Both
  * passes are recorded with config='modelbench' (isolated from baselines,
  * learning curves, p75, and golden-run counts) and never touch the frozen
  * run1 baselines.
@@ -19,25 +19,15 @@ import {
 	type GoldenTask,
 	loadAgentDefinition,
 	loadGoldenTasks,
-	metaCost,
-	realWorkTokensLast7Days,
 	runSuite,
 	type TaskSummary,
 } from "./bench.js";
-import {
-	type Comparison,
-	compareConfigs,
-	formatComparison,
-	gatherRuns,
-	poolRuns,
-	totalBenchTokens,
-} from "./compare.js";
+import { formatComparison, reportMetaCost, runComparison } from "./compare.js";
 import {
 	getActiveRules,
 	getRulesetVersion,
 	openDb,
 	type RuleRow,
-	type WardenDb,
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
 
@@ -107,23 +97,6 @@ export function parseModelbenchArgs(argv: string[]): ModelbenchArgs {
 	return args;
 }
 
-function reportMetaCost(db: WardenDb, benchTokens: number): void {
-	const cost = metaCost(benchTokens, realWorkTokensLast7Days(db));
-	const ratioText =
-		cost.ratio === null
-			? "no real-work tokens collected in the last 7 days"
-			: `${(cost.ratio * 100).toFixed(1)}% of the week's real-work tokens`;
-	console.log("");
-	console.log(
-		`Meta-cost: this comparison used ${cost.benchTokens.toLocaleString("en-US")} tokens — ${ratioText}.`,
-	);
-	if (cost.warn) {
-		console.log(
-			"⚠ Benchmarking overhead exceeded 10% of the week's collected real-work tokens.",
-		);
-	}
-}
-
 function main(args: ModelbenchArgs): void {
 	const db = openDb();
 	try {
@@ -158,37 +131,19 @@ function main(args: ModelbenchArgs): void {
 				` (runs=${args.runs} per model, top-up ${args.topUp})`,
 		);
 
-		let baselineRuns = gatherRuns(db, runModel(baselineModel, "baseline"));
-		let candidateRuns = gatherRuns(db, runModel(args.model, "candidate"));
-		const compare = (): Comparison =>
-			compareConfigs(
-				args.agent,
-				"model",
-				baselineModel,
-				args.model,
-				baselineRuns,
-				candidateRuns,
-			);
-		let cmp = compare();
-
-		if (cmp.uncertain && args.topUp > 0) {
-			console.log(
-				"  verdict within noise — spending one variance top-up pass…",
-			);
-			baselineRuns = poolRuns(
-				baselineRuns,
-				gatherRuns(db, runModel(baselineModel, "baseline-topup")),
-			);
-			candidateRuns = poolRuns(
-				candidateRuns,
-				gatherRuns(db, runModel(args.model, "candidate-topup")),
-			);
-			cmp = compare();
-		}
+		const { comparison, benchTokens } = runComparison(db, {
+			subject: args.agent,
+			dimension: "model",
+			baselineLabel: baselineModel,
+			candidateLabel: args.model,
+			topUp: args.topUp,
+			runBaseline: (label) => runModel(baselineModel, label),
+			runCandidate: (label) => runModel(args.model, label),
+		});
 
 		console.log("");
-		console.log(formatComparison(cmp));
-		reportMetaCost(db, totalBenchTokens(baselineRuns, candidateRuns));
+		console.log(formatComparison(comparison));
+		reportMetaCost(db, benchTokens);
 	} finally {
 		db.close();
 	}

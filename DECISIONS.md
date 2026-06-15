@@ -324,6 +324,34 @@ as the post-#1 reflection predicted.
   edits it themselves if they accept a variant. (Automated prompt evolution — proposing the
   variant and applying winners — is the natural follow-up, noted in the roadmap.)
 
+## v0.7.0 — automated prompt evolution
+
+- **The third comparison consumer is a thin module over the shared engine**, as predicted.
+  The duplicated "run both sides + variance top-up loop" in modelbench/promptbench was
+  consolidated into `runComparison(db, spec)` in `compare.ts` (taking `runBaseline`/
+  `runCandidate` closures), and `reportMetaCost` moved there too. `evolve.ts` reuses both;
+  model/prompt-bench shrank to wiring. Behaviour preserved (the refactor kept all tests
+  green and added a `runComparison` test with DB-backed fake runners).
+- **Proposals are validated before a single benchmark token is spent.** `checkProposal`
+  rejects a proposed variant that doesn't parse as an agent definition, changes any
+  protected frontmatter field (name/tools/model/memory — identity and permissions), or has
+  a trivially short body. The model call (`proposeVariant`, haiku, one turn, strict output)
+  fails open: any error/invalid output logs to evolve.log and yields null — never throws,
+  never retries (same discipline as the rule distiller).
+- **Winners are recommended, never auto-applied — a deliberate departure from the rule
+  selector.** The selector overwrites `MEMORY.md` (a generated build artifact, invariant
+  #2); `agents/<name>.md` is hand-authored committed source. Auto-rewriting it on a haiku
+  proposal gated only by three golden tasks would be reckless: the benchmark measures token
+  cost + task completion, not the long tail of judgment the prompt encodes. So a measurable
+  winner is written to `~/.token-warden/proposals/<agent>-<ts>.md` with a `diff` hint, and
+  the human applies it. Acceptance gate: no regression, not within noise, ≥2 comparable
+  tasks, positive delta.
+- **The acceptance bar reuses `Comparison` flags verbatim** (`regression`, `uncertain`,
+  `comparableTasks`, `delta`) — the same verdict logic that scores model and prompt
+  benchmarks, so "is this prompt change worth it" is decided identically to "is this rule
+  worth it." The discipline-as-asset thesis, fully closed: rules, models, and prompts all
+  pass through one measured keep/reject gate.
+
 ## Post-release — distribution
 
 - **The repo is its own marketplace.** `.claude-plugin/marketplace.json` (marketplace
