@@ -29,10 +29,10 @@ import { DOMAIN_AGENTS } from "./types.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-export const SIMILARITY_THRESHOLD = 0.85;
-export const MIN_PRIOR_RUNS = 5;
+const SIMILARITY_THRESHOLD = 0.85;
+const MIN_PRIOR_RUNS = 5;
 /** Rolling window of most recent runs used for the p75. */
-export const ROLLING_WINDOW = 50;
+const ROLLING_WINDOW = 50;
 const MAX_DIGEST_CHARS = 8000;
 const DISTILL_TIMEOUT_MS = 2 * 60 * 1000;
 
@@ -162,7 +162,7 @@ export function contextCost(body: string): number {
 	return Math.ceil(body.length / 4);
 }
 
-export function buildPrompt(
+function buildPrompt(
 	run: RunRow,
 	digest: string,
 	recentQuestions: string[] = [],

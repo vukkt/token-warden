@@ -28,7 +28,7 @@ const PREVIEW_CHARS = 200;
 /** Cap on the question body persisted to SQLite — a single chatty or
  * hostile teammate message must not bloat the ledger. Applied identically
  * at insert and approve time so the pending-row match still works. */
-export const STORED_BODY_CHARS = 2000;
+const STORED_BODY_CHARS = 2000;
 
 function logLine(message: string): void {
 	try {

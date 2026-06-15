@@ -151,7 +151,7 @@ function stripFence(text: string): string {
 /** Ask a haiku-tier model to propose a cheaper prompt variant. Returns the
  * validated proposal, or null (with a logged reason) on any failure — never
  * throws, never retries. */
-export function proposeVariant(agent: string, current: string): string | null {
+function proposeVariant(agent: string, current: string): string | null {
 	const claude = spawnSync(
 		"claude",
 		[

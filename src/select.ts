@@ -39,7 +39,7 @@ import {
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
 
-export const MAX_CANDIDATES_PER_INVOCATION = 3;
+const MAX_CANDIDATES_PER_INVOCATION = 3;
 
 export interface VerdictInput {
 	measuredDelta: number | null;
