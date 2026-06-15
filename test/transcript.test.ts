@@ -276,3 +276,119 @@ describe("parseTranscript edge cases", () => {
 		expect(elapsed).toBeLessThan(2000);
 	});
 });
+
+describe("parseTranscript — toolEvents (attribution raw material)", () => {
+	it("records each call's name, input size, and joined result size", () => {
+		const lines = [
+			entry({
+				type: "assistant",
+				uuid: "a1",
+				message: {
+					id: "m1",
+					content: [
+						{
+							type: "tool_use",
+							id: "t1",
+							name: "Read",
+							input: { file_path: "/a" },
+						},
+					],
+				},
+			}),
+			entry({
+				type: "user",
+				uuid: "u1",
+				message: {
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "t1",
+							content: "x".repeat(123),
+						},
+					],
+				},
+			}),
+		].join("\n");
+		const events = parseTranscript(lines).toolEvents;
+		expect(events).toHaveLength(1);
+		expect(events[0]?.name).toBe("Read");
+		expect(events[0]?.resultChars).toBe(123);
+		expect(events[0]?.inputChars).toBeGreaterThan(0);
+		expect(events[0]?.skill).toBeNull();
+	});
+
+	it("captures the skill name from a Skill call", () => {
+		const lines = entry({
+			type: "assistant",
+			uuid: "a1",
+			message: {
+				id: "m1",
+				content: [
+					{
+						type: "tool_use",
+						id: "t1",
+						name: "Skill",
+						input: { skill: "code-review" },
+					},
+				],
+			},
+		});
+		expect(parseTranscript(lines).toolEvents[0]?.skill).toBe("code-review");
+	});
+
+	it("leaves resultChars at 0 when a call has no matching result", () => {
+		const lines = entry({
+			type: "assistant",
+			uuid: "a1",
+			message: {
+				id: "m1",
+				content: [
+					{
+						type: "tool_use",
+						id: "t1",
+						name: "Bash",
+						input: { command: "ls" },
+					},
+				],
+			},
+		});
+		expect(parseTranscript(lines).toolEvents[0]?.resultChars).toBe(0);
+	});
+
+	it("counts a result only once even if streamed across entries", () => {
+		const resultEntry = entry({
+			type: "user",
+			uuid: "u1",
+			message: {
+				content: [{ type: "tool_result", tool_use_id: "t1", content: "abcde" }],
+			},
+		});
+		const lines = [
+			entry({
+				type: "assistant",
+				uuid: "a1",
+				message: {
+					id: "m1",
+					content: [{ type: "tool_use", id: "t1", name: "Grep", input: {} }],
+				},
+			}),
+			resultEntry,
+			resultEntry,
+		].join("\n");
+		expect(parseTranscript(lines).toolEvents[0]?.resultChars).toBe(5);
+	});
+
+	it("still records a tool_use that has no id (input only)", () => {
+		const lines = entry({
+			type: "assistant",
+			uuid: "a1",
+			message: {
+				id: "m1",
+				content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }],
+			},
+		});
+		const events = parseTranscript(lines).toolEvents;
+		expect(events).toHaveLength(1);
+		expect(events[0]?.resultChars).toBe(0);
+	});
+});

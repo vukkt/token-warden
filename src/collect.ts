@@ -10,11 +10,13 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
+import { aggregateToolCosts } from "./attribute.js";
 import {
 	defaultDbPath,
 	getRulesetVersion,
 	openDb,
 	recentRealWorkTotals,
+	recordToolCosts,
 	upsertRun,
 } from "./db.js";
 import { shouldDistill } from "./distill.js";
@@ -175,6 +177,11 @@ async function main(): Promise<void> {
 			config: "real",
 			project: payload.cwd ?? null,
 		});
+
+		// Attribute this session's tool/skill/MCP footprint for the
+		// /warden-attribute breakdown. Pure aggregation over already-parsed
+		// data; recorded in the same fail-open block as the run.
+		recordToolCosts(db, runId, aggregateToolCosts(parsed.toolEvents));
 
 		// Distillation calls a model and takes far longer than the 2s hook
 		// budget, so it runs as a detached fire-and-forget child. The cheap

@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.13.0 — 2026-06-15
+
+Skill / MCP cost attribution (roadmap #5) — **#5 complete.** Decomposition, not
+a verdict: it answers "where did the tokens go?" by attributing each real-work
+session's footprint to the tool, skill, or MCP server that produced it. Fully
+orthogonal to the selector/benchmark path — it never promotes, evicts, or
+measures a rule.
+
+- New `src/attribute.ts` (`npx tsx src/attribute.ts`) renders a cross-session
+  rollup of tool/skill/MCP cost, or a single transcript with `--transcript`.
+  Filters: `--agent`, `--kind builtin|mcp|skill`, `--limit`, `--json`. New
+  `/warden-attribute` command.
+- `src/transcript.ts` now joins each `tool_use` to its `tool_result` by id in
+  the existing single streaming pass, capturing the input chars the model
+  generated and the result chars the tool injected back into context. Exposed
+  as `toolEvents` on `ParsedRun`; the hot Stop-hook budget is unchanged
+  (one pass, O(tool calls)).
+- `src/db.ts` migration #8 adds a `tool_costs` table; `src/collect.ts` persists
+  per-session costs inside the existing fail-open block (real-work only —
+  golden runs are never attributed). `/warden-status` gains a top-costs section.
+- Footprint is measured in characters (exact, deterministic); a rough ≈tokens
+  figure (chars ÷ 4) is shown for intuition, not as a billed token count.
+- Hardening from an adversarial review: a `tool_result` content array with an
+  odd sibling (a bare string, an image block) no longer zeroes the whole
+  result's footprint — each element is read defensively. `--json` is documented
+  as the raw, unsanitized machine-readable path.
+- 219 tests (+55), green on Node 22 and 24.
+- Roadmap status: of the six directions, #1, #2, #3, #4, #5 (plus automated
+  prompt evolution) are shipped; only #6 (rule marketplaces) remains.
+
 ## v0.12.0 — 2026-06-15
 
 Team-shared rule ledgers (roadmap #3), increment 3: the CI gate — **#3 complete.**

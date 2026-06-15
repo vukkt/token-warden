@@ -86,6 +86,18 @@ const MIGRATIONS: readonly string[] = [
 	`
 	ALTER TABLE runs ADD COLUMN model TEXT;
 	`,
+	`
+	CREATE TABLE IF NOT EXISTS tool_costs (
+		run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+		kind TEXT NOT NULL,
+		grp TEXT NOT NULL,
+		label TEXT NOT NULL,
+		calls INTEGER NOT NULL,
+		input_chars INTEGER NOT NULL,
+		result_chars INTEGER NOT NULL,
+		PRIMARY KEY (run_id, kind, grp, label)
+	);
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -566,6 +578,101 @@ export function projectUsage(db: WardenDb, limit: number): ProjectUsage[] {
 			 GROUP BY project ORDER BY tokens DESC LIMIT ?`,
 		)
 		.all(limit);
+}
+
+/** One attributed tool/skill/MCP cost row for a single run. `group` maps to
+ * the `grp` column (GROUP is reserved in SQL). */
+export interface ToolCostInput {
+	kind: string;
+	group: string;
+	label: string;
+	calls: number;
+	inputChars: number;
+	resultChars: number;
+}
+
+/**
+ * Replace the persisted per-tool costs for a run. The Stop hook upserts the
+ * same run repeatedly with growing totals, so the costs are recomputed and
+ * fully replaced each time rather than accumulated.
+ */
+export function recordToolCosts(
+	db: WardenDb,
+	runId: number,
+	costs: ToolCostInput[],
+): void {
+	const insert = db.prepare(
+		`INSERT INTO tool_costs (run_id, kind, grp, label, calls, input_chars, result_chars)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(run_id, kind, grp, label) DO UPDATE SET
+			calls = excluded.calls,
+			input_chars = excluded.input_chars,
+			result_chars = excluded.result_chars`,
+	);
+	db.transaction(() => {
+		db.prepare("DELETE FROM tool_costs WHERE run_id = ?").run(runId);
+		for (const c of costs) {
+			insert.run(
+				runId,
+				c.kind,
+				c.group,
+				c.label,
+				c.calls,
+				c.inputChars,
+				c.resultChars,
+			);
+		}
+	})();
+}
+
+export interface ToolCostRollup {
+	kind: string;
+	grp: string;
+	label: string;
+	sessions: number;
+	calls: number;
+	inputChars: number;
+	resultChars: number;
+}
+
+export interface ToolCostFilter {
+	agent?: string | null;
+	kind?: string | null;
+	limit: number;
+}
+
+/**
+ * Cross-session tool-cost rollup over real-work runs (task_hash IS NULL),
+ * grouped by (kind, group, label) and ordered by total footprint. Optional
+ * filters narrow to one agent or one kind.
+ */
+export function toolCostRollup(
+	db: WardenDb,
+	filter: ToolCostFilter,
+): ToolCostRollup[] {
+	return db
+		.prepare<unknown[], ToolCostRollup>(
+			`SELECT tc.kind AS kind, tc.grp AS grp, tc.label AS label,
+				COUNT(DISTINCT tc.run_id) AS sessions,
+				SUM(tc.calls) AS calls,
+				SUM(tc.input_chars) AS inputChars,
+				SUM(tc.result_chars) AS resultChars
+			 FROM tool_costs tc
+			 JOIN runs r ON r.id = tc.run_id
+			 WHERE r.task_hash IS NULL
+				AND (? IS NULL OR r.agent = ?)
+				AND (? IS NULL OR tc.kind = ?)
+			 GROUP BY tc.kind, tc.grp, tc.label
+			 ORDER BY (SUM(tc.input_chars) + SUM(tc.result_chars)) DESC, tc.label ASC
+			 LIMIT ?`,
+		)
+		.all(
+			filter.agent ?? null,
+			filter.agent ?? null,
+			filter.kind ?? null,
+			filter.kind ?? null,
+			filter.limit,
+		);
 }
 
 /** Pending candidate counts per agent — the SessionStart nudge. */

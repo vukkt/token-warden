@@ -19,6 +19,7 @@ import {
 	type RealWorkPoint,
 	realWorkCurveByAgent,
 	realWorkCurveByProject,
+	toolCostRollup,
 	type WardenDb,
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
@@ -280,6 +281,24 @@ export function renderStatus(db: WardenDb): string {
 		for (const usage of projects) {
 			lines.push(
 				`  ${displayText(usage.project ?? "(unknown)")} — ${usage.runs} session(s), ${formatTokens(usage.tokens)} tokens`,
+			);
+		}
+	}
+
+	lines.push("");
+	lines.push(
+		"Top tool / skill / MCP costs (real-work footprint, ≈tokens; see /warden-attribute):",
+	);
+	const toolCosts = toolCostRollup(db, { limit: 8 });
+	if (toolCosts.length === 0) {
+		lines.push("  none recorded yet");
+	} else {
+		for (const c of toolCosts) {
+			const estTokens = Math.round((c.inputChars + c.resultChars) / 4);
+			const where =
+				c.kind === "builtin" ? c.label : `${displayText(c.grp, 24)}/${c.label}`;
+			lines.push(
+				`  ${c.kind.padEnd(7)} ${displayText(where, 40).padEnd(40)} ≈${formatTokens(estTokens)} tok (${c.calls} call(s), ${c.sessions} session(s))`,
 			);
 		}
 	}

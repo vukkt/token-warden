@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { z } from "zod";
-import type { ParsedRun } from "./types.js";
+import type { ParsedRun, RawToolEvent } from "./types.js";
 
 /** Token counters default to 0 when missing, null, or malformed — a single
  * odd usage object must never poison the whole transcript. */
@@ -20,6 +20,16 @@ const contentBlockSchema = z.looseObject({
 	name: z.string().nullish(),
 	input: z.record(z.string(), z.unknown()).nullish().catch(null),
 	text: z.string().nullish(),
+	/** Present on `tool_result` blocks — links the result back to its call. */
+	tool_use_id: z.string().nullish(),
+	/** A `tool_result` payload: a string, or an array of nested blocks. Kept
+	 * as `unknown[]` so one odd element (a bare string, an image block) does
+	 * not fail validation and zero out the whole result; `resultContentChars`
+	 * reads each element defensively. */
+	content: z
+		.union([z.string(), z.array(z.unknown())])
+		.nullish()
+		.catch(null),
 });
 
 const messageSchema = z.looseObject({
@@ -61,6 +71,35 @@ function hasTextContent(entry: Entry): boolean {
 function truncate(text: string, max: number): string {
 	const oneLine = text.replace(/\s+/g, " ").trim();
 	return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
+}
+
+/** The skill name from a `Skill` tool input, or null when absent/malformed. */
+function skillNameFrom(
+	input: Record<string, unknown> | null | undefined,
+): string | null {
+	const skill = input?.skill;
+	return typeof skill === "string" && skill.length > 0 ? skill : null;
+}
+
+/** Size of a tool_result payload: raw length for a string, summed text
+ * length for an array of nested blocks (images/other blocks count as 0 —
+ * their token cost is not text and would be a misleading char estimate). A
+ * non-text element contributes 0 rather than poisoning the whole sum. */
+function resultContentChars(
+	content: string | unknown[] | null | undefined,
+): number {
+	if (typeof content === "string") return content.length;
+	if (Array.isArray(content)) {
+		let sum = 0;
+		for (const part of content) {
+			if (part && typeof part === "object") {
+				const text = (part as { text?: unknown }).text;
+				if (typeof text === "string") sum += text.length;
+			}
+		}
+		return sum;
+	}
+	return 0;
 }
 
 /** Strip a UTF-8 BOM — it would otherwise poison the first line. */
@@ -112,6 +151,15 @@ class TranscriptAccumulator {
 	private readonly usageByMessage = new Map<string, UsageSums>();
 	private readonly seenToolUseIds = new Set<string>();
 	private readonly readCounts = new Map<string, number>();
+	/** Per tool_use key → its call footprint; key is the block id, or a
+	 * synthetic fallback when the transcript omits one. */
+	private readonly toolUses = new Map<
+		string,
+		{ name: string; skill: string | null; inputChars: number }
+	>();
+	/** tool_use_id → result size. First write wins: Claude Code can stream the
+	 * same result across entries, and one call has exactly one result. */
+	private readonly resultChars = new Map<string, number>();
 
 	feedLine(rawLine: string): void {
 		const line = this.lineIndex === 0 ? stripBom(rawLine) : rawLine;
@@ -141,7 +189,20 @@ class TranscriptAccumulator {
 		this.entryCount++;
 		this.lastConversational = entry;
 
-		if (entry.type !== "assistant") return;
+		// User messages carry tool_result blocks — the context cost a tool's
+		// output injects. Record their sizes, then they contribute nothing else.
+		if (entry.type !== "assistant") {
+			const content = entry.message?.content;
+			if (Array.isArray(content)) {
+				for (const block of content) {
+					if (block.type !== "tool_result") continue;
+					const id = block.tool_use_id;
+					if (typeof id !== "string" || this.resultChars.has(id)) continue;
+					this.resultChars.set(id, resultContentChars(block.content));
+				}
+			}
+			return;
+		}
 		const message = entry.message;
 		if (message?.usage) {
 			const key =
@@ -161,7 +222,8 @@ class TranscriptAccumulator {
 					this.seenToolUseIds.add(block.id);
 				}
 				this.toolCalls++;
-				if (block.name === "Read") {
+				const name = block.name ?? "unknown";
+				if (name === "Read") {
 					const filePath = block.input?.file_path;
 					if (typeof filePath === "string") {
 						this.readCounts.set(
@@ -170,6 +232,14 @@ class TranscriptAccumulator {
 						);
 					}
 				}
+				// Footprint: a call with no id can't be joined to its result, but
+				// its input cost still counts — give it a synthetic key.
+				const key = block.id ?? `__noid-${this.toolCalls}`;
+				this.toolUses.set(key, {
+					name,
+					skill: name === "Skill" ? skillNameFrom(block.input) : null,
+					inputChars: block.input ? JSON.stringify(block.input).length : 0,
+				});
 			}
 		}
 	}
@@ -189,6 +259,16 @@ class TranscriptAccumulator {
 		let fileRereads = 0;
 		for (const count of this.readCounts.values()) {
 			if (count >= 2) fileRereads++;
+		}
+
+		const toolEvents: RawToolEvent[] = [];
+		for (const [key, use] of this.toolUses) {
+			toolEvents.push({
+				name: use.name,
+				skill: use.skill,
+				inputChars: use.inputChars,
+				resultChars: this.resultChars.get(key) ?? 0,
+			});
 		}
 
 		// Completion heuristic (see DECISIONS.md): the transcript ends with
@@ -217,6 +297,7 @@ class TranscriptAccumulator {
 			malformedLines: this.malformedLines,
 			isSidechain: this.isSidechain,
 			agentId: this.agentId,
+			toolEvents,
 		};
 	}
 }

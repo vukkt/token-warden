@@ -195,6 +195,7 @@ Active rules land in the agent's memory; the next session starts cheaper.
 | `/warden-evolve <agent> [--runs N]` | Proposes a token-cheaper rewrite of the agent's prompt (model call), benchmarks it, and recommends it only if it provably wins — never auto-applied |
 | `/warden-share <agent> [--out path]` | Exports the agent's active rules (with measured deltas + provenance) to a committed, reviewable file so a team can version and review agent memory like code |
 | `/warden-adopt --from <path>` | Imports a shared rule ledger as local *candidates* — the foreign delta is discarded and each rule must be re-measured on your own golden suite before it enters memory |
+| `/warden-attribute [--agent a] [--kind builtin\|mcp\|skill] [--transcript path] [--json]` | Attributes real-work token footprint to the tools, skills, and MCP servers that produced it — cross-session by default, or one transcript with `--transcript`. Decomposition only; it never changes a rule verdict |
 
 When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
 nudge into new sessions — selection itself always stays a user decision, because it
@@ -215,6 +216,7 @@ npx tsx src/select.ts --agent sql                  # selector (measure + evict +
 npx tsx src/modelbench.ts --agent sql --model haiku  # compare a model against the agent's default
 npx tsx src/promptbench.ts --agent sql --variant v.md  # compare a prompt variant against the shipped one
 npx tsx src/evolve.ts --agent sql                      # propose + measure a cheaper prompt variant
+npx tsx src/attribute.ts --agent sql                   # attribute token footprint to tools/skills/MCP
 ```
 
 ---
@@ -282,12 +284,15 @@ the week's collected real-work tokens, it tells you to bench less.
 | `src/evolve.ts` | Automated prompt evolution: propose a cheaper prompt (model call) → measure → recommend |
 | `src/share.ts` | Export an agent's active rules to a committed, reviewable ledger artifact |
 | `src/adopt.ts` | Import a shared ledger as local candidates (foreign delta discarded; re-measured locally) |
+| `src/verify-ledger.ts` | Deterministic, offline CI gate that fails a PR corrupting a committed ledger |
+| `src/attribute.ts` | Cost attribution: decompose real-work token footprint per tool, skill, and MCP server (decomposition only; orthogonal to the verdict path) |
 
 Data model (`~/.token-warden/warden.db`): `runs` (one row per session or golden run,
 tagged `real`/`active`/`candidate`/`audit`), `rules` (the ledger — candidates, active
 rules with measured deltas, and evicted rules kept as the negative dataset),
-`baselines` (frozen `run1_tokens`, ratcheting `best_tokens`), `ruleset_versions`, and
-`questions` (the inter-agent ledger). Every deviation from the original specification is
+`baselines` (frozen `run1_tokens`, ratcheting `best_tokens`), `ruleset_versions`,
+`questions` (the inter-agent ledger), and `tool_costs` (per-session tool/skill/MCP
+footprint behind `/warden-attribute`). Every deviation from the original specification is
 documented in [`DECISIONS.md`](DECISIONS.md).
 
 ---
@@ -391,7 +396,7 @@ candidate, one re-audit). Mean completed tokens per task:
 npm run typecheck && npm run lint && npm run test
 ```
 
-The unit suite — ~160 tests across every module, shown passing by the CI badge above
+The unit suite — ~220 tests across every module, shown passing by the CI badge above
 (an exact count is left out of prose because it rots between releases) — covers the lot.
 The transcript parser carries the densest coverage
 (usage dedup, completion heuristics, malformed-line tolerance, a 5 MB / 2 s performance
@@ -438,10 +443,11 @@ messaging.
 
 ## Roadmap
 
-Shipped through v0.9.0 (10 releases) — see [CHANGELOG.md](CHANGELOG.md) for the full
+Shipped through v0.13.0 — see [CHANGELOG.md](CHANGELOG.md) for the full
 history: the original spec's collect/benchmark/distill/select loop, subagent collection,
 variance-aware verdicts, cross-project learning curves, model-migration and prompt A/B
-benchmarking, automated prompt evolution, and real-time cost-anomaly alerting.
+benchmarking, automated prompt evolution, real-time cost-anomaly alerting, team-shared
+rule ledgers, and tool/skill/MCP cost attribution.
 
 Near-term:
 
@@ -463,10 +469,11 @@ discipline, which generalizes well beyond efficiency rules:
   that fails a PR which corrupts or hand-edits a committed ledger. Memory review becomes
   code review. (A deeper gate that re-benchmarks each rule's delta in CI is possible but
   needs a model-token budget — a deployment choice, not shipped by default.)
-- **Skill / MCP cost attribution** — break a session's tokens down per tool and per MCP
-  server ("your browser-automation MCP costs 40% of every frontend session"). The one
-  remaining direction the A/B comparison engine does not serve — it is decomposition, not
-  a keep/reject verdict.
+- ✅ **Skill / MCP cost attribution** — `/warden-attribute` breaks real-work tokens down
+  per tool, per skill, and per MCP server ("your browser-automation MCP costs 40% of every
+  frontend session"), cross-session or for a single transcript. The one direction the A/B
+  comparison engine does not serve — it is decomposition, not a keep/reject verdict — so it
+  is fully orthogonal to the selector/benchmark path.
 - **Rule marketplaces** — measured rules are portable artifacts with provenance and
   deltas; a community repo of rules-with-receipts that others re-measure locally before
   adopting (the dedupe and verdict machinery already handle imports).

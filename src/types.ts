@@ -3,6 +3,24 @@
  * rules: there is no suite to measure them on.) */
 export const DOMAIN_AGENTS = ["frontend", "backend", "sql", "testing"] as const;
 
+/**
+ * One tool invocation's raw footprint, extracted from the transcript with no
+ * interpretation: the chars the model generated to call the tool (output side)
+ * and the chars the tool's result injected into context (input side).
+ * Classification into builtin/MCP/skill lives in `attribute.ts`.
+ */
+export interface RawToolEvent {
+	/** Tool name exactly as written in the transcript (e.g. "Read",
+	 * "mcp__github__create_issue", "Skill"). */
+	name: string;
+	/** For the `Skill` tool, the invoked skill's name; null otherwise. */
+	skill: string | null;
+	/** Length of the JSON-serialized tool input the model produced. */
+	inputChars: number;
+	/** Length of the tool result returned into context; 0 if none was found. */
+	resultChars: number;
+}
+
 /** Aggregates extracted from one transcript JSONL by `parseTranscript`. */
 export interface ParsedRun {
 	/** Agent name if the transcript carries one; subagent transcripts only
@@ -28,4 +46,7 @@ export interface ParsedRun {
 	isSidechain: boolean;
 	/** Opaque subagent id from the transcript, when present. */
 	agentId: string | null;
+	/** Per-call tool footprints, one entry per distinct tool_use, in
+	 * first-seen order. The raw material for cost attribution. */
+	toolEvents: RawToolEvent[];
 }
