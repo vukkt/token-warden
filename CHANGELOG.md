@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.11.0 — 2026-06-15
+
+Team-shared rule ledgers (roadmap #3), increment 2: import + re-verify.
+
+- New `/warden-adopt --from <path>` and `src/adopt.ts` read a shared ledger
+  (from `/warden-share`) and queue its rules as **candidates** locally. The
+  foreign measured delta is discarded and the context rent is recomputed
+  locally, so by invariant #1 an adopted rule is never injected into memory
+  until the local selector re-measures it on this machine's golden suite —
+  "measured, not claimed" holds across machines. Near-duplicates of any
+  existing rule (active/candidate/evicted) are skipped, so a rule already
+  falsified locally cannot be re-adopted; re-adopting is idempotent.
+- **No new trust path:** an adopted rule is just a candidate, so the entire
+  existing selector (including the variance-conservative verdict) decides its
+  fate unchanged. The ledger JSON is zod-validated; control-char rule bodies
+  and malformed/missing blocks are rejected.
+
 ## v0.10.0 — 2026-06-15
 
 Team-shared rule ledgers (roadmap #3), increment 1: export.

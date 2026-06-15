@@ -194,6 +194,7 @@ Active rules land in the agent's memory; the next session starts cheaper.
 | `/warden-promptbench <agent> --variant <file.md> [--runs N]` | Runs the agent's golden suite under two prompts (a variant agent definition vs. the shipped one, rules and model held constant) and reports which uses fewer tokens |
 | `/warden-evolve <agent> [--runs N]` | Proposes a token-cheaper rewrite of the agent's prompt (model call), benchmarks it, and recommends it only if it provably wins — never auto-applied |
 | `/warden-share <agent> [--out path]` | Exports the agent's active rules (with measured deltas + provenance) to a committed, reviewable file so a team can version and review agent memory like code |
+| `/warden-adopt --from <path>` | Imports a shared rule ledger as local *candidates* — the foreign delta is discarded and each rule must be re-measured on your own golden suite before it enters memory |
 
 When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
 nudge into new sessions — selection itself always stays a user decision, because it
@@ -280,6 +281,7 @@ the week's collected real-work tokens, it tells you to bench less.
 | `src/promptbench.ts` | Prompt A/B benchmarking: variant agent definition vs. shipped |
 | `src/evolve.ts` | Automated prompt evolution: propose a cheaper prompt (model call) → measure → recommend |
 | `src/share.ts` | Export an agent's active rules to a committed, reviewable ledger artifact |
+| `src/adopt.ts` | Import a shared ledger as local candidates (foreign delta discarded; re-measured locally) |
 
 Data model (`~/.token-warden/warden.db`): `runs` (one row per session or golden run,
 tagged `real`/`active`/`candidate`/`audit`), `rules` (the ledger — candidates, active
@@ -455,10 +457,11 @@ Bigger directions — the reusable asset is the *frozen-benchmark + measured-ver
 discipline, which generalizes well beyond efficiency rules:
 
 - **Team-shared rule ledgers** *(in progress)* — `/warden-share` exports an agent's
-  measured rules to a committed, reviewable artifact (increment 1, shipped). Still to come:
-  importing a shared ledger and **re-verifying** each delta against the importer's own
-  golden suite (never trusting a foreign delta), then a CI gate so a PR adding a rule must
-  reproduce its claimed saving. Memory review becomes code review.
+  measured rules to a committed, reviewable artifact (increment 1) and `/warden-adopt`
+  imports a shared ledger as local candidates that are **re-measured** on the importer's
+  own suite before they count (increment 2 — the foreign delta is never trusted). Still to
+  come: a CI gate so a PR adding a rule must reproduce its claimed saving in the pipeline.
+  Memory review becomes code review.
 - **Skill / MCP cost attribution** — break a session's tokens down per tool and per MCP
   server ("your browser-automation MCP costs 40% of every frontend session"). The one
   remaining direction the A/B comparison engine does not serve — it is decomposition, not
