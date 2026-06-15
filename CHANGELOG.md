@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.9.0 — 2026-06-15
+
+Real-time cost anomaly alerting (roadmap #4).
+
+- The `Stop` hook now flags a session that ends unusually expensive for its
+  agent — total tokens ≥ 2× the agent's recent median, given ≥ 5 prior
+  sessions — with a one-line heads-up to the user via `systemMessage`
+  (informs the human; does not feed the model, so no behavioral loop). A
+  higher bar than the distiller's p75 trigger, so alerts stay rare and
+  meaningful. Fires on the main session only (subagent events are
+  mid-conversation); opt out with `TOKEN_WARDEN_NO_ALERTS=1`.
+- Fail-safe like the rest of the hook: any error leaves the session
+  untouched and emits nothing.
+- Fix: `collect.ts` now guards its top-level `main()` behind an
+  invoked-directly check (like every other CLI module), so importing it to
+  unit-test `detectAnomaly` no longer executes the hook (which blocked on
+  stdin). No runtime change to the hook itself.
+
 ## v0.8.0 — 2026-06-15
 
 Security hardening of the v0.6/v0.7 features (from a pen-test pass) and a

@@ -8,12 +8,50 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
-import { defaultDbPath, getRulesetVersion, openDb, upsertRun } from "./db.js";
+import {
+	defaultDbPath,
+	getRulesetVersion,
+	openDb,
+	recentRealWorkTotals,
+	upsertRun,
+} from "./db.js";
 import { shouldDistill } from "./distill.js";
 import { parseTranscriptFile } from "./transcript.js";
 import { DOMAIN_AGENTS } from "./types.js";
+
+/** A session is flagged anomalous when its total tokens reach this multiple
+ * of the agent's recent median, given at least this many prior sessions. */
+const ANOMALY_MULTIPLE = 2;
+const ANOMALY_MIN_PRIORS = 5;
+const ANOMALY_WINDOW = 50;
+
+function median(values: number[]): number {
+	if (values.length === 0) return 0;
+	const sorted = [...values].sort((a, b) => a - b);
+	const mid = Math.floor(sorted.length / 2);
+	return sorted.length % 2 === 0
+		? ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2
+		: (sorted[mid] ?? 0);
+}
+
+/**
+ * Pure anomaly detector: returns how many times the agent's recent median
+ * this session cost, when that reaches the alert multiple — else null. A
+ * higher bar than the distiller's p75 trigger, so alerts stay rare and
+ * meaningful.
+ */
+export function detectAnomaly(
+	priors: number[],
+	current: number,
+): number | null {
+	if (priors.length < ANOMALY_MIN_PRIORS) return null;
+	const med = median(priors);
+	if (med <= 0) return null;
+	const multiple = current / med;
+	return multiple >= ANOMALY_MULTIPLE ? multiple : null;
+}
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -168,16 +206,43 @@ async function main(): Promise<void> {
 			).unref();
 			logLine(`run ${runId} above p75 for ${agent}; distiller spawned`);
 		}
+
+		// Real-time cost anomaly alert: when a MAIN session ends unusually
+		// expensive for its agent, surface a one-line heads-up to the user via
+		// systemMessage (not additionalContext — we inform the human, we do
+		// not make Claude react and risk a loop). Subagent events are
+		// mid-conversation, so they are collected but not alerted on.
+		if (process.env.TOKEN_WARDEN_NO_ALERTS !== "1" && !isSubagentEvent) {
+			const priors = recentRealWorkTotals(db, agent, ANOMALY_WINDOW, runId);
+			const multiple = detectAnomaly(priors, total);
+			if (multiple !== null) {
+				const msg =
+					`⚠ token-warden: this ${agent} session used ${total.toLocaleString("en-US")} tokens` +
+					` — ~${multiple.toFixed(1)}× your recent median` +
+					` (${parsed.toolCalls} tool calls, ${parsed.fileRereads} file re-reads).`;
+				console.log(JSON.stringify({ systemMessage: msg }));
+				logLine(`anomaly alert for ${agent}: ${multiple.toFixed(1)}x median`);
+			}
+		}
 	} finally {
 		db.close();
 	}
 }
 
-try {
-	await main();
-} catch (err) {
-	const detail =
-		err instanceof Error ? (err.stack ?? err.message) : String(err);
-	logLine(`collect error: ${detail}`);
+// Only run the hook when invoked as a script. Guarding this lets the module
+// be imported (e.g. to unit-test detectAnomaly) without executing main(),
+// which would block forever on stdin and then process.exit().
+const invokedDirectly =
+	process.argv[1] !== undefined &&
+	import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+	try {
+		await main();
+	} catch (err) {
+		const detail =
+			err instanceof Error ? (err.stack ?? err.message) : String(err);
+		logLine(`collect error: ${detail}`);
+	}
+	process.exit(0);
 }
-process.exit(0);

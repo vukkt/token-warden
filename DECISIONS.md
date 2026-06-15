@@ -382,6 +382,26 @@ all fixed) and motivated one algorithm change.
   once established" policy. Calibration check (live): a clear low-variance win still
   activates; only borderline candidates are newly rejected.
 
+## v0.9.0 — real-time cost anomaly alerting (roadmap #4)
+
+- **`systemMessage`, not `additionalContext`.** The Stop hook can inject context the model
+  reacts to, but a "you just spent a lot" message fed back to the model would make it keep
+  going (the turn ended) and risk a loop. Anomaly alerting is observability *for the human*,
+  so it uses `systemMessage` (shown to the user, not the model). This is also why it does
+  not auto-trigger any corrective action — it informs.
+- **A higher bar than distillation.** The distiller triggers above the rolling p75 (catch
+  enough expensive runs to learn from); an alert is rarer and louder — ≥ 2× the recent
+  *median* with ≥ 5 priors — so it means "this was genuinely unusual," not "slightly above
+  typical." `detectAnomaly` is a pure, tested function; the median/window query lives in db.
+- **Main session only.** Subagent (`SubagentStop`) runs are mid-conversation; a popped
+  systemMessage there would be noise. Subagent costs are still collected and feed
+  distillation — they just don't raise a real-time alert.
+- **Deliberately breaks the "collect is always silent" property — narrowly.** Until now the
+  Stop hook emitted nothing (errors went only to collect.log). An anomaly alert is an
+  intentional, rare, user-facing signal (not an error leak), gated behind a genuine 2×
+  anomaly and an opt-out (`TOKEN_WARDEN_NO_ALERTS=1`). Same fail-safe contract: any error in
+  the anomaly path is caught and emits nothing.
+
 ## Post-release — distribution
 
 - **The repo is its own marketplace.** `.claude-plugin/marketplace.json` (marketplace

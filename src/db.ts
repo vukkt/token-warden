@@ -530,6 +530,25 @@ export function realWorkCurveByProject(
 		.all(limit);
 }
 
+/** Totals of the agent's most recent completed real-work sessions
+ * (excluding one run id), newest first — the baseline for anomaly alerting. */
+export function recentRealWorkTotals(
+	db: WardenDb,
+	agent: string,
+	limit: number,
+	excludeRunId: number,
+): number[] {
+	return db
+		.prepare<unknown[], { total: number }>(
+			`SELECT input_tokens + output_tokens + cache_creation + cache_read AS total
+			 FROM runs
+			 WHERE agent = ? AND id != ? AND task_hash IS NULL AND completed = 1
+			 ORDER BY ts DESC LIMIT ?`,
+		)
+		.all(agent, excludeRunId, limit)
+		.map((row) => row.total);
+}
+
 export interface ProjectUsage {
 	project: string | null;
 	runs: number;

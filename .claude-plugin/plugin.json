@@ -1,7 +1,7 @@
 {
 	"name": "token-warden",
 	"displayName": "Token Warden",
-	"version": "0.8.0",
+	"version": "0.9.0",
 	"description": "Measurement and selection layer for Claude Code subagents: records token cost per session, distills candidate efficiency rules from expensive runs, benchmarks them on golden task suites, and compiles only rules that earn their context rent into agent memory.",
 	"author": {
 		"name": "Vuk Topalovic",

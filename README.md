@@ -198,6 +198,11 @@ When candidate rules are waiting, a lightweight `SessionStart` hook injects a on
 nudge into new sessions — selection itself always stays a user decision, because it
 spends real benchmark tokens.
 
+When a session ends unusually expensive for its agent (≥ 2× the agent's recent median,
+given ≥ 5 prior sessions), the `Stop` hook surfaces a one-line cost-anomaly heads-up to
+*you* via `systemMessage` — it informs, it does not feed the model (no behavioral loop).
+Opt out with `TOKEN_WARDEN_NO_ALERTS=1`.
+
 Headless or when names collide, use the namespaced forms
 (`/token-warden:warden-status`). CLI equivalents:
 
@@ -463,6 +468,10 @@ Shipped since v0.1.0:
   *not* auto-applied: `agents/<name>.md` is committed source, and three golden tasks can't
   fully capture an agent's behavior, so a human reviews and applies. Protected frontmatter
   (name/tools/model/memory) is enforced unchanged before measurement.
+
+- ✅ **Real-time cost anomaly alerting** — the `Stop` hook flags a session that ends
+  unusually expensive for its agent (≥ 2× recent median) with a one-line heads-up to the
+  user, closing the cost-awareness loop *within* a session instead of across sessions.
 
 Near-term:
 
