@@ -387,8 +387,9 @@ candidate, one re-audit). Mean completed tokens per task:
 npm run typecheck && npm run lint && npm run test
 ```
 
-The unit suite (count in the CI badge above — hard-coding it here rotted once already)
-spans every module. The transcript parser carries the densest coverage
+The unit suite — ~160 tests across every module, shown passing by the CI badge above
+(an exact count is left out of prose because it rots between releases) — covers the lot.
+The transcript parser carries the densest coverage
 (usage dedup, completion heuristics, malformed-line tolerance, a 5 MB / 2 s performance
 budget) against committed anonymized fixtures. The hook entrypoints (`collect.ts`,
 `gate.ts`) are tested as real child processes against temp databases, including
@@ -433,45 +434,10 @@ messaging.
 
 ## Roadmap
 
-Shipped since v0.1.0:
-
-- ✅ **Subagent collection** — `Stop` *and* `SubagentStop` hooks, so the four domain
-  agents' real work reaches the ledger (previously only the main session was collected and
-  the learning loop could not engage on real work at all).
-- ✅ **Variance-aware verdicts** — standard-error analysis of per-task savings with a
-  bounded top-up pass when a verdict is within noise of the threshold (`--top-up`).
-- ✅ **Selection nudge** — a `SessionStart` hook surfaces pending candidates;
-  `/warden-select` runs the measurement on demand.
-- ✅ **Question-driven distillation** — an agent's recent cross-agent questions are fed
-  to the distiller as a memory-gap signal.
-- ✅ **Per-project tracking** — real-work sessions record their project; status breaks
-  down token volume per project.
-- ✅ **Rule provenance** — active rules show the run they were distilled from.
-- ✅ **Cross-project learning curves** — `/warden-status` charts average completed
-  real-work session cost per ruleset version, per agent and per project (domain agents
-  only; `main` never has compiled rules). This is the test of the system's core thesis:
-  golden-suite gains must show up in real work.
-- ✅ **Model-migration benchmarking** — `/warden-modelbench` runs an agent's golden suite
-  under a candidate model vs. its current one (rules held constant) and reports which uses
-  fewer tokens for that workload. The frozen suite *is* the fixed workload you need when a
-  new model ships. The verdict uses processing tokens (input + output + cache_creation);
-  cache-read is reported separately because it skews raw cross-model totals, and token
-  counts are never converted to dollars (models are priced differently per token).
-- ✅ **Prompt / agent-definition A/B testing** — `/warden-promptbench` runs an agent's
-  golden suite under a variant agent definition vs. the shipped one (rules and model held
-  constant), so a proposed prompt edit can be kept or rejected on measured token savings
-  rather than vibes. The comparison engine (`compare.ts`) is shared with model
-  benchmarking: the discipline generalizes from "rule selection" to "any context change."
-- ✅ **Automated prompt evolution** — `/warden-evolve` proposes a token-cheaper rewrite of
-  an agent's prompt (a model call, like the rule distiller proposes rules), measures it
-  through the shared engine, and recommends a winner to a proposals file. Deliberately
-  *not* auto-applied: `agents/<name>.md` is committed source, and three golden tasks can't
-  fully capture an agent's behavior, so a human reviews and applies. Protected frontmatter
-  (name/tools/model/memory) is enforced unchanged before measurement.
-
-- ✅ **Real-time cost anomaly alerting** — the `Stop` hook flags a session that ends
-  unusually expensive for its agent (≥ 2× recent median) with a one-line heads-up to the
-  user, closing the cost-awareness loop *within* a session instead of across sessions.
+Shipped through v0.9.0 (10 releases) — see [CHANGELOG.md](CHANGELOG.md) for the full
+history: the original spec's collect/benchmark/distill/select loop, subagent collection,
+variance-aware verdicts, cross-project learning curves, model-migration and prompt A/B
+benchmarking, automated prompt evolution, and real-time cost-anomaly alerting.
 
 Near-term:
 
@@ -483,20 +449,19 @@ Near-term:
 - **Transcript provenance** — link a rule's `born-of` run to its archived transcript
   digest for post-hoc review.
 
-Bigger directions — the reusable asset here is the *frozen-benchmark + measured-verdict*
+Bigger directions — the reusable asset is the *frozen-benchmark + measured-verdict*
 discipline, which generalizes well beyond efficiency rules:
 
-- **Model-migration benchmarking** — the frozen golden suite is exactly the fixed workload
-  you need when a new model ships: `warden-bench` could answer "is the new model cheaper on
-  *my* workload" with the rigor rules already get.
-- **Prompt / agent-definition A/B testing** — the benchmark measures any context change,
-  not just rules; treat an agent's system prompt as a candidate and let the selector keep
-  edits that earn their place.
 - **Team-shared rule ledgers** — commit measured rules to a repo (via project-scoped
   memory) with token-warden as the CI gate, so a PR adding a rule must carry its measured
   delta. Memory review becomes code review.
-- **Real-time cost anomaly alerting** — the p75 machinery already detects expensive
-  sessions; a Stop-hook message could tell the session itself where its tokens went.
+- **Skill / MCP cost attribution** — break a session's tokens down per tool and per MCP
+  server ("your browser-automation MCP costs 40% of every frontend session"). The one
+  remaining direction the A/B comparison engine does not serve — it is decomposition, not
+  a keep/reject verdict.
+- **Rule marketplaces** — measured rules are portable artifacts with provenance and
+  deltas; a community repo of rules-with-receipts that others re-measure locally before
+  adopting (the dedupe and verdict machinery already handle imports).
 
 ## License
 
