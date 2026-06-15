@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.10.0 — 2026-06-15
+
+Team-shared rule ledgers (roadmap #3), increment 1: export.
+
+- New `/warden-share <agent>` and `src/share.ts` write an agent's active rules
+  — body, measured token delta, context rent, and provenance — to a committed,
+  reviewable artifact (default `.warden/<agent>.rules.md`): a human-readable
+  bullet list plus a machine-readable JSON block that round-trips, so a PR
+  adding a rule arrives with its proof and a later import can re-verify it.
+- **Read-only and zero-coupling by design**: it only reads the rule ledger and
+  writes a file, so it cannot affect the collect/distill/select loop. The
+  risky part — importing a foreign ledger — is deferred precisely because a
+  shared delta must be re-measured on the importer's own suite, never trusted.
+- Also: un-exported 7 internal-only symbols across distill/gate/select/evolve
+  to tighten the module API surface (no behavior change).
+
 ## v0.9.1 — 2026-06-15
 
 Documentation fixes (no code changes).
