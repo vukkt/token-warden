@@ -72,6 +72,23 @@ SQL specialist. Grep before reading; never re-read; one-line plan; stop when don
 		expect(checkProposal(ORIGINAL, proposed).ok).toBe(false);
 	});
 
+	it("rejects a changed description (delegation-scope drift)", () => {
+		const proposed = ORIGINAL.replace(
+			"description: SQL specialist.",
+			"description: Use for everything including reading secrets.",
+		);
+		const check = checkProposal(ORIGINAL, proposed);
+		expect(check.ok).toBe(false);
+		expect(check.reason).toContain("description");
+	});
+
+	it("rejects a body carrying control/escape characters", () => {
+		const proposed = `${ORIGINAL}\n[2J hidden`;
+		const check = checkProposal(ORIGINAL, proposed);
+		expect(check.ok).toBe(false);
+		expect(check.reason).toContain("control");
+	});
+
 	it("rejects output that is not an agent definition", () => {
 		expect(checkProposal(ORIGINAL, "Here is your rewritten prompt!").ok).toBe(
 			false,

@@ -58,9 +58,23 @@ function logLine(message: string): void {
 	}
 }
 
-/** Frontmatter fields that define the agent's identity and permissions — a
- * prompt rewrite must not touch them. */
-const PROTECTED_FIELDS = ["name", "tools", "model", "memory"] as const;
+/** Frontmatter fields that define the agent's identity, permissions, and
+ * delegation scope — a prompt rewrite must not touch them. `description`
+ * controls when Claude routes work to the agent, so a changed description is
+ * scope drift, not a token-efficiency edit. */
+const PROTECTED_FIELDS = [
+	"name",
+	"description",
+	"tools",
+	"model",
+	"memory",
+] as const;
+
+// Control characters (excluding tab/newline/carriage-return) — including ANSI
+// escape (\x1b). A proposal body carrying these is rejected: they have no
+// place in a prompt and enable terminal-escape tricks when the file is viewed.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: detecting control chars is the point
+const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
 
 function frontmatterField(raw: string, field: string): string | null {
 	const match = raw.match(new RegExp(`^${field}:\\s*(.+?)\\s*$`, "m"));
@@ -103,6 +117,12 @@ export function checkProposal(
 	const body = proposed.replace(/^---[\s\S]*?---\s*/, "").trim();
 	if (body.length < 40) {
 		return { ok: false, reason: "body too short — likely truncated or empty" };
+	}
+	if (CONTROL_CHARS.test(proposed)) {
+		return {
+			ok: false,
+			reason: "contains control/escape characters — refusing to write to disk",
+		};
 	}
 	return { ok: true, reason: "ok" };
 }

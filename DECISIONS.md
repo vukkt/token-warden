@@ -352,6 +352,36 @@ as the post-#1 reflection predicted.
   worth it." The discipline-as-asset thesis, fully closed: rules, models, and prompts all
   pass through one measured keep/reject gate.
 
+## v0.8.0 — pen-test hardening + variance-conservative promotion
+
+A defensive-security pass on the v0.6/v0.7 surface found three holes (empirically probed,
+all fixed) and motivated one algorithm change.
+
+- **`checkProposal` now protects `description` and rejects control characters.** The
+  evolve proposal validator guarded name/tools/model/memory but not `description` — which
+  steers Claude's delegation, so changing it is scope drift, not a token edit. And a
+  proposal body carrying ANSI/control characters was accepted and written to the proposals
+  file; it is now rejected (terminal-escape hygiene). Identity/permission drift and
+  non-agent files (e.g. `/etc/passwd`) were already correctly rejected.
+- **Comparison-report labels are sanitized at the engine boundary.** `compareConfigs`
+  runs both labels (model ids from `--model`, variant filenames) through `displayText`
+  (the status sanitizer) before they enter `Comparison`, so the report the slash commands
+  relay into the model's context cannot carry injected newlines/ANSI — the same
+  report-injection class the v0.4.0 audit closed for `/warden-status`. Confirmed: no shell
+  injection (array-form `spawnSync`), and the proposal write path is safe (agent validated
+  against DOMAIN_AGENTS, timestamped filename).
+- **Variance-conservative rule promotion (the algorithm change).** Previously a candidate
+  whose point-estimate savings cleared 2× rent was *activated even when the result was
+  statistically uncertain* (within one standard error of the threshold) — it just got a
+  "low confidence" note. But an active rule pays context rent in every future session, so
+  promotion should require confidence, not a coin-flip. `finalizeVerdict(..., evictWhenUncertain)`
+  now evicts a candidate that stays uncertain after the top-up budget. Re-audit passes
+  `evictWhenUncertain=false`: an already-earning rule is de-activated only on evidence it
+  has *stopped* earning (point estimate ≤ threshold), so one noisy re-audit can't churn out
+  a good rule — an asymmetric "prove yourself to get in, but innocent until proven guilty
+  once established" policy. Calibration check (live): a clear low-variance win still
+  activates; only borderline candidates are newly rejected.
+
 ## Post-release — distribution
 
 - **The repo is its own marketplace.** `.claude-plugin/marketplace.json` (marketplace

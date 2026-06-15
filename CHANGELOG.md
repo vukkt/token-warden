@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.8.0 — 2026-06-15
+
+Security hardening of the v0.6/v0.7 features (from a pen-test pass) and a
+variance-conservative rule-promotion algorithm.
+
+### Security
+
+- **Prompt evolution: `description` is now a protected frontmatter field** — a
+  proposed variant changing it (which controls when Claude delegates to the
+  agent) is delegation-scope drift and is rejected before measurement,
+  alongside name/tools/model/memory.
+- **Proposal bodies with control/escape characters are rejected** rather than
+  written to disk (terminal-escape hygiene).
+- **Comparison-report labels are sanitized.** Model ids and variant filenames
+  flow into the report that the slash commands relay into the model's context;
+  control/ANSI characters and newlines are now stripped so a crafted label
+  cannot inject fake report lines (the report-injection class the v0.4.0 audit
+  fixed for `/warden-status`).
+
+### Algorithm
+
+- **Variance-conservative rule promotion.** A candidate whose measured savings
+  stay within one standard error of the 2×-rent threshold after the top-up
+  budget (`uncertain`) is now **evicted, not activated** — a rule pays context
+  rent in every future session, so promotion requires confidence it clears the
+  bar, not a point estimate that merely lands above it. Re-audit of an
+  already-active rule keeps the gentler point-estimate test, so one noisy
+  re-measure does not churn out a good rule. Clear, low-variance wins are
+  unaffected.
+
 ## v0.7.0 — 2026-06-15
 
 Automated prompt evolution: propose a token-cheaper rewrite of an agent's

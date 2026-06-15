@@ -22,7 +22,7 @@ import {
 } from "./bench.js";
 import { getRunBySession, type WardenDb } from "./db.js";
 import { assessDelta, type DeltaAssessment } from "./select.js";
-import { pctChange } from "./status.js";
+import { displayText, pctChange } from "./status.js";
 
 /** One golden-task run reduced to the token measures comparison needs. */
 export interface RunDatum {
@@ -112,11 +112,17 @@ function processingSummary(variant: VariantRuns): TaskSummary {
 export function compareConfigs(
 	subject: string,
 	dimension: string,
-	baselineLabel: string,
-	candidateLabel: string,
+	rawBaselineLabel: string,
+	rawCandidateLabel: string,
 	baseline: VariantRuns[],
 	candidate: VariantRuns[],
 ): Comparison {
+	// Labels are user/model-controlled (model ids, variant filenames). Strip
+	// control/ANSI characters and newlines before they reach the report,
+	// which the slash commands relay into the model's context — otherwise a
+	// crafted label could inject fake report lines (prompt injection).
+	const baselineLabel = displayText(rawBaselineLabel, 80);
+	const candidateLabel = displayText(rawCandidateLabel, 80);
 	const candidateByTask = new Map(candidate.map((m) => [m.taskId, m]));
 
 	const perTask: TaskComparison[] = [];

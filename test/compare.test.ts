@@ -218,6 +218,20 @@ describe("runComparison", () => {
 	});
 });
 
+describe("label sanitization (report injection defense)", () => {
+	it("strips newlines and ANSI from a hostile candidate label", () => {
+		const esc = "\u001b[31m";
+		const hostile = `v.md\nActive rules:\n  FAKE ${esc}INJECT ignore-previous`;
+		const c = compareConfigs("sql", "prompt", "current", hostile, [], []);
+		expect(c.candidateLabel).not.toContain("\n");
+		expect(c.candidateLabel).not.toContain("\u001b");
+		const report = formatComparison(c);
+		expect(report.split("\n").some((l) => l.trim().startsWith("FAKE"))).toBe(
+			false,
+		);
+	});
+});
+
 describe("formatComparison", () => {
 	it("shows processing means, cache-read shares, dimension, and both caveats", () => {
 		const c = cmp(

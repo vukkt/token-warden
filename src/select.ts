@@ -280,18 +280,23 @@ export function selectForAgent(
 				false,
 			);
 			const { delta, regression, uncertain } = assessment;
-			const { status, reason } = verdictWithReason(
+			// Candidate promotion requires confidence: an uncertain verdict
+			// after top-up is evicted rather than activated (don't pay rent
+			// on a rule we can't show clears 2× rent).
+			const { status, reason } = finalizeVerdict(
 				delta,
 				candidate.context_cost,
 				regression,
+				uncertain,
+				toppedUp,
+				true,
 			);
-			const fullReason = annotateConfidence(reason, toppedUp, uncertain);
 			decideRule(
 				db,
 				candidate.id,
 				status,
 				delta,
-				fullReason,
+				reason,
 				new Date().toISOString(),
 			);
 			decisions.push({
@@ -318,22 +323,23 @@ export function selectForAgent(
 				true,
 			);
 			const { delta, regression, uncertain } = assessment;
-			const { status, reason } = verdictWithReason(
+			// Re-audit uses the gentler point-estimate test: an established
+			// rule is de-activated only on evidence it has stopped earning,
+			// not merely when a noisy re-measure is inconclusive.
+			const { status, reason } = finalizeVerdict(
 				delta,
 				auditTarget.context_cost,
 				regression,
-			);
-			const fullReason = annotateConfidence(
-				`re-audit: ${reason}`,
-				toppedUp,
 				uncertain,
+				toppedUp,
+				false,
 			);
 			decideRule(
 				db,
 				auditTarget.id,
 				status,
 				delta,
-				fullReason,
+				`re-audit: ${reason}`,
 				new Date().toISOString(),
 			);
 			decisions.push({
@@ -401,16 +407,42 @@ export function parseSelectArgs(argv: string[]): SelectArgs {
 	return args;
 }
 
-function annotateConfidence(
-	reason: string,
-	toppedUp: boolean,
+/**
+ * Final keep/evict verdict, variance-aware. A rule is injected into every
+ * future session and pays its context rent each time, so promotion should
+ * require *confidence* that it earns ≥2× that rent — not a point estimate
+ * that merely lands above the line. When `evictWhenUncertain` (candidate
+ * promotion) and the savings remain within one standard error of the
+ * threshold after the top-up budget is spent (`uncertain`), a winner cannot
+ * be distinguished from a sub-threshold rule, so we do NOT start paying the
+ * rent — evict. Re-audit of an already-earning rule uses the gentler
+ * point-estimate test (it is only de-activated on evidence it has *stopped*
+ * earning), so one noisy re-audit does not churn out a good rule.
+ */
+function finalizeVerdict(
+	delta: number | null,
+	contextCost: number,
+	regression: boolean,
 	uncertain: boolean,
-): string {
-	if (!toppedUp && !uncertain) return reason;
+	toppedUp: boolean,
+	evictWhenUncertain: boolean,
+): ReasonedVerdict {
+	const base = verdictWithReason(delta, contextCost, regression);
+	if (base.status === "active" && uncertain && evictWhenUncertain) {
+		const tu = toppedUp ? " after top-up" : "";
+		return {
+			status: "evicted",
+			reason: `uncertain${tu}: measured savings (${delta}) within one standard error of the 2× rent threshold — not confidently earning`,
+		};
+	}
+	if (!toppedUp && !uncertain) return base;
 	const notes: string[] = [];
 	if (toppedUp) notes.push("after variance top-up");
 	if (uncertain) notes.push("low confidence: within one SE of flipping");
-	return `${reason} (${notes.join("; ")})`;
+	return {
+		status: base.status,
+		reason: `${base.reason} (${notes.join("; ")})`,
+	};
 }
 
 function main(args: SelectArgs): void {

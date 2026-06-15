@@ -178,8 +178,13 @@ describe("selectForAgent variance top-up", () => {
 		const decision = report.decisions[0];
 		expect(decision?.toppedUp).toBe(false);
 		expect(decision?.uncertain).toBe(true);
+		// Variance-conservative promotion: an uncertain candidate (no top-up
+		// budget to resolve it) is evicted, not activated — we do not pay
+		// rent on a rule we cannot show clears the threshold.
+		expect(decision?.status).toBe("evicted");
+		expect(getRuleById(db, decision?.rule.id ?? -1)?.status).toBe("evicted");
 		expect(getRuleById(db, decision?.rule.id ?? -1)?.decided_reason).toContain(
-			"low confidence",
+			"standard error",
 		);
 	});
 });
