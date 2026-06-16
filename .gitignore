@@ -6,3 +6,5 @@ dist/
 coverage/
 validation/*.db
 validation/*.db-*
+validation/results/
+validation/.burn-state
