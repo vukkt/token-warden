@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	aggregateToolCosts,
+	main as attributeMain,
 	attributeTranscript,
 	classifyTool,
 	estTokens,
@@ -303,5 +307,61 @@ describe("parseAttributeArgs", () => {
 
 	it("rejects an unknown flag", () => {
 		expect(() => parseAttributeArgs(["--nope"])).toThrow(/unknown flag/);
+	});
+});
+
+describe("main (in-process CLI)", () => {
+	let dir: string;
+	let logs: string[];
+	let spy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-attrmain-"));
+		process.env.TOKEN_WARDEN_DB = join(dir, "warden.db");
+		logs = [];
+		spy = vi.spyOn(console, "log").mockImplementation((m) => {
+			logs.push(String(m));
+		});
+	});
+
+	afterEach(() => {
+		spy.mockRestore();
+		delete process.env.TOKEN_WARDEN_DB;
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("renders a single transcript breakdown and returns 0", () => {
+		const file = join(dir, "t.jsonl");
+		writeFileSync(
+			file,
+			JSON.stringify({
+				type: "assistant",
+				message: {
+					id: "m",
+					usage: {},
+					content: [
+						{ type: "tool_use", id: "t1", name: "Read", input: { f: 1 } },
+					],
+				},
+			}),
+		);
+		expect(attributeMain(["--transcript", file])).toBe(0);
+		expect(logs.join("\n")).toContain("tool cost attribution");
+	});
+
+	it("renders the cross-session rollup from an empty db and returns 0", () => {
+		expect(attributeMain([])).toBe(0);
+		expect(logs.join("\n")).toContain("No tool costs recorded");
+	});
+
+	it("emits JSON for a transcript with --json", () => {
+		const file = join(dir, "t.jsonl");
+		writeFileSync(file, "");
+		expect(attributeMain(["--transcript", file, "--json"])).toBe(0);
+		expect(() => JSON.parse(logs.join("\n"))).not.toThrow();
+	});
+
+	it("propagates a bad flag as a throw", () => {
+		expect(() => attributeMain(["--kind", "bogus"])).toThrow(/--kind/);
 	});
 });

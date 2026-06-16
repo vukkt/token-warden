@@ -1,10 +1,11 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	collectLedgerFiles,
 	verifyLedgerContent,
+	main as verifyMain,
 } from "../src/verify-ledger.js";
 
 const validLedger = `# token-warden rules — sql
@@ -63,5 +64,49 @@ describe("collectLedgerFiles", () => {
 
 	it("returns empty when there is no .warden directory", () => {
 		expect(collectLedgerFiles([], dir)).toEqual([]);
+	});
+});
+
+describe("main (in-process CLI)", () => {
+	let dir: string;
+	let logs: string[];
+	let spy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-verifymain-"));
+		logs = [];
+		spy = vi.spyOn(console, "log").mockImplementation((m) => {
+			logs.push(String(m));
+		});
+	});
+
+	afterEach(() => {
+		spy.mockRestore();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("returns 0 for a valid ledger file", () => {
+		const file = join(dir, "sql.rules.md");
+		writeFileSync(file, validLedger);
+		expect(verifyMain([file])).toBe(0);
+		expect(logs.join("\n")).toContain("1 ledger(s) valid");
+	});
+
+	it("returns 1 for a corrupt ledger file", () => {
+		const file = join(dir, "bad.rules.md");
+		writeFileSync(file, "# block deleted by hand");
+		expect(verifyMain([file])).toBe(1);
+		expect(logs.join("\n")).toContain("FAIL");
+	});
+
+	it("returns 0 with a friendly note when there is nothing to verify", () => {
+		const cwd = process.cwd();
+		try {
+			process.chdir(dir); // empty temp dir, no .warden — deterministic
+			expect(verifyMain([])).toBe(0);
+			expect(logs.join("\n")).toContain("No ledger files");
+		} finally {
+			process.chdir(cwd);
+		}
 	});
 });

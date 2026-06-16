@@ -239,6 +239,7 @@ async function main(): Promise<void> {
 // Only run the hook when invoked as a script. Guarding this lets the module
 // be imported (e.g. to unit-test detectAnomaly) without executing main(),
 // which would block forever on stdin and then process.exit().
+/* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
 const invokedDirectly =
 	process.argv[1] !== undefined &&
 	import.meta.url === pathToFileURL(process.argv[1]).href;
@@ -253,3 +254,4 @@ if (invokedDirectly) {
 	}
 	process.exit(0);
 }
+/* v8 ignore stop */

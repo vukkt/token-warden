@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	insertRule,
 	latestReceipts,
@@ -13,6 +13,7 @@ import {
 } from "../src/db.js";
 import {
 	parseReceiptArgs,
+	main as receiptMain,
 	renderReceipt,
 	renderReceipts,
 } from "../src/receipt.js";
@@ -181,6 +182,47 @@ describe("renderReceipt", () => {
 describe("renderReceipts", () => {
 	it("is friendly when an agent has no receipts", () => {
 		expect(renderReceipts(db, "sql")).toContain("no receipts yet");
+	});
+});
+
+describe("main (in-process CLI)", () => {
+	let logs: string[];
+	let spy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		process.env.TOKEN_WARDEN_DB = join(dir, "warden.db");
+		logs = [];
+		spy = vi.spyOn(console, "log").mockImplementation((m) => {
+			logs.push(String(m));
+		});
+	});
+
+	afterEach(() => {
+		spy.mockRestore();
+		delete process.env.TOKEN_WARDEN_DB;
+	});
+
+	it("renders all agents and returns 0 on an empty db", () => {
+		expect(receiptMain([])).toBe(0);
+		expect(logs.join("\n")).toContain("rule receipts for sql");
+	});
+
+	it("renders a seeded receipt for one agent", () => {
+		recordReceipt(db, receipt(seedRule("Use Grep before reading files.")));
+		expect(receiptMain(["--agent", "sql"])).toBe(0);
+		expect(logs.join("\n")).toContain("Use Grep before reading files.");
+	});
+
+	it("emits parseable JSON with --json", () => {
+		recordReceipt(db, receipt(seedRule("A rule.")));
+		expect(receiptMain(["--json"])).toBe(0);
+		const parsed = JSON.parse(logs.join("\n"));
+		expect(parsed.sql).toHaveLength(1);
+		expect(parsed.backend).toEqual([]);
+	});
+
+	it("propagates a bad flag as a throw (the shim maps it to exit 1)", () => {
+		expect(() => receiptMain(["--nope"])).toThrow(/unknown flag/);
 	});
 });
 

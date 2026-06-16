@@ -296,7 +296,7 @@ function runRollup(db: WardenDb, args: AttributeArgs): number {
 	return 0;
 }
 
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
 	const args = parseAttributeArgs(argv);
 	if (args.transcript !== null) return runTranscript(args, args.transcript);
 	const db = openDb();
@@ -307,6 +307,7 @@ function main(argv: string[]): number {
 	}
 }
 
+/* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
 const invokedDirectly =
 	process.argv[1] !== undefined &&
 	import.meta.url === pathToFileURL(process.argv[1]).href;
@@ -319,3 +320,4 @@ if (invokedDirectly) {
 		process.exit(1);
 	}
 }
+/* v8 ignore stop */

@@ -51,7 +51,7 @@ export function collectLedgerFiles(args: string[], cwd: string): string[] {
 		.map((f) => join(dir, f));
 }
 
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
 	const files = collectLedgerFiles(argv, process.cwd());
 	if (files.length === 0) {
 		console.log("No ledger files to verify (.warden/*.rules.md).");
@@ -74,6 +74,7 @@ function main(argv: string[]): number {
 	return failed === 0 ? 0 : 1;
 }
 
+/* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
 const invokedDirectly =
 	process.argv[1] !== undefined &&
 	import.meta.url === pathToFileURL(process.argv[1]).href;
@@ -86,3 +87,4 @@ if (invokedDirectly) {
 		process.exit(1);
 	}
 }
+/* v8 ignore stop */

@@ -631,6 +631,7 @@ function main(args: BenchArgs): void {
 	}
 }
 
+/* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
 const invokedDirectly =
 	process.argv[1] !== undefined &&
 	import.meta.url === pathToFileURL(process.argv[1]).href;
@@ -654,3 +655,4 @@ if (invokedDirectly) {
 		process.exit(1);
 	}
 }
+/* v8 ignore stop */
