@@ -2,10 +2,12 @@ name: CI
 
 # Staged pipeline: each stage gates the next.
 #
-#   quality ──▶ test ────┐
-#           └─▶ fixture ─┴▶ validate ──▶ release (tags only)
+#   quality ──▶ test ─────┐
+#           ├─▶ fixture ──┤
+#           └─▶ coverage ─┴▶ validate ──▶ release (tags only)
 #
-# A push or PR runs quality → test/fixture → validate. Pushing a vX.Y.Z tag
+# quality also runs knip (dead-code) and the manifest version check. A push or
+# PR runs quality → test/fixture/coverage → validate. Pushing a vX.Y.Z tag
 # additionally runs release, which publishes the GitHub release from CHANGELOG.
 
 on:
@@ -38,6 +40,8 @@ jobs:
         run: npm run lint
       - name: Typecheck (tsc)
         run: npm run typecheck
+      - name: Dead code (knip — unused files, exports, deps)
+        run: npm run knip
       - name: Manifest version consistency
         run: node scripts/check-versions.mjs
 
@@ -60,6 +64,21 @@ jobs:
       - run: npm ci
       - run: npm run test
 
+  # Stage 2c — coverage gate. Fails if coverage regresses below the ratchet
+  # floor in vitest.config.ts (runs alongside test/fixture).
+  coverage:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run coverage
+
   # Stage 2b — the golden-suite fixture sub-package (runs alongside test).
   fixture:
     needs: quality
@@ -81,7 +100,7 @@ jobs:
 
   # Stage 3 — package integrity: plugin manifest + a CLI smoke run.
   validate:
-    needs: [test, fixture]
+    needs: [test, fixture, coverage]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

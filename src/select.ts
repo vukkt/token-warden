@@ -96,7 +96,7 @@ export function verdictWithReason(
 			};
 }
 
-export interface DeltaResult {
+interface DeltaResult {
 	/** Mean tokens saved per golden run (positive = candidate is cheaper);
 	 * null when no task completed in both configurations. */
 	delta: number | null;
@@ -202,7 +202,7 @@ export type SuiteRunner = (
 	recordBaselines: boolean,
 ) => TaskSummary[];
 
-export interface Decision {
+interface Decision {
 	rule: RuleRow;
 	kind: "candidate" | "re-audit";
 	delta: number | null;

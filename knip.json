@@ -1,0 +1,20 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"entry": [
+		"src/collect.ts",
+		"src/gate.ts",
+		"src/notify.ts",
+		"src/distill.ts",
+		"src/modelbench.ts",
+		"src/promptbench.ts",
+		"src/evolve.ts",
+		"src/share.ts",
+		"src/adopt.ts",
+		"src/verify-ledger.ts",
+		"src/receipt.ts",
+		"src/attribute.ts",
+		"scripts/*.mjs"
+	],
+	"project": ["src/**/*.ts"],
+	"ignoreBinaries": ["claude"]
+}

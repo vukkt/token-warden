@@ -36,7 +36,7 @@ import { displayText } from "./sanitize.js";
 import { parseTranscript } from "./transcript.js";
 import type { RawToolEvent } from "./types.js";
 
-export type ToolKind = "builtin" | "mcp" | "skill";
+type ToolKind = "builtin" | "mcp" | "skill";
 
 export interface ToolClass {
 	kind: ToolKind;
@@ -47,10 +47,10 @@ export interface ToolClass {
 	label: string;
 }
 
-export const BUILTIN_GROUP = "(builtin)";
-export const SKILL_GROUP = "(skills)";
+const BUILTIN_GROUP = "(builtin)";
+const SKILL_GROUP = "(skills)";
 /** Rough chars-per-token used only for the human-friendly ≈tokens estimate. */
-export const CHARS_PER_TOKEN = 4;
+const CHARS_PER_TOKEN = 4;
 
 /**
  * Classify a raw tool name into its kind, group, and label. MCP tools are

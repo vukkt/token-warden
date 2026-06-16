@@ -41,7 +41,7 @@ export interface VariantRuns {
 	runs: RunDatum[];
 }
 
-export interface TaskComparison {
+interface TaskComparison {
 	taskId: string;
 	baselineProcessingMean: number;
 	candidateProcessingMean: number;
@@ -249,10 +249,7 @@ export function formatComparison(cmp: Comparison): string {
 /** Reduce the runs a suite pass just wrote (by session id) to comparison
  * data. The run-error sentinel (no row written) becomes a failed zero-token
  * run. */
-export function gatherRuns(
-	db: WardenDb,
-	summaries: TaskSummary[],
-): VariantRuns[] {
+function gatherRuns(db: WardenDb, summaries: TaskSummary[]): VariantRuns[] {
 	return summaries.map((summary) => ({
 		taskId: summary.taskId,
 		runs: summary.results.map((result): RunDatum => {
