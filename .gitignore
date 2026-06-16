@@ -4,3 +4,5 @@ dist/
 .DS_Store
 .claude/
 coverage/
+validation/*.db
+validation/*.db-*
