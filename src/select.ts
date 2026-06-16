@@ -267,89 +267,90 @@ export function selectForAgent(
 		const activeSet = getActiveRules(db, agent);
 		const baseline = runner(activeSet, "active-set", true);
 
-		for (const candidate of candidates) {
+		/**
+		 * Measure one rule against the active-set baseline, decide its fate,
+		 * persist the verdict, and record the decision. The only differences
+		 * between candidate promotion and re-audit are these parameters:
+		 * which configuration is measured, whether the delta is inverted, and
+		 * whether an uncertain verdict evicts (candidates) or keeps (re-audits).
+		 */
+		const decide = (params: {
+			rule: RuleRow;
+			kind: Decision["kind"];
+			measureOnce: (suffix: string) => TaskSummary[];
+			invert: boolean;
+			evictWhenUncertain: boolean;
+			reasonPrefix: string;
+		}): void => {
 			const { assessment, toppedUp } = assessWithTopUp(
 				() => baseline,
-				(suffix) =>
-					runner(
-						[...activeSet, candidate],
-						`candidate-${candidate.id}${suffix}`,
-						false,
-					),
-				candidate.context_cost,
-				false,
+				params.measureOnce,
+				params.rule.context_cost,
+				params.invert,
 			);
 			const { delta, regression, uncertain } = assessment;
-			// Candidate promotion requires confidence: an uncertain verdict
-			// after top-up is evicted rather than activated (don't pay rent
-			// on a rule we can't show clears 2× rent).
 			const { status, reason } = finalizeVerdict(
 				delta,
-				candidate.context_cost,
+				params.rule.context_cost,
 				regression,
 				uncertain,
 				toppedUp,
-				true,
+				params.evictWhenUncertain,
 			);
 			decideRule(
 				db,
-				candidate.id,
+				params.rule.id,
 				status,
 				delta,
-				reason,
+				params.reasonPrefix + reason,
 				new Date().toISOString(),
 			);
 			decisions.push({
-				rule: candidate,
-				kind: "candidate",
+				rule: params.rule,
+				kind: params.kind,
 				delta,
 				regression,
 				status,
 				uncertain,
 				toppedUp,
 			});
+		};
+
+		for (const candidate of candidates) {
+			// Candidate promotion requires confidence: an uncertain verdict
+			// after top-up evicts rather than activates (don't pay rent on a
+			// rule we can't show clears 2× rent).
+			decide({
+				rule: candidate,
+				kind: "candidate",
+				measureOnce: (suffix) =>
+					runner(
+						[...activeSet, candidate],
+						`candidate-${candidate.id}${suffix}`,
+						false,
+					),
+				invert: false,
+				evictWhenUncertain: true,
+				reasonPrefix: "",
+			});
 		}
 
 		if (auditTarget !== undefined) {
 			const withoutIt = activeSet.filter((rule) => rule.id !== auditTarget.id);
-			// The rule's current worth: cost without it minus cost with it
-			// (baseline includes it). Removing a good rule makes runs dearer,
-			// so the measured (toppable) side is the without-configuration.
-			const { assessment, toppedUp } = assessWithTopUp(
-				() => baseline,
-				(suffix) =>
-					runner(withoutIt, `audit-${auditTarget.id}${suffix}`, false),
-				auditTarget.context_cost,
-				true,
-			);
-			const { delta, regression, uncertain } = assessment;
-			// Re-audit uses the gentler point-estimate test: an established
-			// rule is de-activated only on evidence it has stopped earning,
-			// not merely when a noisy re-measure is inconclusive.
-			const { status, reason } = finalizeVerdict(
-				delta,
-				auditTarget.context_cost,
-				regression,
-				uncertain,
-				toppedUp,
-				false,
-			);
-			decideRule(
-				db,
-				auditTarget.id,
-				status,
-				delta,
-				`re-audit: ${reason}`,
-				new Date().toISOString(),
-			);
-			decisions.push({
+			// The rule's current worth is cost-without minus cost-with (baseline
+			// includes it), so the measured (toppable) side is the
+			// without-configuration and the delta is inverted. Re-audit uses the
+			// gentler point-estimate test: an established rule is de-activated
+			// only on evidence it has stopped earning, not when a noisy
+			// re-measure is merely inconclusive.
+			decide({
 				rule: auditTarget,
 				kind: "re-audit",
-				delta,
-				regression,
-				status,
-				uncertain,
-				toppedUp,
+				measureOnce: (suffix) =>
+					runner(withoutIt, `audit-${auditTarget.id}${suffix}`, false),
+				invert: true,
+				evictWhenUncertain: false,
+				reasonPrefix: "re-audit: ",
 			});
 		}
 	}
