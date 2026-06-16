@@ -68,11 +68,18 @@ echo "budget=${BUDGET_SECONDS}s, results=${RESULTS}"
 
 # Cheapest-possible quota probe; abort early (cleanly) if the limit isn't back.
 log "Quota probe"
-if tmo 120 claude -p "Reply with the single word: ready" \
-	--output-format json > "${RESULTS}/probe.json" 2>>"${LOG}"; then
-	note "probe OK — quota is available, proceeding"
-else
-	note "probe FAILED — quota likely still exhausted. Aborting cleanly; reschedule."
+PROBE_OK=0
+for attempt in 1 2 3 4; do
+	if tmo 240 claude -p "Reply with the single word: ready" \
+		--output-format json > "${RESULTS}/probe.json" 2>>"${LOG}" \
+		&& jq -e '.is_error==false and (.result|type=="string")' "${RESULTS}/probe.json" >/dev/null 2>&1; then
+		PROBE_OK=1; note "probe OK on attempt ${attempt} — quota available, proceeding"; break
+	fi
+	note "probe attempt ${attempt} throttled/failed; backing off 90s"
+	sleep 90
+done
+if [ "${PROBE_OK}" != "1" ]; then
+	note "probe failed after retries — quota/rate genuinely unavailable. Aborting cleanly."
 	echo "BURN_RESULT=quota-unavailable"
 	exit 11
 fi
