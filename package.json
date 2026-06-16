@@ -1,6 +1,6 @@
 {
 	"name": "token-warden",
-	"version": "0.16.0",
+	"version": "0.17.0",
 	"description": "Claude Code plugin that makes coding agents measurably cheaper over time: collect token costs, distill candidate rules, benchmark them on golden suites, and compile only the rules that earn their context rent into agent memory.",
 	"type": "module",
 	"private": true,

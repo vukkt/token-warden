@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.17.0 — 2026-06-16
+
+Quality hardening — no plugin behavior change; this release is about making the
+codebase provably tested and tight, with CI guards that can't silently slip.
+
+- **90% line coverage (78% branch), CI-gated.** Added `@vitest/coverage-v8` with
+  a ratchet-floor threshold; the new `coverage` pipeline stage fails the build on
+  any regression. Coverage rose from ~66% to **90%** by unit-testing the
+  subprocess/stdin CLIs (`collect`, `gate`, `distill`, `evolve`, `modelbench`,
+  `promptbench`) with mocked `child_process`/stdin boundaries — real orchestration
+  tests (fail-open contracts, verdict decisions, anomaly alerts), not padding. The
+  untestable `invokedDirectly` entry shims are honestly excluded via `v8 ignore`.
+- **Dead-code gate.** `knip` (unused files/exports/deps) is wired into CI and the
+  module API surface was tightened (8 internal-only exports un-exported). Zero
+  unused SQL fields.
+- **Component-integration + performance tests.** `test/integration.test.ts` wires
+  the real modules end-to-end (collection → distill trigger → selector → receipts
+  → status) through one DB; `test/perf.test.ts` holds hot-path budgets — transcript
+  parser ~39 MB/s (2 MB in ~50 ms vs the 2 s Stop-hook budget), 50k tool events
+  attributed in ~24 ms, a 2k-session rollup in ~1.3 ms.
+- 361 tests, green on Node 22 and 24.
+
 ## v0.16.0 — 2026-06-16
 
 Rule receipts — the per-rule verdict card (community-suggested).

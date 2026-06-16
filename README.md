@@ -417,7 +417,7 @@ candidate, one re-audit). Mean completed tokens per task:
 npm run typecheck && npm run lint && npm run test
 ```
 
-The unit suite — ~290 tests across every module, shown passing by the CI badge above
+The unit suite — ~360 tests across every module, shown passing by the CI badge above
 (an exact count is left out of prose because it rots between releases) — covers the lot.
 The transcript parser carries the densest coverage
 (usage dedup, completion heuristics, malformed-line tolerance, a 5 MB / 2 s performance
