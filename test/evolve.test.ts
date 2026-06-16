@@ -83,7 +83,7 @@ SQL specialist. Grep before reading; never re-read; one-line plan; stop when don
 	});
 
 	it("rejects a body carrying control/escape characters", () => {
-		const proposed = `${ORIGINAL}\n[2J hidden`;
+		const proposed = `${ORIGINAL}\n\x1b[2J\x07 hidden`;
 		const check = checkProposal(ORIGINAL, proposed);
 		expect(check.ok).toBe(false);
 		expect(check.reason).toContain("control");
