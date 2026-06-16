@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	compileMemoryMd,
 	loadGoldenTasks,
+	parseAgentDefinition,
 	parseArgs,
 	parseGoldenTask,
 	summarizeTask,
@@ -152,5 +153,58 @@ describe("baseline freezing", () => {
 		expect(baseline?.run1_tokens).toBe(50_000);
 		expect(baseline?.best_tokens).toBe(40_000);
 		expect(baseline?.updated_at).toBe("t3");
+	});
+});
+
+// Safety-critical: a benchmark must NEVER read or write the user's real
+// ~/.claude/agent-memory. parseAgentDefinition enforces that by rewriting the
+// memory scope to `project`, so MEMORY.md resolves inside the temp workdir.
+describe("parseAgentDefinition (memory-scope isolation)", () => {
+	const def = (frontmatter: string) =>
+		`---\n${frontmatter}\n---\n\nYou are an agent.\n`;
+
+	it("rewrites a user-scoped memory field to project", () => {
+		const { content } = parseAgentDefinition(
+			def("name: sql\nmemory: user\nmodel: sonnet"),
+			"sql.md",
+		);
+		expect(content).toContain("memory: project");
+		expect(content).not.toMatch(/^memory: user$/m);
+	});
+
+	it("rewrites any single-word scope (local) and is idempotent on project", () => {
+		expect(
+			parseAgentDefinition(def("memory: local"), "x.md").content,
+		).toContain("memory: project");
+		expect(
+			parseAgentDefinition(def("memory: project"), "x.md").content,
+		).toContain("memory: project");
+	});
+
+	it("tolerates no spacing after the colon", () => {
+		expect(parseAgentDefinition(def("memory:user"), "x.md").content).toContain(
+			"memory: project",
+		);
+	});
+
+	it("throws when there is no memory frontmatter field to rewrite", () => {
+		expect(() => parseAgentDefinition(def("name: sql"), "sql.md")).toThrow(
+			/no "memory:" frontmatter/,
+		);
+		expect(() => parseAgentDefinition(def("name: sql"), "sql.md")).toThrow(
+			/sql\.md/,
+		);
+	});
+
+	it("extracts the model, defaulting to sonnet when absent", () => {
+		expect(
+			parseAgentDefinition(def("memory: user\nmodel: haiku"), "x").model,
+		).toBe("haiku");
+		expect(parseAgentDefinition(def("memory: user"), "x").model).toBe("sonnet");
+	});
+
+	it("preserves the rest of the definition body", () => {
+		const { content } = parseAgentDefinition(def("memory: user"), "x.md");
+		expect(content).toContain("You are an agent.");
 	});
 });
