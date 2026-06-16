@@ -28,6 +28,10 @@ DEADLINE=$(( $(date +%s) + BUDGET_SECONDS ))
 
 mkdir -p "${RESULTS}"
 exec > >(tee -a "${LOG}") 2>&1
+# Headless `claude` (and the bench-spawned ones) block on stdin when detached
+# with no TTY; give the whole script — and everything it spawns — an empty
+# stdin so they get immediate EOF instead of hanging until the timeout.
+exec < /dev/null
 
 log()  { echo; echo "════ $* ════"; }
 note() { echo "  · $*"; }
