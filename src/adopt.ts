@@ -121,7 +121,7 @@ export function parseAdoptArgs(argv: string[]): AdoptArgs {
 	return args;
 }
 
-function main(args: AdoptArgs): void {
+export function main(args: AdoptArgs): void {
 	if (!existsSync(args.from)) {
 		throw new Error(`ledger file not found: ${args.from}`);
 	}

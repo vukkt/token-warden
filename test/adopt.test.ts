@@ -1,6 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { parseAdoptArgs, parseLedgerFile, planImport } from "../src/adopt.js";
-import type { RuleRow } from "../src/db.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	main as adoptMain,
+	parseAdoptArgs,
+	parseLedgerFile,
+	planImport,
+} from "../src/adopt.js";
+import {
+	listRulesByAgent,
+	openDb,
+	type RuleRow,
+	type WardenDb,
+} from "../src/db.js";
 import type { SharedRule } from "../src/share.js";
 
 function shared(body: string): SharedRule {
@@ -119,5 +132,54 @@ describe("planImport", () => {
 			],
 		);
 		expect(adopt).toHaveLength(1);
+	});
+});
+
+describe("main (in-process CLI)", () => {
+	let dir: string;
+	let db: WardenDb;
+	let logs: string[];
+	let spy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-adoptmain-"));
+		process.env.TOKEN_WARDEN_DB = join(dir, "warden.db");
+		db = openDb(join(dir, "warden.db"));
+		logs = [];
+		spy = vi.spyOn(console, "log").mockImplementation((m) => {
+			logs.push(String(m));
+		});
+	});
+
+	afterEach(() => {
+		spy.mockRestore();
+		db.close();
+		delete process.env.TOKEN_WARDEN_DB;
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("imports a valid ledger's rules as local candidates", () => {
+		const file = join(dir, "sql.rules.md");
+		writeFileSync(file, validLedger);
+		adoptMain({ from: file });
+		const rules = listRulesByAgent(db, "sql");
+		expect(rules).toHaveLength(1);
+		expect(rules[0]?.status).toBe("candidate");
+		// foreign delta discarded; rent recomputed locally (not the ledger's 13)
+		expect(rules[0]?.measured_delta).toBeNull();
+		expect(logs.join("\n")).toContain("Adopted 1 rule(s)");
+		expect(logs.join("\n")).toContain("UNVERIFIED");
+	});
+
+	it("throws when the ledger file is missing", () => {
+		expect(() => adoptMain({ from: join(dir, "nope.md") })).toThrow(
+			/not found/,
+		);
+	});
+
+	it("throws when the file has no valid ledger block", () => {
+		const file = join(dir, "bad.md");
+		writeFileSync(file, "# just a readme, no block");
+		expect(() => adoptMain({ from: file })).toThrow(/no valid/);
 	});
 });

@@ -1,10 +1,20 @@
-import { describe, expect, it } from "vitest";
-import type { RuleRow } from "../src/db.js";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	decideRule,
+	insertRule,
+	openDb,
+	type RuleRow,
+	type WardenDb,
+} from "../src/db.js";
 import {
 	formatLedger,
 	LEDGER_MARKER,
 	parseShareArgs,
 	type SharedLedger,
+	main as shareMain,
 	toSharedLedger,
 } from "../src/share.js";
 
@@ -112,5 +122,51 @@ describe("formatLedger", () => {
 			toSharedLedger("sql", [rule({ measured_delta: null })], "t"),
 		);
 		expect(out2).toContain("**n/a tokens/run**");
+	});
+});
+
+describe("main (in-process CLI)", () => {
+	let dir: string;
+	let db: WardenDb;
+	let logs: string[];
+	let spy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-sharemain-"));
+		process.env.TOKEN_WARDEN_DB = join(dir, "warden.db");
+		db = openDb(join(dir, "warden.db"));
+		logs = [];
+		spy = vi.spyOn(console, "log").mockImplementation((m) => {
+			logs.push(String(m));
+		});
+	});
+
+	afterEach(() => {
+		spy.mockRestore();
+		db.close();
+		delete process.env.TOKEN_WARDEN_DB;
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("writes a ledger of the agent's active rules to --out", () => {
+		const id = insertRule(db, {
+			agent: "sql",
+			body: "Use Grep before reading any file.",
+			contextCost: 8,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		decideRule(db, id, "active", 600, "earns its rent", "t");
+		const out = join(dir, "sql.rules.md");
+		shareMain({ agent: "sql", out });
+		const written = readFileSync(out, "utf8");
+		expect(written).toContain("Use Grep before reading any file.");
+		expect(written).toContain(LEDGER_MARKER);
+		expect(logs.join("\n")).toContain("Wrote 1 active sql rule(s)");
+	});
+
+	it("notes when there are no active rules to share", () => {
+		shareMain({ agent: "backend", out: join(dir, "backend.rules.md") });
+		expect(logs.join("\n")).toContain("no active rules yet");
 	});
 });

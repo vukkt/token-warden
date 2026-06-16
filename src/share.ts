@@ -110,7 +110,7 @@ export function parseShareArgs(argv: string[]): ShareArgs {
 	return args;
 }
 
-function main(args: ShareArgs): void {
+export function main(args: ShareArgs): void {
 	const db = openDb();
 	try {
 		const rules = getActiveRules(db, args.agent);
