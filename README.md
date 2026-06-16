@@ -276,6 +276,7 @@ the week's collected real-work tokens, it tells you to bench less.
 | `src/bench.ts` | Golden-suite runner; baseline freezing; meta-cost accounting |
 | `src/select.ts` | Keep/evict verdicts; round-robin re-audit; `MEMORY.md` compiler |
 | `src/status.ts` | Read-only reporting behind `/warden-status` |
+| `src/sanitize.ts` | `displayText` — the single presentation-security chokepoint (strips ANSI/control chars) for every untrusted string before it reaches a report, log, or approval prompt |
 | `src/gate.ts` | Inter-agent `SendMessage` approval gate (Agent Teams) |
 | `src/notify.ts` | SessionStart nudge when candidates await measurement |
 | `src/compare.ts` | Generic A/B comparison engine (processing-token verdict, variance top-up, `runComparison` orchestration) shared by model, prompt, and prompt-evolution benchmarking |
@@ -396,7 +397,7 @@ candidate, one re-audit). Mean completed tokens per task:
 npm run typecheck && npm run lint && npm run test
 ```
 
-The unit suite — ~220 tests across every module, shown passing by the CI badge above
+The unit suite — ~270 tests across every module, shown passing by the CI badge above
 (an exact count is left out of prose because it rots between releases) — covers the lot.
 The transcript parser carries the densest coverage
 (usage dedup, completion heuristics, malformed-line tolerance, a 5 MB / 2 s performance

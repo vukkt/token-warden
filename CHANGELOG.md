@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.14.0 — 2026-06-16
+
+Hardening and simplification release — no new commands; existing behavior is
+unchanged except that the inter-agent approval prompt is now injection-proof.
+
+- **Security: `gate.ts` approval prompt is sanitized.** The PreToolUse prompt
+  for an inter-agent `SendMessage` interpolated the sender, recipient, and
+  message body. A hostile teammate message could embed ANSI/control sequences
+  to forge or obscure the line the user approves. Every interpolated field now
+  passes through the shared sanitizer (control/ANSI stripped, agent names
+  capped); the forged-newline and escape-sequence vectors are closed.
+  Verified end-to-end.
+- **New `src/sanitize.ts`** — `displayText` extracted into a single
+  presentation-security chokepoint, used by `status`, `compare`, `attribute`,
+  and `gate`; `attribute`/`compare` no longer import it from the heavier
+  `status` module.
+- **Fixed: NUL bytes in `attribute.ts`.** `aggregateToolCosts` keyed its map
+  with NUL-delimited strings (literal `\x00` baked into the source) — invisible,
+  collision-prone, and treated as binary by tools. Replaced with a
+  collision-proof `JSON.stringify` key. New `test/source-hygiene.test.ts` fails
+  the build on any NUL/disallowed control byte in `src/` or `test/`.
+- **Simplification:** the run-total token sum is centralized in one
+  `RUN_TOTAL_TOKENS_SQL` constant (was hand-written 10×); the duplicated
+  candidate/re-audit verdict-decide path in `select.ts` is one `decide` helper.
+  Both behavior-preserving.
+- Added tests for `parseAgentDefinition`'s memory-scope isolation (benchmarks
+  never touch real agent-memory). 273 tests, green on Node 22 and 24.
+
 ## v0.13.0 — 2026-06-15
 
 Skill / MCP cost attribution (roadmap #5) — **#5 complete.** Decomposition, not
