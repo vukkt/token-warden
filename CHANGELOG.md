@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.14.1 — 2026-06-16
+
+Test-only hardening — no behavior or API change.
+
+- Locked the `assessDelta` degenerate-input boundaries that protect a keep/evict
+  verdict from a divide-by-zero `NaN`: a single comparable task yields a finite
+  point estimate with null standard error (the `savings.length >= 2` guard), and
+  no comparable task yields a null delta rather than `NaN`. An audit confirmed
+  the verdict math is otherwise free of divide-by-zero / `NaN` paths.
+- 275 tests, green on Node 22 and 24.
+
 ## v0.14.0 — 2026-06-16
 
 Hardening and simplification release — no new commands; existing behavior is
