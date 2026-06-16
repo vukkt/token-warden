@@ -22,6 +22,7 @@ import {
 	openDb,
 	type RunRow,
 	recentQuestionsFrom,
+	RUN_TOTAL_TOKENS_SQL,
 	type WardenDb,
 } from "./db.js";
 import { digestTranscript } from "./transcript.js";
@@ -71,7 +72,7 @@ export function shouldDistill(
 	// distillation on ordinary sessions.
 	const priors = db
 		.prepare<unknown[], { total: number }>(
-			`SELECT input_tokens + output_tokens + cache_creation + cache_read AS total
+			`SELECT ${RUN_TOTAL_TOKENS_SQL} AS total
 			 FROM runs WHERE agent = ? AND id != ? AND task_hash IS NULL
 			 ORDER BY ts DESC LIMIT ?`,
 		)

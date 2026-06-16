@@ -19,12 +19,13 @@ import {
 	type RealWorkPoint,
 	realWorkCurveByAgent,
 	realWorkCurveByProject,
+	RUN_TOTAL_TOKENS_SQL,
 	toolCostRollup,
 	type WardenDb,
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
 
-const TOTAL_SQL = "input_tokens + output_tokens + cache_creation + cache_read";
+const TOTAL_SQL = RUN_TOTAL_TOKENS_SQL;
 
 /**
  * Neutralize untrusted strings before rendering: rule bodies and eviction

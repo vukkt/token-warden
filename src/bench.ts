@@ -35,6 +35,7 @@ import {
 	type RuleRow,
 	type RunConfig,
 	recordBaseline,
+	RUN_TOTAL_TOKENS_SQL,
 	upsertRun,
 	type WardenDb,
 } from "./db.js";
@@ -517,7 +518,7 @@ export function realWorkTokensLast7Days(db: WardenDb): number {
 	const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 	const row = db
 		.prepare<unknown[], { total: number }>(
-			`SELECT COALESCE(SUM(input_tokens + output_tokens + cache_creation + cache_read), 0) AS total
+			`SELECT COALESCE(SUM(${RUN_TOTAL_TOKENS_SQL}), 0) AS total
 			 FROM runs WHERE task_hash IS NULL AND ts >= ?`,
 		)
 		.get(since);

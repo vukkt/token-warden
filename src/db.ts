@@ -5,6 +5,12 @@ import Database from "better-sqlite3";
 
 export type WardenDb = Database.Database;
 
+/** SQL expression for a run's total token cost — the four billable counters.
+ * Centralized so adding a token column can never silently drift across the
+ * queries that sum cost. */
+export const RUN_TOTAL_TOKENS_SQL =
+	"input_tokens + output_tokens + cache_creation + cache_read";
+
 /** DB lives outside any repo so the plugin works across projects. */
 export function defaultDbPath(): string {
 	return (
@@ -499,7 +505,7 @@ export function realWorkCurveByAgent(
 		.prepare<unknown[], RealWorkPoint>(
 			`SELECT ruleset_version AS rulesetVersion,
 				COUNT(*) AS runs,
-				CAST(AVG(input_tokens + output_tokens + cache_creation + cache_read) AS INTEGER) AS avgTokens
+				CAST(AVG(${RUN_TOTAL_TOKENS_SQL}) AS INTEGER) AS avgTokens
 			 FROM runs
 			 WHERE agent = ? AND task_hash IS NULL AND completed = 1
 			 GROUP BY ruleset_version ORDER BY ruleset_version`,
@@ -526,14 +532,14 @@ export function realWorkCurveByProject(
 			`SELECT COALESCE(project, '(unknown)') AS project,
 				ruleset_version AS rulesetVersion,
 				COUNT(*) AS runs,
-				CAST(AVG(input_tokens + output_tokens + cache_creation + cache_read) AS INTEGER) AS avgTokens
+				CAST(AVG(${RUN_TOTAL_TOKENS_SQL}) AS INTEGER) AS avgTokens
 			 FROM runs
 			 WHERE task_hash IS NULL AND completed = 1 AND agent != 'main'
 				AND COALESCE(project, '(unknown)') IN (
 					SELECT COALESCE(project, '(unknown)') FROM runs
 					WHERE task_hash IS NULL AND completed = 1 AND agent != 'main'
 					GROUP BY COALESCE(project, '(unknown)')
-					ORDER BY SUM(input_tokens + output_tokens + cache_creation + cache_read) DESC
+					ORDER BY SUM(${RUN_TOTAL_TOKENS_SQL}) DESC
 					LIMIT ?
 				)
 			 GROUP BY COALESCE(project, '(unknown)'), ruleset_version
@@ -552,7 +558,7 @@ export function recentRealWorkTotals(
 ): number[] {
 	return db
 		.prepare<unknown[], { total: number }>(
-			`SELECT input_tokens + output_tokens + cache_creation + cache_read AS total
+			`SELECT ${RUN_TOTAL_TOKENS_SQL} AS total
 			 FROM runs
 			 WHERE agent = ? AND id != ? AND task_hash IS NULL AND completed = 1
 			 ORDER BY ts DESC LIMIT ?`,
@@ -573,7 +579,7 @@ export function projectUsage(db: WardenDb, limit: number): ProjectUsage[] {
 		.prepare<unknown[], ProjectUsage>(
 			`SELECT project,
 				COUNT(*) AS runs,
-				COALESCE(SUM(input_tokens + output_tokens + cache_creation + cache_read), 0) AS tokens
+				COALESCE(SUM(${RUN_TOTAL_TOKENS_SQL}), 0) AS tokens
 			 FROM runs WHERE task_hash IS NULL
 			 GROUP BY project ORDER BY tokens DESC LIMIT ?`,
 		)
