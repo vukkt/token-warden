@@ -32,12 +32,21 @@ exec > >(tee -a "${LOG}") 2>&1
 log()  { echo; echo "════ $* ════"; }
 note() { echo "  · $*"; }
 
+# Portable timeout — macOS ships no GNU `timeout`. Prefer it / gtimeout if
+# present, else fall back to perl's alarm (always available on macOS).
+tmo() {
+	local secs="$1"; shift
+	if   command -v timeout  >/dev/null 2>&1; then timeout  "${secs}" "$@"
+	elif command -v gtimeout >/dev/null 2>&1; then gtimeout "${secs}" "$@"
+	else perl -e 'alarm shift; exec @ARGV' "${secs}" "$@"; fi
+}
+
 # Run a command with a timeout; log success/failure but NEVER abort the script.
 phase() {
 	local name="$1"; shift
 	if (( $(date +%s) > DEADLINE )); then note "SKIP ${name} (over budget)"; return 1; fi
 	echo ">> ${name}"
-	if timeout "${PHASE_TIMEOUT:-2400}" "$@"; then echo "<< ${name} OK"; return 0
+	if tmo "${PHASE_TIMEOUT:-2400}" "$@"; then echo "<< ${name} OK"; return 0
 	else local rc=$?; echo "<< ${name} FAILED (rc=${rc})"; return "${rc}"; fi
 }
 
@@ -55,8 +64,8 @@ echo "budget=${BUDGET_SECONDS}s, results=${RESULTS}"
 
 # Cheapest-possible quota probe; abort early (cleanly) if the limit isn't back.
 log "Quota probe"
-if echo "ping" | timeout 120 claude -p "Reply with the single word: ready" \
-	--max-turns 1 --output-format json > "${RESULTS}/probe.json" 2>>"${LOG}"; then
+if tmo 120 claude -p "Reply with the single word: ready" \
+	--output-format json > "${RESULTS}/probe.json" 2>>"${LOG}"; then
 	note "probe OK — quota is available, proceeding"
 else
 	note "probe FAILED — quota likely still exhausted. Aborting cleanly; reschedule."
@@ -108,7 +117,7 @@ run_real_session() {
 	local prompt sid tpath out
 	prompt=$(printf "${TASK_TEMPLATE}" "${feat}" "${feat}" "${feat}")
 	if (( $(date +%s) > DEADLINE )); then note "SKIP real session ${label} (over budget)"; return 1; fi
-	out=$( cd "${BURN}" && timeout 1500 claude -p "${prompt}" \
+	out=$( cd "${BURN}" && tmo 1500 claude -p "${prompt}" \
 		--agent sql --plugin-dir "${PLUGIN}" --permission-mode acceptEdits \
 		--max-turns 50 --output-format json 2>>"${LOG}" ) \
 		|| { note "[${label}] claude session failed"; return 1; }
