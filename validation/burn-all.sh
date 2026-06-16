@@ -139,7 +139,10 @@ run_real_session() {
 	[ -z "${sid}" ] && { note "[${label}] no session_id in output"; return 1; }
 	tpath=$(find "${HOME}/.claude/projects" -name "${sid}.jsonl" -print -quit 2>/dev/null || true)
 	[ -z "${tpath}" ] && { note "[${label}] transcript not found for ${sid}"; return 1; }
-	printf '{"session_id":"%s","transcript_path":"%s","hook_event_name":"Stop","cwd":"%s"}' \
+	# agent_type=sql so the collector attributes the session to the sql agent
+	# (a `claude -p --agent sql` transcript reads as 'main' otherwise, and
+	# distillation only fires for domain agents).
+	printf '{"session_id":"%s","transcript_path":"%s","hook_event_name":"Stop","cwd":"%s","agent_type":"sql"}' \
 		"${sid}" "${tpath}" "${BURN}" \
 		| ( cd "${PLUGIN}" && npx tsx src/collect.ts ) >>"${LOG}" 2>&1
 	note "[${label}] collected ${sid}"

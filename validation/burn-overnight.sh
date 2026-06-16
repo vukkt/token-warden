@@ -42,9 +42,11 @@ run_chunk() {
 	done
 }
 
-# The queue — highest-value untested chunks. Each is ~one quota window.
+# The queue — highest-value untested chunks first. Each is ~one quota window.
+# sql-realwork is THE learning test (now with correct sql attribution); run it
+# first so a fresh window goes to it, not the lower-value controlled chunks.
+run_chunk "sql-realwork"        BURN_T1_AGENTS=
 run_chunk "testing-controlled"  BURN_T1_AGENTS=testing BURN_SKIP_T2=1
-run_chunk "sql-realwork-2"      BURN_T1_AGENTS=
 run_chunk "backend-controlled"  BURN_T1_AGENTS=backend BURN_SKIP_T2=1
 
 # Compile a single human-readable summary of every run captured tonight.
