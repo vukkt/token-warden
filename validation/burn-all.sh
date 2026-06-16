@@ -114,6 +114,9 @@ done
 # ── Track 2 · real-work distillation on warden-burn-sql (sql) ────────────────
 # Tests the LEARNING: real sessions → distill organic candidates → select →
 # do later sessions get cheaper? Snapshots real memory first.
+if [ -n "${BURN_SKIP_T2:-}" ]; then
+	log "Track 2 · skipped (BURN_SKIP_T2)"
+else
 log "Track 2 · real-work distillation · sql"
 [ -f "${MEM_REAL}" ] && cp -f "${MEM_REAL}" "${MEM_BAK}" && note "snapshotted real sql memory"
 export TOKEN_WARDEN_DB="${RESULTS}/realwork-sql.db"
@@ -154,6 +157,7 @@ note "waiting 180s for detached distillers to finish…"; sleep 180
 # v1 — features 8–10 (now with any compiled rule in the sql agent's memory)
 for i in 7 8 9; do run_real_session "v1-feat$((i+1))" "${FEATURES[$i]}"; done
 ( cd "${PLUGIN}" && npx tsx src/status.ts )  > "${RESULTS}/status-realwork-v1.txt" 2>>"${LOG}" || true
+fi
 
 log "DONE"
 echo "burn done $(date)"
