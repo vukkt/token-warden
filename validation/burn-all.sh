@@ -98,7 +98,7 @@ db.close(); console.log("candidate injected for " + process.env.WARDEN_AGENT);
 '
 }
 
-for AGENT in sql testing; do
+for AGENT in ${BURN_T1_AGENTS-sql testing}; do
 	log "Track 1 · controlled validation · ${AGENT}"
 	export TOKEN_WARDEN_DB="${RESULTS}/validation-${AGENT}.db"
 	rm -f "${TOKEN_WARDEN_DB}"*
