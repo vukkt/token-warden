@@ -232,7 +232,7 @@ export function parseEvolveArgs(argv: string[]): EvolveArgs {
 	return args;
 }
 
-function main(args: EvolveArgs): void {
+export function main(args: EvolveArgs): void {
 	const agentPath = join(pluginRoot, "agents", `${args.agent}.md`);
 	const current = readFileSync(agentPath, "utf8");
 

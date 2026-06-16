@@ -228,7 +228,7 @@ export function parseDistillArgs(argv: string[]): DistillArgs {
 	return { runId, transcriptPath };
 }
 
-function distill(args: DistillArgs): void {
+export function distill(args: DistillArgs): void {
 	const db = openDb();
 	try {
 		const run = db

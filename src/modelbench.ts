@@ -97,7 +97,7 @@ export function parseModelbenchArgs(argv: string[]): ModelbenchArgs {
 	return args;
 }
 
-function main(args: ModelbenchArgs): void {
+export function main(args: ModelbenchArgs): void {
 	const db = openDb();
 	try {
 		const baselineModel =

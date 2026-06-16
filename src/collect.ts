@@ -109,7 +109,7 @@ function subagentTranscriptPath(
 	);
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
 	const payload = hookPayloadSchema.parse(JSON.parse(await readStdin()));
 
 	// SubagentStop events record the subagent's work under a suffixed session

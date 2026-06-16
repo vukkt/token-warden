@@ -139,7 +139,7 @@ async function readStdin(): Promise<string> {
 	return Buffer.concat(chunks).toString("utf8");
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
 	const isPost = process.argv.includes("--post");
 	const message = extractMessage(JSON.parse(await readStdin()));
 	if (message === null) return;

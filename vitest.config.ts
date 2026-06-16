@@ -16,10 +16,10 @@ export default defineConfig({
 			// Ratchet floor — CI fails if coverage regresses below this. Raised
 			// as tests are added; the goal is ~90% on the pure (non-CLI) logic.
 			thresholds: {
-				lines: 73,
-				statements: 73,
-				functions: 78,
-				branches: 66,
+				lines: 89,
+				statements: 88,
+				functions: 92,
+				branches: 77,
 			},
 		},
 	},

@@ -97,7 +97,7 @@ export function parsePromptbenchArgs(argv: string[]): PromptbenchArgs {
 	return args;
 }
 
-function main(args: PromptbenchArgs): void {
+export function main(args: PromptbenchArgs): void {
 	if (!existsSync(args.variant)) {
 		throw new Error(`variant file not found: ${args.variant}`);
 	}
