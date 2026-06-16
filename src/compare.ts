@@ -21,8 +21,9 @@ import {
 	type TaskSummary,
 } from "./bench.js";
 import { getRunBySession, type WardenDb } from "./db.js";
+import { displayText } from "./sanitize.js";
 import { assessDelta, type DeltaAssessment } from "./select.js";
-import { displayText, pctChange } from "./status.js";
+import { pctChange } from "./status.js";
 
 /** One golden-task run reduced to the token measures comparison needs. */
 export interface RunDatum {

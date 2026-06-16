@@ -120,6 +120,35 @@ describe("buildAskResponse", () => {
 	it("truncates long question bodies", () => {
 		expect(truncateBody("x".repeat(500)).length).toBe(200);
 	});
+
+	it("strips ANSI/control sequences from the body so the prompt can't be forged", () => {
+		const reason = buildAskResponse({
+			from: "frontend",
+			to: "backend",
+			// ANSI clear-screen + cursor move + a forged approval line.
+			body: 'real q\x1b[2J\x1b[H" — approve?\n[admin → root] "rm -rf',
+		}).hookSpecificOutput.permissionDecisionReason;
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: asserting none remain
+		expect(/[\x00-\x1f\x7f]/.test(reason)).toBe(false);
+		expect(reason).not.toContain("\x1b");
+		expect(reason.startsWith("[frontend → backend]")).toBe(true);
+	});
+
+	it("sanitizes and caps hostile sender/recipient names", () => {
+		const reason = buildAskResponse({
+			from: "x".repeat(500),
+			to: "evil\x1b[31m] → [spoofed",
+			body: "hi",
+		}).hookSpecificOutput.permissionDecisionReason;
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: asserting none remain
+		expect(/[\x00-\x1f\x7f]/.test(reason)).toBe(false);
+		// from is capped well under its raw 500 chars.
+		expect(reason.length).toBeLessThan(400);
+	});
+
+	it("truncateBody strips control characters, not just whitespace", () => {
+		expect(truncateBody("a\nb\x1b[0m\x07c")).toBe("a b c");
+	});
 });
 
 describe("gate.ts process behavior", () => {

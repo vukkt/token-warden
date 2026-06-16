@@ -32,7 +32,7 @@ import {
 	toolCostRollup,
 	type WardenDb,
 } from "./db.js";
-import { displayText } from "./status.js";
+import { displayText } from "./sanitize.js";
 import { parseTranscript } from "./transcript.js";
 import type { RawToolEvent } from "./types.js";
 

@@ -22,9 +22,13 @@ import {
 	insertQuestion,
 	openDb,
 } from "./db.js";
+import { displayText } from "./sanitize.js";
 
 const GATED_TOOL = "SendMessage";
 const PREVIEW_CHARS = 200;
+/** Cap on a sanitized agent name shown in the approval prompt — a hostile
+ * `recipient` value must not flood or smuggle structure into the line. */
+const NAME_CHARS = 60;
 /** Cap on the question body persisted to SQLite — a single chatty or
  * hostile teammate message must not bloat the ledger. Applied identically
  * at insert and approve time so the pending-row match still works. */
@@ -95,9 +99,13 @@ export function extractMessage(payload: unknown): GatedMessage | null {
 	return { from, to, body };
 }
 
+/** One-line, length-capped, control/ANSI-stripped form of an untrusted
+ * message body. Delegates to the shared sanitizer so a hostile teammate
+ * message cannot forge the approval prompt, the stored ledger row, or a log
+ * line. Used identically at insert and approve time so the pending-row match
+ * still holds. */
 export function truncateBody(body: string, max = PREVIEW_CHARS): string {
-	const oneLine = body.replace(/\s+/g, " ").trim();
-	return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
+	return displayText(body, max);
 }
 
 export interface AskResponse {
@@ -109,11 +117,16 @@ export interface AskResponse {
 }
 
 export function buildAskResponse(message: GatedMessage): AskResponse {
+	// Every interpolated field is untrusted: `body` and `to` come straight from
+	// the tool input, `from` from the harness. Sanitize each so the prompt the
+	// user approves cannot be forged with ANSI/control sequences or flooded.
+	const from = displayText(message.from, NAME_CHARS);
+	const to = displayText(message.to, NAME_CHARS);
 	return {
 		hookSpecificOutput: {
 			hookEventName: "PreToolUse",
 			permissionDecision: "ask",
-			permissionDecisionReason: `[${message.from} → ${message.to}] "${truncateBody(message.body)}" — approve?`,
+			permissionDecisionReason: `[${from} → ${to}] "${truncateBody(message.body)}" — approve?`,
 		},
 	};
 }
@@ -134,6 +147,9 @@ async function main(): Promise<void> {
 	const db = openDb();
 	try {
 		const storedBody = truncateBody(message.body, STORED_BODY_CHARS);
+		// Sanitize the route for the log file too; from/to are stored raw and
+		// sanitized at render time (status.ts), matching the rule-body pattern.
+		const route = `${displayText(message.from, NAME_CHARS)} → ${displayText(message.to, NAME_CHARS)}`;
 		if (isPost) {
 			const marked = approveLatestQuestion(
 				db,
@@ -142,7 +158,7 @@ async function main(): Promise<void> {
 				storedBody,
 			);
 			logLine(
-				`approved [${message.from} → ${message.to}]${marked ? "" : " (no pending row matched)"}`,
+				`approved [${route}]${marked ? "" : " (no pending row matched)"}`,
 			);
 		} else {
 			insertQuestion(
@@ -152,9 +168,7 @@ async function main(): Promise<void> {
 				storedBody,
 				new Date().toISOString(),
 			);
-			logLine(
-				`asked [${message.from} → ${message.to}] "${truncateBody(message.body, 80)}"`,
-			);
+			logLine(`asked [${route}] "${truncateBody(message.body, 80)}"`);
 			console.log(JSON.stringify(buildAskResponse(message)));
 		}
 	} finally {

@@ -23,25 +23,10 @@ import {
 	toolCostRollup,
 	type WardenDb,
 } from "./db.js";
+import { displayText } from "./sanitize.js";
 import { DOMAIN_AGENTS } from "./types.js";
 
 const TOTAL_SQL = RUN_TOTAL_TOKENS_SQL;
-
-/**
- * Neutralize untrusted strings before rendering: rule bodies and eviction
- * reasons are model-generated, project paths and question senders come from
- * the environment. Stripping ANSI/control characters and collapsing
- * newlines means collected data cannot fake report lines or sections;
- * clamping keeps one weird value from flooding the report.
- */
-export function displayText(value: string, max = 300): string {
-	const cleaned = value
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point
-		.replace(/\x1b\[[0-9;]*[A-Za-z]|[\x00-\x1f\x7f]+/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-	return cleaned.length <= max ? cleaned : `${cleaned.slice(0, max - 1)}…`;
-}
 
 /** Signed percent change of current vs baseline, e.g. "-5.7%". */
 export function pctChange(current: number, baseline: number): string {

@@ -13,12 +13,7 @@ import {
 	type WardenDb,
 } from "../src/db.js";
 import { verdictWithReason } from "../src/select.js";
-import {
-	displayText,
-	pctChange,
-	renderStatus,
-	suiteComparison,
-} from "../src/status.js";
+import { pctChange, renderStatus, suiteComparison } from "../src/status.js";
 
 let dir: string;
 let db: WardenDb;
@@ -56,15 +51,7 @@ function seedGoldenRun(
 	});
 }
 
-describe("displayText", () => {
-	it("strips control characters, ANSI escapes, and newlines", () => {
-		expect(displayText("a\nb\r\nc\x1b[31mred\x1b[0m\x07d")).toBe("a b c red d");
-	});
-
-	it("clamps runaway values", () => {
-		expect(displayText("x".repeat(1000)).length).toBe(300);
-	});
-
+describe("renderStatus sanitization", () => {
 	it("neutralizes report-structure forgery in rendered fields", () => {
 		const db2 = db;
 		insertRule(db2, {
