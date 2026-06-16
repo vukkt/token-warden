@@ -213,6 +213,7 @@ Active rules land in the agent's memory; the next session starts cheaper.
 | `/warden-share <agent> [--out path]` | Exports the agent's active rules (with measured deltas + provenance) to a committed, reviewable file so a team can version and review agent memory like code |
 | `/warden-adopt --from <path>` | Imports a shared rule ledger as local *candidates* — the foreign delta is discarded and each rule must be re-measured on your own golden suite before it enters memory |
 | `/warden-attribute [--agent a] [--kind builtin\|mcp\|skill] [--transcript path] [--json]` | Attributes real-work token footprint to the tools, skills, and MCP servers that produced it — cross-session by default, or one transcript with `--transcript`. Decomposition only; it never changes a rule verdict |
+| `/warden-receipt [--agent a] [--json]` | The per-rule verdict card: token savings vs. context rent (with variance + ROI), per-task pass/fail and the tool-call/file-reread activity profile with vs. without the rule, plus the model and golden-suite hash it was measured under. Read-only evidence behind each keep/evict decision |
 
 When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
 nudge into new sessions — selection itself always stays a user decision, because it
@@ -304,13 +305,15 @@ the week's collected real-work tokens, it tells you to bench less.
 | `src/adopt.ts` | Import a shared ledger as local candidates (foreign delta discarded; re-measured locally) |
 | `src/verify-ledger.ts` | Deterministic, offline CI gate that fails a PR corrupting a committed ledger |
 | `src/attribute.ts` | Cost attribution: decompose real-work token footprint per tool, skill, and MCP server (decomposition only; orthogonal to the verdict path) |
+| `src/receipt.ts` | Rule receipts behind `/warden-receipt`: render the per-rule verdict card (economics + quality axis + provenance) the selector records at each decision |
 
 Data model (`~/.token-warden/warden.db`): `runs` (one row per session or golden run,
 tagged `real`/`active`/`candidate`/`audit`), `rules` (the ledger — candidates, active
 rules with measured deltas, and evicted rules kept as the negative dataset),
 `baselines` (frozen `run1_tokens`, ratcheting `best_tokens`), `ruleset_versions`,
-`questions` (the inter-agent ledger), and `tool_costs` (per-session tool/skill/MCP
-footprint behind `/warden-attribute`). Every deviation from the original specification is
+`questions` (the inter-agent ledger), `tool_costs` (per-session tool/skill/MCP
+footprint behind `/warden-attribute`), and `rule_receipts` (the per-decision
+verdict snapshot behind `/warden-receipt`). Every deviation from the original specification is
 documented in [`DECISIONS.md`](DECISIONS.md).
 
 ---
@@ -414,7 +417,7 @@ candidate, one re-audit). Mean completed tokens per task:
 npm run typecheck && npm run lint && npm run test
 ```
 
-The unit suite — ~270 tests across every module, shown passing by the CI badge above
+The unit suite — ~290 tests across every module, shown passing by the CI badge above
 (an exact count is left out of prose because it rots between releases) — covers the lot.
 The transcript parser carries the densest coverage
 (usage dedup, completion heuristics, malformed-line tolerance, a 5 MB / 2 s performance

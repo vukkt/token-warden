@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.16.0 — 2026-06-16
+
+Rule receipts — the per-rule verdict card (community-suggested).
+
+- **New `/warden-receipt` command** (`npx tsx src/receipt.ts [--agent <name>]
+  [--json]`) renders the evidence behind each keep/evict decision as one card:
+  token savings vs. context rent (with variance and ROI multiple), the model and
+  golden-suite hash it was measured under, per-task pass/fail with vs. without
+  the rule, and the tool-call / file-reread **activity profile** with vs. without
+  (shown as a signed % so a reviewer can see whether a "cheap" rule did less
+  work). Read-only; the natural payload for sharing a rule — "my delta is
+  evidence, not authority for your repo."
+- The selector now records a receipt snapshot (`rule_receipts` table, migration
+  #9) at every decision — initial and each re-audit, so a rule has an audit
+  trail. **The keep/evict verdict logic is unchanged**; receipts are additive
+  capture. `RunResult` now carries tool-call / file-reread counts; `bench.ts`
+  gains `goldenSuiteHash` for suite provenance.
+- The safety axis is surfaced, not auto-judged: a big activity drop is usually
+  the *point* of an efficiency rule, so the receipt shows the numbers and leaves
+  the call to a human — the binding safety gate remains the per-task pass/fail
+  regression, which evicts on its own.
+- 292 tests, green on Node 22 and 24.
+
 ## v0.15.0 — 2026-06-16
 
 Tooling and docs — no plugin behavior change.

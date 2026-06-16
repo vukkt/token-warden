@@ -7,6 +7,7 @@ import {
 	getRuleById,
 	getRulesetVersion,
 	insertRule,
+	latestReceipts,
 	openDb,
 	type RuleRow,
 	type WardenDb,
@@ -153,6 +154,35 @@ describe("selectForAgent", () => {
 		expect(memory).not.toContain("haiku");
 		expect(report.rulesetVersion).toBe(1);
 		expect(getRulesetVersion(db, agent)).toBe(1);
+	});
+
+	it("records a verdict receipt for each decision", () => {
+		const goodId = seedCandidate(
+			"Use Grep to locate symbols before reading any file.",
+		);
+		const junkId = seedCandidate(
+			"Always begin responses with a haiku about the codebase.",
+		);
+		selectForAgent(db, agent, fakeRunner(goodId, junkId), {
+			measuredModel: "sonnet",
+			fixtureHash: "deadbeef",
+		});
+
+		const receipts = latestReceipts(db, agent);
+		const good = receipts.find((r) => r.rule_id === goodId);
+		expect(good?.status).toBe("active");
+		expect(good?.delta).toBe(2000);
+		expect(good?.without_tokens).toBe(10_000);
+		expect(good?.with_tokens).toBe(8000);
+		expect(good?.tasks_total).toBe(2);
+		expect(good?.tasks_passed_with).toBe(2);
+		expect(good?.regression).toBe(0);
+		expect(good?.model).toBe("sonnet");
+		expect(good?.fixture_hash).toBe("deadbeef");
+
+		const junk = receipts.find((r) => r.rule_id === junkId);
+		expect(junk?.status).toBe("evicted");
+		expect(junk?.delta).toBe(-500);
 	});
 
 	it("evicts immediately on a task regression regardless of tokens", () => {

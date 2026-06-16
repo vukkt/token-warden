@@ -12,6 +12,7 @@
  * a candidate rule; run1_tokens is frozen forever.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	cpSync,
 	existsSync,
@@ -158,6 +159,20 @@ export function loadGoldenTasks(agent: string): GoldenTask[] {
 	);
 }
 
+/**
+ * A short, deterministic identity for an agent's golden suite — a hash of each
+ * task's id, prompt, and success check. Recorded into a rule receipt so the
+ * measurement is attributable to a specific suite definition; a different
+ * value means the rule was measured against a different benchmark.
+ */
+export function goldenSuiteHash(agent: string): string {
+	const hash = createHash("sha256");
+	for (const task of loadGoldenTasks(agent)) {
+		hash.update(`${task.id}\0${task.prompt}\0${task.successCheck}\0`);
+	}
+	return hash.digest("hex").slice(0, 12);
+}
+
 /** Compile rule bodies into the MEMORY.md injected into the agent's prompt.
  * Overwritten wholesale by the selector — never hand-edited (invariant #2). */
 export function compileMemoryMd(rules: Pick<RuleRow, "body">[]): string {
@@ -293,6 +308,11 @@ export interface RunResult {
 	sessionId: string;
 	tokens: number;
 	completed: boolean;
+	/** Distinct tool calls in the run; absent for synthetic/failed runs (read
+	 * as 0). The "did this rule skip work" signal for rule receipts. */
+	toolCalls?: number;
+	/** Files read 2+ times in the run; absent for synthetic/failed runs. */
+	fileRereads?: number;
 }
 
 function runOnce(
@@ -386,7 +406,13 @@ function runOnce(
 			recordBaseline(db, task.agent, task.id, tokens, ts);
 		}
 
-		return { sessionId, tokens, completed };
+		return {
+			sessionId,
+			tokens,
+			completed,
+			toolCalls: parsed.toolCalls,
+			fileRereads: parsed.fileRereads,
+		};
 	} finally {
 		rmSync(workDir, { recursive: true, force: true });
 	}

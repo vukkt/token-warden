@@ -104,6 +104,33 @@ const MIGRATIONS: readonly string[] = [
 		PRIMARY KEY (run_id, kind, grp, label)
 	);
 	`,
+	`
+	CREATE TABLE IF NOT EXISTS rule_receipts (
+		rule_id INTEGER NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+		agent TEXT NOT NULL,
+		decided_at TEXT NOT NULL,
+		status TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		reason TEXT,
+		model TEXT,
+		fixture_hash TEXT,
+		runs INTEGER NOT NULL,
+		delta INTEGER,
+		context_cost INTEGER NOT NULL,
+		standard_error INTEGER,
+		regression INTEGER NOT NULL DEFAULT 0,
+		with_tokens INTEGER NOT NULL,
+		without_tokens INTEGER NOT NULL,
+		with_tool_calls INTEGER NOT NULL,
+		without_tool_calls INTEGER NOT NULL,
+		with_file_rereads INTEGER NOT NULL,
+		without_file_rereads INTEGER NOT NULL,
+		tasks_total INTEGER NOT NULL,
+		tasks_passed_with INTEGER NOT NULL,
+		tasks_passed_without INTEGER NOT NULL,
+		PRIMARY KEY (rule_id, decided_at)
+	);
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -679,6 +706,119 @@ export function toolCostRollup(
 			filter.kind ?? null,
 			filter.limit,
 		);
+}
+
+/**
+ * A full verdict snapshot recorded when the selector decides a rule. Beyond
+ * the token delta it captures the *quality* axis — per-task pass/fail and the
+ * tool-call / file-reread activity with vs. without the rule — so a "false
+ * economy" rule (cheap because it skipped necessary work) is visible, plus the
+ * provenance needed to trust the receipt elsewhere (model, suite hash).
+ */
+export interface NewReceipt {
+	ruleId: number;
+	agent: string;
+	decidedAt: string;
+	status: string;
+	kind: string;
+	reason: string;
+	model: string | null;
+	fixtureHash: string | null;
+	runs: number;
+	delta: number | null;
+	contextCost: number;
+	standardError: number | null;
+	regression: boolean;
+	withTokens: number;
+	withoutTokens: number;
+	withToolCalls: number;
+	withoutToolCalls: number;
+	withFileRereads: number;
+	withoutFileRereads: number;
+	tasksTotal: number;
+	tasksPassedWith: number;
+	tasksPassedWithout: number;
+}
+
+export interface ReceiptRow {
+	rule_id: number;
+	agent: string;
+	decided_at: string;
+	status: string;
+	kind: string;
+	reason: string | null;
+	model: string | null;
+	fixture_hash: string | null;
+	runs: number;
+	delta: number | null;
+	context_cost: number;
+	standard_error: number | null;
+	regression: number;
+	with_tokens: number;
+	without_tokens: number;
+	with_tool_calls: number;
+	without_tool_calls: number;
+	with_file_rereads: number;
+	without_file_rereads: number;
+	tasks_total: number;
+	tasks_passed_with: number;
+	tasks_passed_without: number;
+	/** The rule body, joined from `rules` for rendering. */
+	body: string;
+}
+
+/** Append a verdict receipt. One row per decision event (initial + each
+ * re-audit), keyed by rule and timestamp — the audit trail of a rule. */
+export function recordReceipt(db: WardenDb, receipt: NewReceipt): void {
+	db.prepare(
+		`INSERT OR REPLACE INTO rule_receipts (
+			rule_id, agent, decided_at, status, kind, reason, model, fixture_hash,
+			runs, delta, context_cost, standard_error, regression,
+			with_tokens, without_tokens, with_tool_calls, without_tool_calls,
+			with_file_rereads, without_file_rereads,
+			tasks_total, tasks_passed_with, tasks_passed_without
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	).run(
+		receipt.ruleId,
+		receipt.agent,
+		receipt.decidedAt,
+		receipt.status,
+		receipt.kind,
+		receipt.reason,
+		receipt.model,
+		receipt.fixtureHash,
+		receipt.runs,
+		receipt.delta,
+		receipt.contextCost,
+		receipt.standardError,
+		receipt.regression ? 1 : 0,
+		receipt.withTokens,
+		receipt.withoutTokens,
+		receipt.withToolCalls,
+		receipt.withoutToolCalls,
+		receipt.withFileRereads,
+		receipt.withoutFileRereads,
+		receipt.tasksTotal,
+		receipt.tasksPassedWith,
+		receipt.tasksPassedWithout,
+	);
+}
+
+/** The most recent receipt per rule for an agent, joined with the rule body,
+ * best measured savings first. */
+export function latestReceipts(db: WardenDb, agent: string): ReceiptRow[] {
+	return db
+		.prepare<unknown[], ReceiptRow>(
+			`SELECT rc.*, r.body AS body
+			 FROM rule_receipts rc
+			 JOIN rules r ON r.id = rc.rule_id
+			 WHERE rc.agent = ?
+				AND rc.decided_at = (
+					SELECT MAX(decided_at) FROM rule_receipts WHERE rule_id = rc.rule_id
+				)
+			 ORDER BY (rc.delta IS NULL), rc.delta DESC, rc.rule_id ASC`,
+		)
+		.all(agent);
 }
 
 /** Pending candidate counts per agent — the SessionStart nudge. */

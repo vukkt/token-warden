@@ -21,6 +21,8 @@ import {
 	assertPosixPlatform,
 	compileMemoryMd,
 	type GoldenTask,
+	goldenSuiteHash,
+	loadAgentDefinition,
 	loadGoldenTasks,
 	runSuite,
 	summarizeTask,
@@ -35,6 +37,7 @@ import {
 	oldestDecidedActiveRule,
 	openDb,
 	type RuleRow,
+	recordReceipt,
 	type WardenDb,
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
@@ -224,6 +227,38 @@ export interface SelectOptions {
 	 * within one standard error of flipping. Bounded cost: each top-up is
 	 * one more suite invocation of the measured configuration. */
 	topUpBudget?: number;
+	/** Recorded into each rule receipt for provenance: the model the suite ran
+	 * under and a hash of the golden suite it was measured against. */
+	measuredModel?: string | null;
+	fixtureHash?: string | null;
+}
+
+interface SideAggregate {
+	/** Completed runs on this side. */
+	runs: number;
+	tokens: number;
+	toolCalls: number;
+	fileRereads: number;
+	/** Tasks with at least one completed run. */
+	tasksPassed: number;
+}
+
+/** Mean token/activity profile over the completed runs of one configuration —
+ * the raw material for the quality axis of a rule receipt. */
+function aggregateSide(summaries: TaskSummary[]): SideAggregate {
+	const completed = summaries
+		.flatMap((s) => s.results)
+		.filter((r) => r.completed);
+	const meanOf = (xs: number[]): number =>
+		xs.length === 0 ? 0 : Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
+	return {
+		runs: completed.length,
+		tokens: meanOf(completed.map((r) => r.tokens)),
+		toolCalls: meanOf(completed.map((r) => r.toolCalls ?? 0)),
+		fileRereads: meanOf(completed.map((r) => r.fileRereads ?? 0)),
+		tasksPassed: summaries.filter((s) => s.results.some((r) => r.completed))
+			.length,
+	};
 }
 
 export function selectForAgent(
@@ -246,7 +281,11 @@ export function selectForAgent(
 		measureOnce: (suffix: string) => TaskSummary[],
 		contextCost: number,
 		invert: boolean,
-	): { assessment: DeltaAssessment; toppedUp: boolean } {
+	): {
+		assessment: DeltaAssessment;
+		toppedUp: boolean;
+		measured: TaskSummary[];
+	} {
 		let measured = measureOnce("");
 		const assess = () =>
 			invert
@@ -259,7 +298,7 @@ export function selectForAgent(
 			assessment = assess();
 			toppedUp = true;
 		}
-		return { assessment, toppedUp };
+		return { assessment, toppedUp, measured };
 	}
 
 	const decisions: Decision[] = [];
@@ -282,7 +321,7 @@ export function selectForAgent(
 			evictWhenUncertain: boolean;
 			reasonPrefix: string;
 		}): void => {
-			const { assessment, toppedUp } = assessWithTopUp(
+			const { assessment, toppedUp, measured } = assessWithTopUp(
 				() => baseline,
 				params.measureOnce,
 				params.rule.context_cost,
@@ -297,14 +336,44 @@ export function selectForAgent(
 				toppedUp,
 				params.evictWhenUncertain,
 			);
-			decideRule(
-				db,
-				params.rule.id,
+			const fullReason = params.reasonPrefix + reason;
+			const decidedAt = new Date().toISOString();
+			decideRule(db, params.rule.id, status, delta, fullReason, decidedAt);
+
+			// Verdict above is unchanged; the receipt is an additive snapshot.
+			// `measured` is the with-rule side for a candidate (rule added) and
+			// the without-rule side for a re-audit (rule removed), so map both
+			// onto a stable with/without frame for the quality axis.
+			const withSide = aggregateSide(params.invert ? baseline : measured);
+			const withoutSide = aggregateSide(params.invert ? measured : baseline);
+			recordReceipt(db, {
+				ruleId: params.rule.id,
+				agent,
+				decidedAt,
 				status,
+				kind: params.kind,
+				reason: fullReason,
+				model: options.measuredModel ?? null,
+				fixtureHash: options.fixtureHash ?? null,
+				runs: Math.max(withSide.runs, withoutSide.runs),
 				delta,
-				params.reasonPrefix + reason,
-				new Date().toISOString(),
-			);
+				contextCost: params.rule.context_cost,
+				standardError:
+					assessment.standardError === null
+						? null
+						: Math.round(assessment.standardError),
+				regression,
+				withTokens: withSide.tokens,
+				withoutTokens: withoutSide.tokens,
+				withToolCalls: withSide.toolCalls,
+				withoutToolCalls: withoutSide.toolCalls,
+				withFileRereads: withSide.fileRereads,
+				withoutFileRereads: withoutSide.fileRereads,
+				tasksTotal: baseline.length,
+				tasksPassedWith: withSide.tasksPassed,
+				tasksPassedWithout: withoutSide.tasksPassed,
+			});
+
 			decisions.push({
 				rule: params.rule,
 				kind: params.kind,
@@ -469,6 +538,8 @@ function main(args: SelectArgs): void {
 		);
 		const report = selectForAgent(db, args.agent, runner, {
 			topUpBudget: args.topUp,
+			measuredModel: loadAgentDefinition(args.agent).model,
+			fixtureHash: goldenSuiteHash(args.agent),
 		});
 
 		if (report.decisions.length === 0) {

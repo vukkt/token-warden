@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	compileMemoryMd,
+	goldenSuiteHash,
 	loadGoldenTasks,
 	parseAgentDefinition,
 	parseArgs,
@@ -206,5 +207,17 @@ describe("parseAgentDefinition (memory-scope isolation)", () => {
 	it("preserves the rest of the definition body", () => {
 		const { content } = parseAgentDefinition(def("memory: user"), "x.md");
 		expect(content).toContain("You are an agent.");
+	});
+});
+
+describe("goldenSuiteHash", () => {
+	it("is a stable 12-char hex digest", () => {
+		const h = goldenSuiteHash("sql");
+		expect(h).toMatch(/^[0-9a-f]{12}$/);
+		expect(goldenSuiteHash("sql")).toBe(h);
+	});
+
+	it("differs between agents whose suites differ", () => {
+		expect(goldenSuiteHash("sql")).not.toBe(goldenSuiteHash("backend"));
 	});
 });
