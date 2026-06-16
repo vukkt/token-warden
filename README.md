@@ -35,6 +35,7 @@ positive return.
 - [Data layout](#data-layout)
 - [Security notes](#security-notes)
 - [Roadmap](#roadmap)
+- [Contributing](#contributing)
 
 ---
 
@@ -115,6 +116,22 @@ compiled into `MEMORY.md`, which Claude Code injects into the agent's system pro
 ---
 
 ## Getting started
+
+> **Quickstart** — if you have Node.js 22+ and Claude Code v2.1+, install it inside Claude
+> Code and start working:
+>
+> ```text
+> /plugin marketplace add vukkt/token-warden
+> /plugin install token-warden@vukkt-plugins
+> ```
+>
+> That's it — every session, in every project, is now measured automatically (a Stop hook
+> that never blocks your work). Run `/warden-status` after a turn or two to see your token
+> data. To unlock the part that *saves* tokens, do the one-time setup below: freeze the
+> baselines (`npm run bench -- --agent all`), then use the `frontend` / `backend` / `sql` /
+> `testing` subagents for real work — expensive sessions distill into candidate rules, and
+> the ones that prove they pay for themselves land in agent memory so the next session
+> starts cheaper.
 
 ### Prerequisites
 
@@ -478,6 +495,12 @@ discipline, which generalizes well beyond efficiency rules:
 - **Rule marketplaces** — measured rules are portable artifacts with provenance and
   deltas; a community repo of rules-with-receipts that others re-measure locally before
   adopting (the dedupe and verdict machinery already handle imports).
+
+## Contributing
+
+Setup, the CI/CD pipeline, the release flow, and the design invariants are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). To report a vulnerability, see
+[`SECURITY.md`](SECURITY.md).
 
 ## License
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.15.0 — 2026-06-16
+
+Tooling and docs — no plugin behavior change.
+
+- **Staged CI/CD pipeline.** `.github/workflows/ci.yml` is now a dependent-stage
+  pipeline — `quality` (lint, typecheck, manifest version consistency) →
+  `test` (Node 22 + 24) and `fixture` in parallel → `validate` (plugin-manifest
+  validation + a CLI smoke run) → `release`. The `release` stage runs only on a
+  `vX.Y.Z` tag: it verifies the tag matches the manifests and publishes the
+  GitHub release with notes from `CHANGELOG.md`. Tag-push is now the whole
+  deploy step.
+- **Release helper scripts** (`scripts/check-versions.mjs`,
+  `scripts/changelog-section.mjs`) — version-consistency guard and changelog
+  extraction, reused by CI and runnable locally (`npm run check:versions`).
+- **Standard project docs:** `CONTRIBUTING.md` (setup, the pipeline, the release
+  flow, the design invariants) and `SECURITY.md` (reporting + the security
+  model). README gains a **Quickstart** at the top of "Getting started".
+- A professional sweep of every source file found it clean (no TODO/FIXME, no
+  `any`, no stray debug, no non-text bytes). 275 tests, green on Node 22 and 24.
+
 ## v0.14.1 — 2026-06-16
 
 Test-only hardening — no behavior or API change.

@@ -1,19 +1,53 @@
 name: CI
 
+# Staged pipeline: each stage gates the next.
+#
+#   quality ──▶ test ────┐
+#           └─▶ fixture ─┴▶ validate ──▶ release (tags only)
+#
+# A push or PR runs quality → test/fixture → validate. Pushing a vX.Y.Z tag
+# additionally runs release, which publishes the GitHub release from CHANGELOG.
+
 on:
   push:
     branches: [main]
+    tags: ["v*.*.*"]
   pull_request:
+
+# Least privilege by default; only the release job elevates to write.
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  checks:
+  # Stage 1 — fast static gate. A single Node; everything downstream needs it.
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Lint & format (biome)
+        run: npm run lint
+      - name: Typecheck (tsc)
+        run: npm run typecheck
+      - name: Manifest version consistency
+        run: node scripts/check-versions.mjs
+
+  # Stage 2a — unit + integration suite on every supported Node.
+  test:
+    needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
         # Oldest supported (engines: >=22) and current.
         node-version: [22, 24]
@@ -24,10 +58,11 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
       - run: npm run test
+
+  # Stage 2b — the golden-suite fixture sub-package (runs alongside test).
   fixture:
+    needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -43,3 +78,58 @@ jobs:
         working-directory: benchmarks/fixture
       - run: npm run typecheck
         working-directory: benchmarks/fixture
+
+  # Stage 3 — package integrity: plugin manifest + a CLI smoke run.
+  validate:
+    needs: [test, fixture]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Validate plugin manifest
+        run: npx --yes @anthropic-ai/claude-code plugin validate .
+      - name: CLI smoke — status renders against an empty DB
+        run: TOKEN_WARDEN_DB="$RUNNER_TEMP/smoke.db" npx tsx src/status.ts > /dev/null
+
+  # Stage 4 — deploy. On a vX.Y.Z tag only: publish the GitHub release with
+  # notes taken straight from CHANGELOG.md. Idempotent (updates if it exists).
+  release:
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Derive version and verify it matches the manifests
+        id: ver
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "$VERSION" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version $PKG"
+            exit 1
+          fi
+          node scripts/check-versions.mjs
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Build release notes from CHANGELOG
+        run: node scripts/changelog-section.mjs "${{ steps.ver.outputs.version }}" > RELEASE_NOTES.md
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" --notes-file RELEASE_NOTES.md
+          fi
