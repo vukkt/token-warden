@@ -72,6 +72,38 @@ describe("assessDelta", () => {
 		expect(assessment.regression).toBe(true);
 		expect(assessment.uncertain).toBe(false);
 	});
+
+	it("gives a point estimate with null SE for a single comparable task (no /0 NaN)", () => {
+		// Only t1 completes in the baseline, so it is the lone comparable task;
+		// t2/t3 are skipped (not regressions). standardError divides by
+		// (n-1) = 0 if computed, so the >=2 guard must keep it null.
+		const without = [
+			summary("t1", [1000]),
+			summary("t2", [0], false),
+			summary("t3", [0], false),
+		];
+		const withRule = [
+			summary("t1", [800]),
+			summary("t2", [0], false),
+			summary("t3", [0], false),
+		];
+		const a = assessDelta(without, withRule, 25);
+		expect(a.delta).toBe(200);
+		expect(a.standardError).toBeNull();
+		expect(a.uncertain).toBe(false);
+		expect(a.regression).toBe(false);
+		expect(Number.isFinite(a.delta)).toBe(true);
+	});
+
+	it("returns a null delta (not NaN) when nothing is comparable", () => {
+		const without = [summary("t1", [0], false), summary("t2", [0], false)];
+		const withRule = [summary("t1", [500]), summary("t2", [500])];
+		const a = assessDelta(without, withRule, 25);
+		expect(a.delta).toBeNull();
+		expect(a.standardError).toBeNull();
+		expect(a.uncertain).toBe(false);
+		expect(a.regression).toBe(false);
+	});
 });
 
 describe("mergeSummaries", () => {
