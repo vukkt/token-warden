@@ -20,9 +20,9 @@ import {
 	insertRule,
 	listRulesByAgent,
 	openDb,
+	RUN_TOTAL_TOKENS_SQL,
 	type RunRow,
 	recentQuestionsFrom,
-	RUN_TOTAL_TOKENS_SQL,
 	type WardenDb,
 } from "./db.js";
 import { digestTranscript } from "./transcript.js";

@@ -32,10 +32,10 @@ import {
 	getRuleById,
 	getRulesetVersion,
 	openDb,
+	RUN_TOTAL_TOKENS_SQL,
 	type RuleRow,
 	type RunConfig,
 	recordBaseline,
-	RUN_TOTAL_TOKENS_SQL,
 	upsertRun,
 	type WardenDb,
 } from "./db.js";
