@@ -67,7 +67,27 @@ npx tsx src/receipt.ts --agent "${AGENT}"
 
 echo
 echo "════════════════════════════════════════════════════════════════"
-echo " VERDICT: the loop is validated for ${AGENT} if a rule SURVIVED above"
-echo " and the suite total is BELOW run1 (negative '% vs run1'). See"
-echo " validation/README.md → 'Success criterion'."
+echo " VERDICT"
+echo "════════════════════════════════════════════════════════════════"
+# Read the isolated DB directly and print the one-line answer: did any
+# candidate survive selection, or were they all evicted?
+WARDEN_AGENT="${AGENT}" npx tsx -e '
+import { openDb, getActiveRules, lastEvictions } from "./src/db.ts";
+const agent = process.env.WARDEN_AGENT ?? "sql";
+const db = openDb();
+const living = getActiveRules(db, agent);
+const evicted = lastEvictions(db, agent, 10);
+db.close();
+if (living.length > 0) {
+  console.log(`🟢 LIVING RULE — ${living.length} rule(s) survived selection for "${agent}":`);
+  for (const r of living) console.log(`   • [+${r.measured_delta} tok] ${r.body}`);
+  console.log(`\n   Cross-check the headline in /warden-status: suite "now vs run1" should be NEGATIVE.`);
+} else {
+  console.log(`🔴 ALL EVICTED — no candidate cleared 2x rent for "${agent}"; nothing was kept.`);
+  if (evicted.length > 0) {
+    console.log(`   Most recent eviction reason: ${evicted[0].decided_reason ?? "(none recorded)"}`);
+  }
+  console.log(`\n   This is a valid result, not a failure — see validation/README.md.`);
+}
+'
 echo "════════════════════════════════════════════════════════════════"
