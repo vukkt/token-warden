@@ -1,5 +1,14 @@
 # token-warden — Build Specification
 
+> **Historical document.** This is the original v0.1.0 build plan the project
+> was implemented from, preserved for provenance. It does **not** describe the
+> current system — features have since been added and some "out of scope" items
+> were later built. For the current design and status see the
+> [README](../README.md), [CHANGELOG](../CHANGELOG.md), and
+> [FINDINGS.md](../FINDINGS.md).
+
+---
+
 **Audience:** Claude Code. This document is your complete build plan. Execute it phase by phase. Do not skip ahead: each phase has acceptance criteria, and later phases consume earlier ones. Stop at the end of each phase, run the acceptance checks, and report results before continuing.
 
 **Owner:** Vuk. Fullstack JS/TS developer. All code must be production-grade and ship-ready: strict TypeScript, async/await (never `.then()` chaining), proper error handling, no placeholder stubs left behind. If a decision is ambiguous, pick the simpler option and document it in `DECISIONS.md` rather than asking.
