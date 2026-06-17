@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.18.0 — 2026-06-17
+
+Fixes driven by the real-token validation burn (see `FINDINGS.md`). The burn
+confirmed the measurement and safety gates work — it correctly evicted a
+distilled rule that saved 38k tokens by breaking the task — but located two real
+limiters: benchmark variance and candidate quality. This release addresses both.
+
+- **Default run count 2 → 3** (`/warden-bench`, `/warden-select`). Real
+  golden-suite runs varied >25%; a third run per configuration tightens the
+  standard error so the selector can distinguish a genuine small saving from
+  noise instead of evicting it as uncertain. Override with `--runs`.
+- **Distiller false-economy guard.** The distillation prompt now explicitly
+  forbids rules that skip steps, give up/retry less, cut verification, or trade
+  thoroughness for tokens — the class of rule the burn caught the selector
+  evicting (a token saver that failed every task). `buildPrompt` is exported and
+  tested for the guard.
+- **Docs:** new `FINDINGS.md` (the burn methodology, results, and conclusions);
+  README roadmap updated (was stale at v0.13.0) with the validation status and a
+  near-term plan aimed at producing the first *surviving* rule.
+- The `validation/` harness (added across prior commits) is documented and
+  reproducible: `validation/run.sh`, `burn-all.sh`, and a zero-token
+  `dress-rehearsal.ts`. 363 tests, green on Node 22 and 24.
+
 ## v0.17.0 — 2026-06-16
 
 Quality hardening — no plugin behavior change; this release is about making the

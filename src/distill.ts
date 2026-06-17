@@ -163,7 +163,7 @@ export function contextCost(body: string): number {
 	return Math.ceil(body.length / 4);
 }
 
-function buildPrompt(
+export function buildPrompt(
 	run: RunRow,
 	digest: string,
 	recentQuestions: string[] = [],
@@ -195,6 +195,7 @@ function buildPrompt(
 		"- one imperative sentence under 200 characters",
 		"- generalizable to other tasks (never mention specific files, symbols, or this task)",
 		"- about working cheaper (navigation, reading discipline, planning, tool choice) — not about correctness",
+		"- a SAME-RESULT saving: it must reach the identical outcome for fewer tokens. NEVER propose skipping steps, giving up or retrying less, cutting verification/testing, or trading thoroughness for tokens — such rules fail tasks and are auto-evicted on the benchmark.",
 		"",
 		'Reply with ONLY a raw JSON array, no markdown fences, no commentary: [{"body": "..."}] or [] if no clear generalizable lesson exists.',
 	].join("\n");

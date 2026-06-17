@@ -61,7 +61,10 @@ export interface BenchArgs {
 }
 
 export function parseArgs(argv: string[]): BenchArgs {
-	const args: BenchArgs = { agent: "", rule: null, runs: 2, task: null };
+	// Default 3 (not 2): LLM run-to-run variance on the golden suite ran >25%
+	// in real burns, which buries modest real savings under noise; a third run
+	// tightens the standard error enough for the selector to keep good rules.
+	const args: BenchArgs = { agent: "", rule: null, runs: 3, task: null };
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
 		const value = argv[i + 1];

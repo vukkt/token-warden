@@ -464,17 +464,29 @@ messaging.
 
 ## Roadmap
 
-Shipped through v0.13.0 — see [CHANGELOG.md](CHANGELOG.md) for the full
+Shipped through v0.18.0 — see [CHANGELOG.md](CHANGELOG.md) for the full
 history: the original spec's collect/benchmark/distill/select loop, subagent collection,
 variance-aware verdicts, cross-project learning curves, model-migration and prompt A/B
 benchmarking, automated prompt evolution, real-time cost-anomaly alerting, team-shared
-rule ledgers, and tool/skill/MCP cost attribution.
+rule ledgers, tool/skill/MCP cost attribution, per-rule verdict receipts, a staged
+CI/CD pipeline (90% coverage), and a thesis-validation harness (`validation/`).
 
-Near-term:
+**Validated on real tokens** (see [`validation/`](validation/) and
+[`FINDINGS.md`](FINDINGS.md)): the measurement engine, the safety gate (it correctly
+evicted a rule that saved 38k tokens by *breaking the task* — a false economy), and the
+real-work learning pipeline all work. The open problem is the one the validation burn
+located precisely — **benchmark variance + candidate quality**. v0.18.0 attacks both: the
+default run count is now **3** (from 2) for a tighter standard error, and the distiller
+now forbids "false economy" rules (ones that trade thoroughness/completion for tokens).
 
-- **Golden suite growth** — heavy tasks (`testing-02` ≈ 150k tokens/run) deserve
-  splitting into new tasks (existing baselines stay frozen; replacing a task would
-  invalidate its denominator, so growth means *adding* task files, never editing them).
+Near-term (where the next *surviving* rule comes from):
+
+- **Cut benchmark variance further** — real golden-suite runs varied **>25%**, burying
+  modest savings under noise. The noisiest tasks (`testing-02` ≈ 150k tokens/run,
+  `sql-02`) deserve splitting/quieting (baselines stay frozen; growth means *adding* task
+  files, never editing them).
+- **Better candidate quality** — beyond the false-economy guard, further distiller
+  prompt/model tuning so it proposes rules that can clear 2× rent.
 - **Fully scheduled selection** — auto-running the selector on a cron/routine once
   variance handling has earned trust; today it deliberately stays a user decision.
 - **Transcript provenance** — link a rule's `born-of` run to its archived transcript

@@ -448,7 +448,10 @@ interface SelectArgs {
 }
 
 export function parseSelectArgs(argv: string[]): SelectArgs {
-	const args: SelectArgs = { agent: "", runs: 2, topUp: 1 };
+	// Default 3 (not 2): tighter standard error against the >25% golden-suite
+	// variance seen in real burns, so the selector can distinguish a genuine
+	// small saving from noise instead of evicting it as uncertain.
+	const args: SelectArgs = { agent: "", runs: 3, topUp: 1 };
 	for (let i = 0; i < argv.length; i++) {
 		if (argv[i] === "--agent") {
 			args.agent = argv[i + 1] ?? "";

@@ -2,8 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { RunRow } from "../src/db.js";
 import { openDb, upsertRun, type WardenDb } from "../src/db.js";
 import {
+	buildPrompt,
 	contextCost,
 	p75,
 	parseDistillArgs,
@@ -12,6 +14,42 @@ import {
 	trigramSimilarity,
 } from "../src/distill.js";
 import { digestTranscript } from "../src/transcript.js";
+
+describe("buildPrompt", () => {
+	const run = {
+		id: 1,
+		agent: "sql",
+		session_id: "s",
+		task_hash: null,
+		input_tokens: 30_000,
+		output_tokens: 0,
+		cache_creation: 0,
+		cache_read: 0,
+		tool_calls: 12,
+		file_rereads: 3,
+		completed: 1,
+		ruleset_version: 0,
+		ts: "t",
+		config: "real",
+		project: "/p",
+		model: null,
+	} as unknown as RunRow;
+
+	it("forbids false-economy rules (the burn's rule-3 lesson)", () => {
+		const prompt = buildPrompt(run, "USER: do x\nTOOL Bash {}", []);
+		// A rule that trades completion/thoroughness for tokens must be ruled out.
+		expect(prompt).toMatch(/SAME-RESULT/);
+		expect(prompt).toMatch(
+			/skipping steps|trading thoroughness|cutting verification/,
+		);
+	});
+
+	it("includes the waste stats and the action trace", () => {
+		const prompt = buildPrompt(run, "TOOL Read {}", []);
+		expect(prompt).toContain("total tokens processed: 30000");
+		expect(prompt).toContain("TOOL Read");
+	});
+});
 
 describe("trigramSimilarity", () => {
 	it("is 1 for identical strings and 0 for disjoint ones", () => {

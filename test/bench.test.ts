@@ -36,11 +36,11 @@ describe("parseArgs", () => {
 		).toEqual({ agent: "sql", rule: 7, runs: 3, task: "sql-01" });
 	});
 
-	it("defaults to two runs and no rule", () => {
+	it("defaults to three runs and no rule", () => {
 		expect(parseArgs(["--agent", "backend"])).toEqual({
 			agent: "backend",
 			rule: null,
-			runs: 2,
+			runs: 3,
 			task: null,
 		});
 	});
