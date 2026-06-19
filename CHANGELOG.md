@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.19.0 — 2026-06-19
+
+Benchmark variance reduction — the `FINDINGS.md` follow-through, and the direct
+path to the project's one unmet goal (a *surviving* rule).
+
+- **Quieter, larger golden suites for the two noisiest agents.** The validation
+  burn found `testing-02` (~150k tok/run) and `sql-02` varied >25% run-to-run,
+  burying modest savings under noise. The selector's standard error is
+  `sqrt(variance / n_tasks)`, so adding low-variance tasks tightens it directly.
+  Added three deterministic anchor tasks as **pure additions with fresh ids — the
+  existing frozen baselines are untouched** (design invariant): `testing-04`
+  (single-table `userRepo` tests, no joins — the quiet sibling of `testing-02`),
+  `sql-04` (additive `getUserByEmail` query), and `sql-05` (a single-file
+  `orders(created_at)` index). `sql` is now 5 tasks, `testing` 4; `frontend`/
+  `backend` unchanged at 3.
+- **Suite-integrity test hardened.** The golden-suite test asserted exactly three
+  tasks per agent; it now asserts a floor of three plus **unique task ids** (a
+  duplicate id would silently collide on one frozen baseline).
+- Docs updated for the now-variable suite size (no hardcoded "three tasks"; the
+  freeze/validation cost estimates scale with suite size × the default 3 runs).
+- 363 tests, green on Node 22 and 24.
+
 ## v0.18.0 — 2026-06-17
 
 Fixes driven by the real-token validation burn (see `FINDINGS.md`). The burn

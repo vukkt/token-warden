@@ -184,8 +184,9 @@ measured into `~/.token-warden/warden.db`.
 npm run bench -- --agent all      # or one agent at a time
 ```
 
-This runs each agent's three golden tasks twice and freezes `run1_tokens` — the permanent
-denominator of every future improvement claim. Do this once, before any rules exist.
+This runs each agent's golden suite (three runs per task by default) and freezes
+`run1_tokens` — the permanent denominator of every future improvement claim. Do this once,
+before any rules exist. Suites grow only by *adding* tasks, so this scales with suite size.
 
 ### 5 · Let the loop run
 

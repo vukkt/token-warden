@@ -341,7 +341,7 @@ as the post-#1 reflection predicted.
 - **Winners are recommended, never auto-applied — a deliberate departure from the rule
   selector.** The selector overwrites `MEMORY.md` (a generated build artifact, invariant
   #2); `agents/<name>.md` is hand-authored committed source. Auto-rewriting it on a haiku
-  proposal gated only by three golden tasks would be reckless: the benchmark measures token
+  proposal gated only by a few golden tasks would be reckless: the benchmark measures token
   cost + task completion, not the long tail of judgment the prompt encodes. So a measurable
   winner is written to `~/.token-warden/proposals/<agent>-<ts>.md` with a `diff` hint, and
   the human applies it. Acceptance gate: no regression, not within noise, ≥2 comparable

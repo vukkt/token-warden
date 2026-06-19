@@ -54,10 +54,12 @@ bigger/cheaper-to-measure signal before chasing users.
 ./validation/run.sh sql
 ```
 
-**Cost/time:** roughly 15–30 headless `claude` sessions for one agent (freeze =
-3 tasks × 2 runs, selection = baseline + candidate + optional top-up + re-audit,
-re-measure = 3 × 2). Budget accordingly; `sql` is the cheapest agent,
-`testing`/`backend` have heavier tasks. Requires `claude` logged in.
+**Cost/time:** scales with suite size × runs (default 3 per task). Roughly
+freeze = tasks × 3, selection = baseline + candidate + optional top-up +
+re-audit, re-measure = tasks × 3 — so budget ~30–60 headless `claude` sessions
+for one agent (the `sql` suite is 5 tasks, `testing` 4, `frontend`/`backend` 3).
+`sql` is the cheapest per task; `testing`/`backend` have heavier tasks. Requires
+`claude` logged in.
 
 ## Prove the harness works *without* spending tokens
 

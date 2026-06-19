@@ -77,15 +77,22 @@ describe("golden task files", () => {
 		);
 	});
 
-	it("every shipped agent has exactly three valid golden tasks", () => {
+	it("every shipped agent has a complete, well-formed golden suite (>=3 tasks, unique ids)", () => {
 		for (const agent of DOMAIN_AGENTS) {
 			const tasks = loadGoldenTasks(agent);
-			expect(tasks, agent).toHaveLength(3);
+			// A complete suite is at least 3 tasks; suites may grow (only by
+			// adding files — baselines are frozen), so this is a floor, not an
+			// exact count.
+			expect(tasks.length, agent).toBeGreaterThanOrEqual(3);
+			const ids = new Set<string>();
 			for (const task of tasks) {
 				expect(task.agent).toBe(agent);
 				expect(task.id).toMatch(new RegExp(`^${agent}-\\d+$`));
 				expect(task.prompt.length).toBeGreaterThan(20);
 				expect(task.successCheck.length).toBeGreaterThan(0);
+				// Duplicate ids would silently collide on one frozen baseline.
+				expect(ids.has(task.id), `duplicate task id ${task.id}`).toBe(false);
+				ids.add(task.id);
 			}
 		}
 	});
