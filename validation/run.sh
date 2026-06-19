@@ -79,11 +79,11 @@ const living = getActiveRules(db, agent);
 const evicted = lastEvictions(db, agent, 10);
 db.close();
 if (living.length > 0) {
-  console.log(`🟢 LIVING RULE — ${living.length} rule(s) survived selection for "${agent}":`);
-  for (const r of living) console.log(`   • [+${r.measured_delta} tok] ${r.body}`);
+  console.log(`LIVING RULE: ${living.length} rule(s) survived selection for "${agent}":`);
+  for (const r of living) console.log(`   - [+${r.measured_delta} tok] ${r.body}`);
   console.log(`\n   Cross-check the headline in /warden-status: suite "now vs run1" should be NEGATIVE.`);
 } else {
-  console.log(`🔴 ALL EVICTED — no candidate cleared 2x rent for "${agent}"; nothing was kept.`);
+  console.log(`ALL EVICTED: no candidate cleared 2x rent for "${agent}"; nothing was kept.`);
   if (evicted.length > 0) {
     console.log(`   Most recent eviction reason: ${evicted[0].decided_reason ?? "(none recorded)"}`);
   }

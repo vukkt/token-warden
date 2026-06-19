@@ -38,14 +38,15 @@ quietly broken the agent. This one didn't.
 
 ## Conclusion
 
-Three of the four halves of the thesis are **validated on real tokens**:
+Three of the four halves of the thesis are **validated on real tokens**; the
+fourth is not:
 
-- ✅ **Measurement works** — every rule measured; non-earners evicted.
-- ✅ **Safety works** — false-economy and regression rules evicted regardless of
+- **Measurement works** — every rule measured; non-earners evicted.
+- **Safety works** — false-economy and regression rules evicted regardless of
   apparent savings (rule 3).
-- ✅ **Learning pipeline works** — the distiller produces plausible rules from
+- **Learning pipeline works** — the distiller produces plausible rules from
   real sessions.
-- ❌ **Payoff not yet demonstrated** — *no rule survived*, so no proven
+- **Payoff not yet demonstrated** — *no rule survived*, so no proven
   session-cost reduction.
 
 **The bottleneck is not the measurement system.** It is:

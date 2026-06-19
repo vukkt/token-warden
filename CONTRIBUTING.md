@@ -19,7 +19,8 @@ Requires Node.js 22+.
 ```bash
 npm run lint        # biome — lint + format (use `npm run format` to auto-fix)
 npm run typecheck   # tsc --noEmit
-npm run test        # vitest
+npm run knip        # unused files, exports, and dependencies
+npm run test        # vitest (npm run coverage adds the coverage floor)
 node scripts/check-versions.mjs   # package.json and plugin.json agree
 ```
 
@@ -30,13 +31,15 @@ Judge each by its exit code, not by scrolling output — CI does the same.
 `.github/workflows/ci.yml` is a staged pipeline; each stage gates the next:
 
 ```
-quality ──▶ test ────┐
-        └─▶ fixture ─┴▶ validate ──▶ release (tags only)
+quality ──▶ test ─────┐
+        ├─▶ fixture ──┤
+        └─▶ coverage ─┴▶ validate ──▶ release (tags only)
 ```
 
-- **quality** — lint, typecheck, manifest version consistency.
+- **quality** — lint, typecheck, `knip` dead-code, manifest version consistency.
 - **test** — the suite on Node 22 and 24.
 - **fixture** — the golden-suite fixture sub-package.
+- **coverage** — the suite under the ratcheted coverage floor.
 - **validate** — plugin-manifest validation and a CLI smoke run.
 - **release** — on a `vX.Y.Z` tag only, publishes the GitHub release with notes
   taken from `CHANGELOG.md`.
@@ -52,6 +55,19 @@ A pull request must be green through `validate`.
 
 The `release` job validates the tag against the manifests and publishes the
 release automatically — no manual `gh release create` needed.
+
+## Configuration
+
+token-warden needs no configuration for normal use. The full surface is a small
+set of environment variables, read at process start; all are optional.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TOKEN_WARDEN_DB` | `~/.token-warden/warden.db` | SQLite database path. Set to an isolated file to run benchmarks without touching real data (the validation harness uses this). |
+| `TOKEN_WARDEN_MEMORY_DIR` | `~/.claude/agent-memory` | Where compiled `MEMORY.md` files are written, one subdirectory per agent. |
+| `TOKEN_WARDEN_NO_DISTILL` | unset | Set to `1` to suppress spawning the distiller from the Stop hook (collection still runs). |
+| `TOKEN_WARDEN_NO_ALERTS` | unset | Set to `1` to suppress the real-time cost-anomaly message on an expensive session. |
+| `WARDEN_SESSIONS_PER_WEEK` | `20` | Sessions-per-week estimate used to amortize a rule's context rent against its measured savings. |
 
 ## Design invariants (don't break these)
 

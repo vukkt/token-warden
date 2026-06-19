@@ -287,6 +287,9 @@ the week's collected real-work tokens, it tells you to bench less.
 
 ## Architecture
 
+For the full system overview — the loop, integration surface, data model, and
+design invariants — see [ARCHITECTURE.md](ARCHITECTURE.md). The module map:
+
 | Module | Responsibility |
 |---|---|
 | `src/db.ts` | SQLite schema, versioned migrations (`PRAGMA user_version`), typed query helpers |
@@ -466,7 +469,7 @@ messaging.
 
 ## Roadmap
 
-Shipped through v0.18.0 — see [CHANGELOG.md](CHANGELOG.md) for the full
+Shipped through v0.19.0 — see [CHANGELOG.md](CHANGELOG.md) for the full
 history: the original spec's collect/benchmark/distill/select loop, subagent collection,
 variance-aware verdicts, cross-project learning curves, model-migration and prompt A/B
 benchmarking, automated prompt evolution, real-time cost-anomaly alerting, team-shared
@@ -477,9 +480,11 @@ CI/CD pipeline (90% coverage), and a thesis-validation harness (`validation/`).
 [`FINDINGS.md`](FINDINGS.md)): the measurement engine, the safety gate (it correctly
 evicted a rule that saved 38k tokens by *breaking the task* — a false economy), and the
 real-work learning pipeline all work. The open problem is the one the validation burn
-located precisely — **benchmark variance + candidate quality**. v0.18.0 attacks both: the
-default run count is now **3** (from 2) for a tighter standard error, and the distiller
-now forbids "false economy" rules (ones that trade thoroughness/completion for tokens).
+located precisely — **benchmark variance + candidate quality**. v0.18.0–v0.19.0 attack
+both: the default run count is now **3** (from 2) for a tighter standard error, the
+distiller forbids "false economy" rules (ones that trade thoroughness/completion for
+tokens), and the suite gained low-variance anchor tasks to tighten the selector's error
+bars (the selector's standard error is `sqrt(variance / n_tasks)`).
 
 Near-term (where the next *surviving* rule comes from):
 
@@ -497,14 +502,14 @@ Near-term (where the next *surviving* rule comes from):
 Bigger directions — the reusable asset is the *frozen-benchmark + measured-verdict*
 discipline, which generalizes well beyond efficiency rules:
 
-- ✅ **Team-shared rule ledgers** — `/warden-share` exports an agent's measured rules to a
+- **Shipped — Team-shared rule ledgers.** `/warden-share` exports an agent's measured rules to a
   committed, reviewable artifact; `/warden-adopt` imports a shared ledger as local
   candidates that are **re-measured** on the importer's own suite (the foreign delta is
   never trusted); and `npx tsx src/verify-ledger.ts` is a deterministic, offline CI gate
   that fails a PR which corrupts or hand-edits a committed ledger. Memory review becomes
   code review. (A deeper gate that re-benchmarks each rule's delta in CI is possible but
   needs a model-token budget — a deployment choice, not shipped by default.)
-- ✅ **Skill / MCP cost attribution** — `/warden-attribute` breaks real-work tokens down
+- **Shipped — Skill / MCP cost attribution.** `/warden-attribute` breaks real-work tokens down
   per tool, per skill, and per MCP server ("your browser-automation MCP costs 40% of every
   frontend session"), cross-session or for a single transcript. The one direction the A/B
   comparison engine does not serve — it is decomposition, not a keep/reject verdict — so it
@@ -512,6 +517,34 @@ discipline, which generalizes well beyond efficiency rules:
 - **Rule marketplaces** — measured rules are portable artifacts with provenance and
   deltas; a community repo of rules-with-receipts that others re-measure locally before
   adopting (the dedupe and verdict machinery already handle imports).
+
+### Rule governance and falsification
+
+A surviving rule needs both a savings proof *and* a falsification path. The
+savings proof exists today (each decision writes an immutable receipt — savings
+vs. rent, ROI, per-task pass/fail, the suite hash, and a dated audit trail). The
+falsification path is the next layer of work:
+
+- **Declarative eviction triggers.** Today eviction is implicit: a rule is dropped
+  only when a re-benchmark shows it no longer clears 2x rent or regressed. Explicit
+  triggers would be stronger and often cheaper — "N regressions", "unused for N
+  runs", and especially **"contradicted by repo instructions"** (check a rule
+  against the repo's `CLAUDE.md`/conventions and evict on contradiction, spending
+  no tokens).
+- **Out-of-fixture re-audit.** Re-audit currently reuses the same frozen fixture,
+  so it cannot detect a rule that the fixture happens to reward but that is harmful
+  elsewhere. The real-work production signal (token cost per ruleset version) is
+  already tracked but only reported; wiring it — and **friction reports** (an agent
+  finding a rule false or contradicted in this repo) — into eviction makes the
+  benchmark falsifiable by production reality, not just by itself.
+- **Per-rule scope.** Rules are scoped per agent today; a finer "allowed where"
+  predicate (repo, language, task category) would let a rule be valid in one
+  context and inert in another instead of globally on or off.
+- **Representative suites and richer metrics.** The golden suite is hand-curated,
+  not sampled to a production task distribution, so a rule protecting a rare,
+  expensive case is only measured if that case is in the suite. Distribution
+  weighting, plus **latency** and **per-category regression** reporting (today the
+  axes are tokens and completion), would price a rule's true expected value.
 
 ## Contributing
 

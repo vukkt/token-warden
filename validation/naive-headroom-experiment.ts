@@ -131,22 +131,22 @@ function main(): void {
 		`\nmean delta=${assessment.delta} tok/run  rent=${rent}  threshold(2x)=${threshold}  stderr=${assessment.standardError?.toFixed(0) ?? "n/a"}`,
 	);
 	if (assessment.regression) {
-		console.log("🔴 EVICT — the rule broke a task (regression).");
+		console.log("[EVICT] the rule broke a task (regression).");
 	} else if (
 		assessment.delta !== null &&
 		assessment.delta >= threshold &&
 		!assessment.uncertain
 	) {
 		console.log(
-			`🟢 SURVIVES — saved ${assessment.delta} tok/run ≥ 2× rent (${threshold}). The loop banks its first measured rule.`,
+			`[SURVIVES] saved ${assessment.delta} tok/run >= 2x rent (${threshold}). The loop banks its first measured rule.`,
 		);
 	} else if (assessment.uncertain) {
 		console.log(
-			"🟡 WITHIN NOISE — point estimate near the threshold; the real selector would spend a top-up pass. Re-run with more --runs.",
+			"[INCONCLUSIVE] within noise — point estimate near the threshold; the real selector would spend a top-up pass. Re-run with more --runs.",
 		);
 	} else {
 		console.log(
-			`🔴 EVICT — ${assessment.delta} tok/run did not clear 2× rent (${threshold}).`,
+			`[EVICT] ${assessment.delta} tok/run did not clear 2x rent (${threshold}).`,
 		);
 	}
 	db.close();
