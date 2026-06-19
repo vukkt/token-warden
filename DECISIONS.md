@@ -439,3 +439,79 @@ all fixed) and motivated one algorithm change.
   well under 2s). The gate hooks deliberately do NOT bootstrap — a PreToolUse hook
   blocking a SendMessage for a minute would be terrible UX, and the gate fails open
   by design until deps exist.
+
+## v0.10.0–v0.12.0 — team-shared rule ledgers (roadmap #3)
+
+- **Export shipped before import, deliberately.** v0.10 ships `/warden-share` as
+  read-only: it writes an agent's active rules to a committed `.warden/<agent>.rules.md`
+  (human bullets + round-tripping JSON, with proof and provenance) and cannot touch the
+  collect/distill/select loop. The risky half — import — was held back precisely because
+  a shared delta must be re-measured on the importer's own suite, never trusted.
+- **Adopted rules get no new trust path.** v0.11 `/warden-adopt` queues a foreign
+  ledger's rules as *candidates only*: the foreign delta is discarded, the context rent
+  is recomputed locally, and by invariant #1 nothing enters memory until the local
+  selector re-measures it. Near-duplicates of any existing rule (active/candidate/**evicted**)
+  are skipped, so a rule already falsified locally can't be re-adopted; re-adoption is
+  idempotent. The existing variance-conservative selector decides — unchanged.
+- **The CI gate is deterministic and offline.** v0.12 `verify-ledger.ts` validates
+  committed ledgers and exits non-zero on corruption/hand-editing — no model tokens, no
+  secrets. A deeper gate that re-benchmarks each claimed delta in CI was left a documented
+  *deployment choice*, not a default, because it needs a token budget and credentials.
+
+## v0.14.0–v0.14.1 — security & simplification hardening
+
+- **One presentation-security chokepoint.** `src/sanitize.ts` (`displayText`) centralizes
+  control/ANSI stripping, now used by `status`/`compare`/`attribute`/`gate`. It closes the
+  forged-newline / escape-sequence vector in the inter-agent `SendMessage` approval prompt
+  (a hostile teammate message could otherwise obscure the line the user approves).
+- **No invisible bytes in source.** The NUL-delimited map key in `attribute.ts` was
+  replaced with a `JSON.stringify` key; `test/source-hygiene.test.ts` now fails the build
+  on any NUL/disallowed control byte in `src/` or `test/`.
+- **Verdict math is NaN-proof.** `assessDelta`'s degenerate-input boundaries are locked: a
+  single comparable task yields a finite point estimate with null standard error; zero
+  comparable tasks yield a null delta, never `NaN`.
+
+## v0.15.0 — staged CI/CD pipeline
+
+- **Releasing is one reviewable action that can't ship inconsistent versions.** `ci.yml`
+  became dependent stages — `quality` → {`test` (Node 22/24), `fixture`} → `validate` →
+  `release` — where `release` runs *only* on a `vX.Y.Z` tag, verifies the tag matches the
+  manifests, and publishes the GitHub release from the `CHANGELOG.md` section. Tag-push is
+  the entire deploy step; `scripts/check-versions.mjs` guards version drift locally and in CI.
+- Added `CONTRIBUTING.md` and `SECURITY.md` as the standard project front matter.
+
+## v0.16.0 — rule receipts
+
+- **Receipts are additive capture; the verdict logic is unchanged.** A snapshot is written
+  to `rule_receipts` (migration #9) at every decision — initial and each re-audit — so each
+  rule carries an audit trail (savings vs. rent, ROI, model, golden-suite hash, per-task
+  pass/fail).
+- **The activity axis is surfaced, not auto-judged.** A large drop in tool calls / file
+  re-reads is usually the *point* of an efficiency rule, so the receipt shows the signed-%
+  numbers and leaves the call to a human; the binding safety gate remains the per-task
+  pass/fail regression, which evicts on its own.
+
+## v0.17.0 — coverage & dead-code gates
+
+- **90% line coverage from real orchestration tests, not padding.** The subprocess/stdin
+  CLIs (`collect`/`gate`/`distill`/`evolve`/`modelbench`/`promptbench`) are tested through
+  mocked `child_process`/stdin boundaries (fail-open contracts, verdict decisions, anomaly
+  alerts). A ratchet-floor threshold fails the build on any regression; the untestable
+  `invokedDirectly` entry shims are honestly excluded via `v8 ignore`.
+- **`knip` dead-code gate in CI**; 8 internal-only exports un-exported to tighten the API
+  surface.
+
+## v0.18.0 — strategic fixes from the real-token validation burn
+
+- **The thesis was tested on real tokens (~9.3M), and the result drove the release.** The
+  burn (see `FINDINGS.md`) validated measurement, the safety gate (it evicted a rule that
+  saved 38k tokens by failing every task), and the learning pipeline — but **0 rules
+  survived**, with the bottleneck located as benchmark variance (>25% run-to-run) plus
+  candidate quality.
+- **Two fixes, both aimed at the diagnosis.** Default `bench`/`select` run count 2 → 3 for
+  a tighter standard error so a genuine small saving is distinguishable from noise; and the
+  distiller's `buildPrompt` now forbids "false economy" rules (skip steps, retry less, cut
+  verification, trade thoroughness for tokens).
+- The v0.1.0 build spec was archived to `docs/original-spec.md` (historical), and a
+  `validation/` harness made the burn reproducible (`run.sh`, `selftest.ts`,
+  `dress-rehearsal.ts`).
