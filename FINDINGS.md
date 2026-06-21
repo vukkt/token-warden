@@ -38,16 +38,19 @@ quietly broken the agent. This one didn't.
 
 ## Conclusion
 
-Three of the four halves of the thesis are **validated on real tokens**; the
-fourth is not:
+Three of the four halves of the thesis were **validated on real tokens** by the
+burn; the fourth was left open and is now resolved by the positive control
+(below):
 
 - **Measurement works** — every rule measured; non-earners evicted.
 - **Safety works** — false-economy and regression rules evicted regardless of
   apparent savings (rule 3).
 - **Learning pipeline works** — the distiller produces plausible rules from
   real sessions.
-- **Payoff not yet demonstrated** — *no rule survived*, so no proven
-  session-cost reduction.
+- **Payoff demonstrated under controlled headroom** — the burn itself compiled
+  *no* rule (the shipped agents are already optimized), but the positive control
+  below shows the same rule saving ~10,699 tokens/run and being **banked** on a
+  deliberately naive agent. The engine reduces cost when there is cost to remove.
 
 **The bottleneck is not the measurement system.** It is:
 
@@ -66,16 +69,55 @@ fourth is not:
   that skip steps, give up/retry less, cut verification, or trade thoroughness
   for tokens (the rule-3 class).
 
+## Positive control (2026-06): the engine banks a rule when headroom exists
+
+The zero-survivor result raised a fair question: is the measurement engine
+*broken or miscalibrated* (the 2x bar unreachable, variance too high), or are the
+shipped agents simply already optimized (no waste to remove)? These are
+distinguishable with a positive control — measure the same curated "grep before
+reading" rule against a **deliberately naive** `sql` agent
+(`validation/naive-sql.md`) whose prompt has the efficiency guidance stripped, so
+the agent genuinely wastes tokens. Run via
+`validation/naive-headroom-experiment.ts` (the real `runSuite` + real
+`assessDelta` verdict, isolated DB), `--runs 2`, ~1.24M tokens.
+
+| Task | without | with | delta |
+|---|---|---|---|
+| sql-01 | 60,857 | 64,678 | −3,821 |
+| sql-02 | 53,431 | 48,250 | +5,181 |
+| sql-03 | 70,580 | 67,961 | +2,619 |
+| sql-04 | 68,335 | 54,122 | +14,213 |
+| sql-05 | 83,061 | 47,757 | +35,304 |
+| **mean** | | | **+10,699 / run** |
+
+Verdict: **SURVIVES** — mean +10,699 tok/run against a 2x-rent threshold of 42,
+not flagged uncertain. The same rule that is **evicted** on the optimized agent
+is **kept** on the naive one. This resolves the ambiguity:
+
+- The **measurement engine works** on real tokens and the 2x bar is reachable —
+  it produces a confident keep when a real saving exists.
+- The earlier zero-survivor runs are therefore a **true negative**: the shipped
+  agents are already optimized, not a broken instrument.
+- The mechanism is clean — the naive agent reads whole files; the rule makes it
+  grep first; the file-heavy tasks (`sql-05` −35k, `sql-04` −14k) drive the saving.
+
+Honest caveats: this is **manufactured headroom** — it validates the engine, not
+that the production agents have room to improve (they do not, by design). Variance
+is high (every task >25%; `sql-01` regressed); at `--runs 2` the mean is ~1.6
+standard errors above zero (decisive against the 2x bar, looser against zero).
+Higher `--runs` would tighten it.
+
 ## Still open
 
-- Reduce variance further: split/quiet the noisiest golden tasks (add task
-  files, never edit — baselines are frozen), and/or raise runs further where the
-  token budget allows.
-- Reproduce the burn after these changes and look for the first **surviving**
-  rule — the missing demonstration that a kept rule lowers real-work cost.
-- A stronger distill model or tighter rule constraints if candidate quality
-  remains the limiter.
+The engine is validated; the open question is narrower: **do real-world workloads
+have catchable, generalizable headroom?** The shipped agents do not — their
+prompts already encode the obvious efficiencies — so the loop's value depends on
+novel, workload-specific waste that only real dogfood on real repositories
+surfaces. Secondary work: reduce golden-suite variance further (add quieter task
+files; baselines stay frozen), and fold cache-weighted cost (read ~0.1x, write
+~1.25x, output ~5x) into the verdict so "tokens saved" becomes "dollars saved."
 
-Re-run any time: `./validation/run.sh sql` (controlled) or
-`./validation/burn-all.sh` (full); `npx tsx validation/dress-rehearsal.ts` shows
-the pipeline end-to-end with zero tokens.
+Re-run any time: `npx tsx validation/naive-headroom-experiment.ts` (positive
+control; `--yes` to spend tokens), `./validation/run.sh sql` (controlled on the
+shipped agent), or `npx tsx validation/dress-rehearsal.ts` (zero-token pipeline
+walk-through).
