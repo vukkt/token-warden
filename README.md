@@ -216,6 +216,7 @@ Active rules land in the agent's memory; the next session starts cheaper.
 | `/warden-adopt --from <path>` | Imports a shared rule ledger as local *candidates* — the foreign delta is discarded and each rule must be re-measured on your own golden suite before it enters memory |
 | `/warden-attribute [--agent a] [--kind builtin\|mcp\|skill] [--transcript path] [--json]` | Attributes real-work token footprint to the tools, skills, and MCP servers that produced it — cross-session by default, or one transcript with `--transcript`. Decomposition only; it never changes a rule verdict |
 | `/warden-receipt [--agent a] [--json]` | The per-rule verdict card: token savings vs. context rent (with variance + ROI), per-task pass/fail and the tool-call/file-reread activity profile with vs. without the rule, plus the model and golden-suite hash it was measured under. Read-only evidence behind each keep/evict decision |
+| `/warden-cohort [--agent a] [--project p] [--min-n N] [--json]` | Production-cohort validation: did rules make REAL work cheaper? Compares the agent's own completed real-work sessions before rules vs. after, with a standard error and a confidence verdict (improved/regressed/no-change). Out-of-fixture signal; spends no tokens. See [docs/production-cohort-validation.md](docs/production-cohort-validation.md) |
 
 When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
 nudge into new sessions — selection itself always stays a user decision, because it
@@ -311,6 +312,7 @@ design invariants — see [ARCHITECTURE.md](ARCHITECTURE.md). The module map:
 | `src/verify-ledger.ts` | Deterministic, offline CI gate that fails a PR corrupting a committed ledger |
 | `src/attribute.ts` | Cost attribution: decompose real-work token footprint per tool, skill, and MCP server (decomposition only; orthogonal to the verdict path) |
 | `src/receipt.ts` | Rule receipts behind `/warden-receipt`: render the per-rule verdict card (economics + quality axis + provenance) the selector records at each decision |
+| `src/cohort.ts` | Production-cohort validation behind `/warden-cohort`: compare real-work cost before vs. after rules (per-session stats + confidence verdict); the out-of-fixture signal |
 
 Data model (`~/.token-warden/warden.db`): `runs` (one row per session or golden run,
 tagged `real`/`active`/`candidate`/`audit`), `rules` (the ledger — candidates, active

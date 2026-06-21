@@ -13,6 +13,7 @@
 		"src/verify-ledger.ts",
 		"src/receipt.ts",
 		"src/attribute.ts",
+		"src/cohort.ts",
 		"scripts/*.mjs"
 	],
 	"project": ["src/**/*.ts"],

@@ -70,6 +70,7 @@ distilled: with no golden suite, a rule for it could not be benchmarked.
 | `modelbench.ts` / `promptbench.ts` / `evolve.ts` | Model-migration, prompt A/B, and automated prompt-evolution benchmarking |
 | `attribute.ts` | Per tool/skill/MCP cost decomposition (`/warden-attribute`) |
 | `receipt.ts` | Per-rule evidence card from `rule_receipts` (`/warden-receipt`) |
+| `cohort.ts` | Production-cohort validation (`/warden-cohort`): real-work cost before vs. after rules, with a confidence verdict — the out-of-fixture signal ([design](docs/production-cohort-validation.md)) |
 | `share.ts` / `adopt.ts` / `verify-ledger.ts` | Team rule ledgers: export, re-measured import, offline CI gate |
 | `status.ts` / `notify.ts` | Status dashboard and the SessionStart pending-candidate nudge |
 | `gate.ts` | Inter-agent `SendMessage` approval prompt (sanitized, fails open) |

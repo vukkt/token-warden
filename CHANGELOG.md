@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.20.0 — 2026-06-22
+
+Production-cohort validation (roadmap: rule governance and falsification) — the
+out-of-fixture signal, and the first scalability step.
+
+- **New `/warden-cohort` command + `src/cohort.ts`.** Answers a question the
+  frozen-fixture benchmark can't: *did rules make REAL work cheaper?* It groups
+  the agent's completed real-work sessions by the ruleset version active at the
+  time and compares the earliest cohort (before rules) against the latest (after),
+  using per-session totals so it can put a standard error on the difference. The
+  verdict is **improved / regressed / no-change / insufficient-data**, confident
+  when `|delta| > 2x` the pooled standard error, with a `--min-n` floor (default
+  5) and `--project` scoping. Read-only; spends no tokens.
+- **New `realWorkTotalsByVersion` db query** returns raw per-session real-work
+  totals by ruleset version (the existing `realWorkCurveByAgent` pre-averages, so
+  it can't yield a variance). Reuses the established real-work filters
+  (`task_hash IS NULL AND completed = 1`).
+- **Why it matters:** the fixture benchmark only covers the bundled agents and
+  costs extra tokens; cohort validation works on any real workload for free and
+  is the production half of rule governance — REGRESSED is the natural trigger for
+  re-audit/eviction (follow-on). Deliberately **observational** (real sessions
+  aren't task-controlled; `--project` reduces task-mix confounding), so it
+  corroborates the controlled benchmark rather than replacing it.
+- Docs: new [`docs/production-cohort-validation.md`](docs/production-cohort-validation.md)
+  with the design, statistics, and Mermaid diagrams; README commands + module map
+  and ARCHITECTURE updated.
+- 379 tests (+14 for cohort), green on Node 22 and 24.
+
 ## v0.19.0 — 2026-06-19
 
 Benchmark variance reduction — the `FINDINGS.md` follow-through, and the direct

@@ -575,6 +575,36 @@ export function realWorkCurveByProject(
 		.all(limit);
 }
 
+export interface VersionedTotal {
+	rulesetVersion: number;
+	total: number;
+}
+
+/**
+ * Per-session completed real-work token totals for one agent, tagged with the
+ * ruleset version active at the time. Unlike `realWorkCurveByAgent` (which
+ * pre-averages), this returns the raw per-session values so cohort validation
+ * can compute variance and a standard error, not just a mean. Optionally
+ * scoped to a single project to reduce task-mix confounding.
+ */
+export function realWorkTotalsByVersion(
+	db: WardenDb,
+	agent: string,
+	project?: string,
+): VersionedTotal[] {
+	const clause = project ? "AND COALESCE(project, '(unknown)') = ?" : "";
+	const params: unknown[] = project ? [agent, project] : [agent];
+	return db
+		.prepare<unknown[], VersionedTotal>(
+			`SELECT ruleset_version AS rulesetVersion,
+				${RUN_TOTAL_TOKENS_SQL} AS total
+			 FROM runs
+			 WHERE agent = ? AND task_hash IS NULL AND completed = 1 ${clause}
+			 ORDER BY ruleset_version, ts`,
+		)
+		.all(...params);
+}
+
 /** Totals of the agent's most recent completed real-work sessions
  * (excluding one run id), newest first — the baseline for anomaly alerting. */
 export function recentRealWorkTotals(

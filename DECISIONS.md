@@ -515,3 +515,26 @@ all fixed) and motivated one algorithm change.
 - The v0.1.0 build spec was archived to `docs/original-spec.md` (historical), and a
   `validation/` harness made the burn reproducible (`run.sh`, `selftest.ts`,
   `dress-rehearsal.ts`).
+
+## v0.20.0 — production-cohort validation
+
+- **A second, out-of-fixture validation path — but observational, not authoritative.**
+  The frozen-fixture `select` stays the *gate* for admitting a rule. `src/cohort.ts`
+  (`/warden-cohort`) adds the complementary signal: compare the agent's real-work cost
+  before rules (earliest ruleset version) vs. after (latest). It deliberately does NOT
+  admit rules — real sessions aren't task-controlled, so a cohort difference can be task-mix
+  drift, not the rules. It is a production *signal* meant to feed governance (REGRESSED ->
+  re-audit/eviction), corroborating the controlled benchmark rather than replacing it.
+- **Raw per-session totals, not the pre-averaged curve.** A verdict needs a standard error,
+  which the existing `realWorkCurveByAgent` (it `AVG`s in SQL) can't give — so a new
+  `realWorkTotalsByVersion` returns per-session values and the stats (mean, sample stdDev,
+  stdErr) are computed in JS, where they are unit-testable. Reuses the established real-work
+  filters (`task_hash IS NULL AND completed = 1`) so golden runs and `main` never leak in.
+- **Confidence over a fixed threshold.** Verdict is IMPROVED/REGRESSED only when
+  `|delta| > 2x` the pooled standard error (~95%), else NO-CHANGE; INSUFFICIENT-DATA below a
+  `--min-n` floor (default 5) or with only one ruleset version. `--project` narrows scope to
+  reduce task-mix confounding. This mirrors the selector's variance-conservative philosophy
+  rather than inventing a second statistical model.
+- **Scope note:** this is the first step toward measuring rules on a user's *own* workload
+  instead of the bundled fixture — the architectural direction for scaling beyond the four
+  shipped agents.
