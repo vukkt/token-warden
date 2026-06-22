@@ -128,10 +128,43 @@ is high (every task >25%; `sql-01` regressed); at `--runs 2` the mean is ~1.6
 standard errors above zero (decisive against the 2x bar, looser against zero).
 Higher `--runs` would tighten it.
 
+## Full autonomous loop (2026-06): the loop runs; candidate quality is the limiter
+
+The positive control used a *curated* rule. This run tested the still-unproven
+half — the **distiller** — end to end: distill a rule from a wasteful naive
+session (`validation/full-loop-experiment.ts`), then benchmark the system's own
+proposal on the naive agent. ~1.4M tokens, `--runs 2`.
+
+The distiller proposed, unprompted:
+
+> *"Check directory structure with ls before running multiple find commands with
+> different patterns, avoiding redundant searches."*
+
+Benchmark: mean **+3,048 tok/run** (clears the 2x-rent bar of 64), but standard
+error **4,711** — two tasks saved big (`sql-05` +19,352, `sql-02` +6,170), two
+regressed (`sql-01` −8,079, `sql-04` −3,341). **Verdict: INCONCLUSIVE** at
+`--runs 2`.
+
+What it establishes:
+
+- **The autonomous loop executes end to end** — the system distilled its *own*
+  rule from a real session and measured it, no human-fed candidate.
+- **The distiller is the limiter, not the engine.** It proposed a *narrow,
+  modest* rule (`ls` before `find`, ~4% effect) rather than the high-impact
+  "grep before reading whole files" (~16%). A ~3k effect is swamped by ~4.7k
+  noise at two runs — the `(noise / effect)²` problem again, now traced to
+  **candidate quality**.
+
+This sharpens the open problem from "does it work" (it does) to "**can the
+distiller propose a high-impact rule?**" — a model/prompt problem on
+`src/distill.ts` (a stronger distill model, few-shot exemplars of high-impact
+rules, and feeding real waste metrics), not a measurement problem.
+
 ## Still open
 
-The engine is validated; the open question is narrower: **do real-world workloads
-have catchable, generalizable headroom?** The shipped agents do not — their
+The engine is validated and the loop runs; the open question is narrower: **can
+the distiller propose a high-impact rule, and do real-world workloads have
+catchable, generalizable headroom?** The shipped agents do not — their
 prompts already encode the obvious efficiencies — so the loop's value depends on
 novel, workload-specific waste that only real dogfood on real repositories
 surfaces. Secondary work: reduce golden-suite variance further (add quieter task
