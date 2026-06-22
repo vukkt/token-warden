@@ -124,7 +124,8 @@ describe("distill() orchestration", () => {
 		expect(mockSpawn).toHaveBeenCalledOnce();
 		const [cmd, argv] = mockSpawn.mock.calls[0] as [string, string[]];
 		expect(cmd).toBe("claude");
-		expect(argv).toContain("haiku");
+		// Default distill model is sonnet — candidate quality is the loop's bottleneck.
+		expect(argv).toContain("sonnet");
 
 		const rules = listRulesByAgent(db, "sql");
 		expect(rules).toHaveLength(1);

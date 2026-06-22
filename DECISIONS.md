@@ -556,3 +556,22 @@ all fixed) and motivated one algorithm change.
   plumbing are bypassed, because the experiment is a controlled one-shot, not production
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
+
+## v0.22.0 — distiller candidate-quality upgrade
+
+- **Default distill model is `sonnet`, not `haiku`.** The full-loop experiment (FINDINGS.md)
+  showed the loop runs end-to-end but the distiller proposes *narrow, low-impact* rules
+  (`ls` before `find`, ~4% effect), which the detectability math
+  (`n ≈ (z·σ/d)²`, σ≈25% run-to-run noise) leaves swamped — a ~3k-token effect under ~4.7k
+  noise. Candidate impact `d` is the only economical lever (statistics shrink the constant,
+  not the `(σ/d)²` scaling), and a stronger distill model is the cheapest way to raise `d`.
+  Exposed as `TOKEN_WARDEN_DISTILL_MODEL` (override `haiku` to economize); the validation
+  harness reads the same env so experiments match production.
+- **The fix is on the candidate side, not the gate.** We deliberately did *not* loosen the
+  2x-rent bar, lower the run count, or relax the uncertainty flag to manufacture survivors.
+  Doing so would admit noise as signal and break "measured, not vibes." The bar stays; we
+  raise what gets measured against it.
+- **`buildPrompt` asks for the single highest-impact rule.** It now instructs the model to
+  first locate the biggest source of wasted tokens and target that, with few-shot exemplars
+  of high-impact rules. The SAME-RESULT false-economy guard (no skipping steps / cutting
+  verification) is preserved verbatim — higher impact must not come from doing less work.

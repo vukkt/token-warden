@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.22.0 — 2026-06-22
+
+Distiller candidate-quality upgrade — the full-loop experiment localized the
+loop's bottleneck to *what the distiller proposes*, not the measurement engine
+(see FINDINGS.md). This release targets that.
+
+- **Distiller now defaults to `sonnet`** (`src/distill.ts`, new
+  `TOKEN_WARDEN_DISTILL_MODEL`, default `sonnet`). The full-loop run showed haiku
+  proposing a narrow, ~4%-effect rule (`ls` before `find`) that the
+  `(noise / effect)²` math leaves swamped by run-to-run variance. A stronger
+  distill model is the cheapest lever on candidate impact. Override with
+  `TOKEN_WARDEN_DISTILL_MODEL=haiku` to economize.
+- **`buildPrompt` rewritten to demand the single highest-impact rule.** It now
+  instructs the model to first identify the biggest source of wasted tokens in
+  the session and target *that*, with few-shot exemplars of high-impact rules
+  (grep before reading whole files; never re-read a file; state a one-line plan).
+  The SAME-RESULT false-economy guard (no skipping steps / cutting verification /
+  trading thoroughness) is kept intact.
+- `validation/full-loop-experiment.ts` uses the same env-configurable model.
+- Why no measurement-side change: statistics shrink the constant in
+  `n ≈ (z·σ/d)²`, not the `(σ/d)²` scaling — only a larger effect `d` (a
+  higher-impact candidate) makes a rule economically detectable. The bar stays
+  exactly where it was.
+- Docs: CONTRIBUTING config table row, DECISIONS rationale.
+- 385 tests, green on Node 22 and 24.
+
 ## v0.21.0 — 2026-06-22
 
 Cohort governance — the falsification path (rule governance roadmap), plus a

@@ -4,7 +4,8 @@
  * CLI: npx tsx src/distill.ts --run <runs.id> --transcript <path>
  *
  * Spawned detached by collect.ts when a run's total tokens exceed the
- * agent's rolling p75 (minimum 5 prior runs). One headless haiku call,
+ * agent's rolling p75 (minimum 5 prior runs). One headless model call
+ * (DISTILL_MODEL, default sonnet),
  * strict-JSON output, zod-validated; invalid output is logged and dropped —
  * never retried (spec §3.1). Candidates land in SQLite with
  * context_cost = ceil(len/4); near-duplicates (>0.85 trigram similarity to
@@ -36,6 +37,13 @@ const MIN_PRIOR_RUNS = 5;
 const ROLLING_WINDOW = 50;
 const MAX_DIGEST_CHARS = 8000;
 const DISTILL_TIMEOUT_MS = 2 * 60 * 1000;
+/**
+ * Model for distillation. Defaults to sonnet: candidate quality is the loop's
+ * bottleneck (haiku proposed narrow, low-impact rules — see FINDINGS.md), and a
+ * better rule is worth far more than the extra cost of an infrequent call.
+ * Override with TOKEN_WARDEN_DISTILL_MODEL=haiku to economize.
+ */
+const DISTILL_MODEL = process.env.TOKEN_WARDEN_DISTILL_MODEL ?? "sonnet";
 
 function logLine(message: string): void {
 	try {
@@ -191,11 +199,17 @@ export function buildPrompt(
 		"Action trace (truncated):",
 		digest,
 		"",
-		"From this trace, extract at most 2 generalizable efficiency rules this agent could follow in FUTURE sessions to use fewer tokens. Each rule must be:",
+		"From this trace, extract at most 2 of the HIGHEST-IMPACT generalizable efficiency rules this agent could follow in FUTURE sessions to use fewer tokens. First identify the single biggest source of wasted tokens in the trace (the behavior that consumed the most — usually reading whole files, re-reading, or undirected exploration), then target THAT. Each rule must be:",
 		"- one imperative sentence under 200 characters",
 		"- generalizable to other tasks (never mention specific files, symbols, or this task)",
+		"- HIGH-IMPACT: it should plausibly cut a large fraction of the tokens, not shave a few percent. Prefer a rule that changes a dominant, repeated behavior over a narrow, situational tip.",
 		"- about working cheaper (navigation, reading discipline, planning, tool choice) — not about correctness",
 		"- a SAME-RESULT saving: it must reach the identical outcome for fewer tokens. NEVER propose skipping steps, giving up or retrying less, cutting verification/testing, or trading thoroughness for tokens — such rules fail tasks and are auto-evicted on the benchmark.",
+		"",
+		"Examples of the KIND of high-impact rule to prefer (only propose one if the trace actually shows that waste — do not copy blindly):",
+		'- "Use Grep or Glob to locate the exact symbol before opening a file; never read a whole file you are not about to edit."',
+		'- "Never re-read a file you have already read this session; rely on what you saw and the diffs you made."',
+		'- "State a one-line plan before the first edit, then execute it without exploratory detours."',
 		"",
 		'Reply with ONLY a raw JSON array, no markdown fences, no commentary: [{"body": "..."}] or [] if no clear generalizable lesson exists.',
 	].join("\n");
@@ -277,7 +291,7 @@ export function distill(args: DistillArgs): void {
 				"-p",
 				prompt,
 				"--model",
-				"haiku",
+				DISTILL_MODEL,
 				"--max-turns",
 				"1",
 				"--output-format",

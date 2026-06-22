@@ -66,6 +66,7 @@ set of environment variables, read at process start; all are optional.
 | `TOKEN_WARDEN_DB` | `~/.token-warden/warden.db` | SQLite database path. Set to an isolated file to run benchmarks without touching real data (the validation harness uses this). |
 | `TOKEN_WARDEN_MEMORY_DIR` | `~/.claude/agent-memory` | Where compiled `MEMORY.md` files are written, one subdirectory per agent. |
 | `TOKEN_WARDEN_NO_DISTILL` | unset | Set to `1` to suppress spawning the distiller from the Stop hook (collection still runs). |
+| `TOKEN_WARDEN_DISTILL_MODEL` | `sonnet` | Model the distiller calls to propose rules. Defaults to `sonnet` because candidate quality is the loop's bottleneck (haiku proposed narrow, low-impact rules — see FINDINGS.md). Override with `haiku` to economize. |
 | `TOKEN_WARDEN_NO_ALERTS` | unset | Set to `1` to suppress the real-time cost-anomaly message on an expensive session. |
 | `WARDEN_SESSIONS_PER_WEEK` | `20` | Sessions-per-week estimate used to amortize a rule's context rent against its measured savings. |
 

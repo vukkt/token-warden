@@ -83,13 +83,14 @@ function distillRule(transcriptPath: string): string | null {
 		model: null,
 	} as unknown as RunRow;
 	const prompt = buildPrompt(synthRun, digest, []);
+	const model = process.env.TOKEN_WARDEN_DISTILL_MODEL ?? "sonnet";
 	const claude = spawnSync(
 		"claude",
 		[
 			"-p",
 			prompt,
 			"--model",
-			"haiku",
+			model,
 			"--max-turns",
 			"1",
 			"--output-format",
