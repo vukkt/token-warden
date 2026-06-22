@@ -90,6 +90,27 @@ the agent genuinely wastes tokens. Run via
 | sql-05 | 83,061 | 47,757 | +35,304 |
 | **mean** | | | **+10,699 / run** |
 
+```mermaid
+xychart-beta
+    title "Avg tokens per session - naive sql agent (lower is better)"
+    x-axis ["without rule", "with rule"]
+    y-axis "tokens / session" 0 --> 75000
+    bar [67252, 56553]
+```
+
+```mermaid
+xychart-beta
+    title "Tokens saved per session, by task (naive sql agent)"
+    x-axis ["sql-01", "sql-02", "sql-03", "sql-04", "sql-05"]
+    y-axis "tokens saved / session" -5000 --> 36000
+    bar [-3821, 5181, 2619, 14213, 35304]
+```
+
+Per session, the rule cut cost from ~67,252 to ~56,553 tokens (**-15.9%**) on this
+deliberately naive agent. `sql-01` regressed (noise); the win is driven by the
+file-heavy tasks (`sql-05`, `sql-04`). On the optimized shipped agent the same
+rule saves ~0 (evicted) — the headroom here was manufactured to test the engine.
+
 Verdict: **SURVIVES** — mean +10,699 tok/run against a 2x-rent threshold of 42,
 not flagged uncertain. The same rule that is **evicted** on the optimized agent
 is **kept** on the naive one. This resolves the ambiguity:
