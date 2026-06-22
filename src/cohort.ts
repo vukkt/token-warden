@@ -147,6 +147,47 @@ export function assessCohorts(
 	};
 }
 
+export type GovernanceAction =
+	| "re-audit"
+	| "corroborated"
+	| "no-signal"
+	| "insufficient-data";
+
+export interface Governance {
+	action: GovernanceAction;
+	reason: string;
+}
+
+/**
+ * Map a cohort verdict to a governance action. The cohort signal is
+ * observational (confounded by task mix), so a regression FLAGS the agent for
+ * a controlled fixture re-audit (`/warden-select`) — it never auto-evicts a
+ * rule. The fixture benchmark stays the only authority that removes a rule.
+ */
+export function cohortGovernance(a: CohortAssessment): Governance {
+	switch (a.verdict) {
+		case "regressed":
+			return {
+				action: "re-audit",
+				reason:
+					"real-work cost rose after rules — re-audit this agent's rules on the fixture (/warden-select). Observational signal: it flags, it does not auto-evict.",
+			};
+		case "improved":
+			return {
+				action: "corroborated",
+				reason:
+					"real-work cost dropped after rules — the fixture verdict is corroborated in production.",
+			};
+		case "no-change":
+			return {
+				action: "no-signal",
+				reason: "no confident production change — keep collecting sessions.",
+			};
+		default:
+			return { action: "insufficient-data", reason: a.reason };
+	}
+}
+
 /** Full assessment for one agent, reading its real-work sessions from the db. */
 export function assessAgentCohorts(
 	db: WardenDb,
@@ -189,6 +230,8 @@ export function renderCohort(
 		);
 	}
 	lines.push(`  verdict: ${a.verdict.toUpperCase()} — ${a.reason}`);
+	const gov = cohortGovernance(a);
+	lines.push(`  governance: ${gov.action.toUpperCase()} — ${gov.reason}`);
 	lines.push(
 		"  NOTE: observational — real sessions are not task-controlled; assumes a stable task mix.",
 	);
@@ -200,6 +243,7 @@ interface CohortArgs {
 	project: string | null;
 	minN: number;
 	json: boolean;
+	gate: boolean;
 }
 
 export function parseCohortArgs(argv: string[]): CohortArgs {
@@ -208,6 +252,7 @@ export function parseCohortArgs(argv: string[]): CohortArgs {
 		project: null,
 		minN: DEFAULT_MIN_N,
 		json: false,
+		gate: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
@@ -220,6 +265,7 @@ export function parseCohortArgs(argv: string[]): CohortArgs {
 			}
 			args.minN = n;
 		} else if (flag === "--json") args.json = true;
+		else if (flag === "--gate") args.gate = true;
 		else throw new Error(`unknown flag: ${flag}`);
 	}
 	return args;
@@ -235,13 +281,21 @@ export function main(argv: string[]): number {
 		);
 		if (args.json) {
 			console.log(JSON.stringify(results, null, 2));
-			return 0;
+		} else {
+			console.log(
+				results
+					.map((r) => renderCohort(r.agent, r.project, r.assessment))
+					.join("\n\n"),
+			);
 		}
-		console.log(
-			results
-				.map((r) => renderCohort(r.agent, r.project, r.assessment))
-				.join("\n\n"),
-		);
+		// --gate: non-zero exit if any agent regressed in production, so CI can
+		// fail and prompt a fixture re-audit. Other verdicts never gate.
+		if (
+			args.gate &&
+			results.some((r) => cohortGovernance(r.assessment).action === "re-audit")
+		) {
+			return 1;
+		}
 		return 0;
 	} finally {
 		db.close();

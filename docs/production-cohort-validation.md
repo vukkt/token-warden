@@ -105,12 +105,23 @@ the rules. Two mitigations:
 Treat IMPROVED as "real work corroborates the fixture," and REGRESSED as "the
 fixture and reality disagree — re-audit this agent's rules."
 
-## Where it fits next
+## Governance (v0.21.0): what a verdict triggers
 
 The cohort verdict is the production half of the **rule governance and
-falsification** roadmap theme (see the README roadmap): wiring REGRESSED into
-automatic re-audit/eviction is the natural follow-on, so a rule that stops paying
-off in production is dropped without waiting for the next manual fixture run.
+falsification** roadmap theme. As of v0.21.0 it maps to a governance action:
+
+| Verdict | Action | Meaning |
+|---|---|---|
+| REGRESSED | **RE-AUDIT** | real-work cost rose — re-audit the agent's rules on the fixture (`/warden-select`) |
+| IMPROVED | **CORROBORATED** | the fixture verdict is confirmed in production |
+| NO-CHANGE | **NO-SIGNAL** | keep collecting |
+| INSUFFICIENT-DATA | — | not enough sessions / only one ruleset version |
+
+It **flags, it does not auto-evict.** Because the signal is observational, a
+regression recommends a *controlled re-audit* (which can evict on the fixture);
+the fixture benchmark stays the only authority that removes a rule. The `--gate`
+flag turns this into a CI check: it exits non-zero if any agent regressed, so a
+pipeline can fail and prompt the re-audit.
 
 ## Usage
 
@@ -118,6 +129,7 @@ off in production is dropped without waiting for the next manual fixture run.
 npx tsx src/cohort.ts                 # every domain agent
 npx tsx src/cohort.ts --agent sql     # one agent
 npx tsx src/cohort.ts --agent sql --project /path/to/repo --min-n 8
+npx tsx src/cohort.ts --gate          # exit 1 if any agent regressed (CI)
 npx tsx src/cohort.ts --json          # machine-readable
 ```
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.21.0 — 2026-06-22
+
+Cohort governance — the falsification path (rule governance roadmap), plus a
+primed full-loop experiment.
+
+- **Cohort verdict now drives a governance action** (`src/cohort.ts`). Every
+  `/warden-cohort` result carries a recommendation: REGRESSED -> **re-audit**
+  (real work got costlier; re-audit the agent's rules on the fixture), IMPROVED
+  -> **corroborated**, NO-CHANGE -> **no-signal**. It deliberately **flags, never
+  auto-evicts** — the signal is observational, so a regression recommends a
+  *controlled* fixture re-audit, which stays the only authority that removes a
+  rule.
+- **New `--gate` flag**: `/warden-cohort --gate` exits non-zero if any agent
+  regressed in production, so a CI pipeline can fail and prompt the re-audit. The
+  production half of the falsification loop the design called for.
+- **Primed: `validation/full-loop-experiment.ts`** — proves the still-unproven
+  half (the distiller). It runs the real distiller pipeline (`buildPrompt` + the
+  haiku call + `parseRulesJson`) on a wasteful session transcript to get a rule
+  the *system* proposed, then benchmarks that rule on the naive agent. Dry-run by
+  default; `--yes` (with `--transcript`) spends tokens. A SURVIVES here would be
+  the first end-to-end demonstration of the autonomous loop banking its own rule.
+- Docs: `docs/production-cohort-validation.md` governance section, README command
+  row, DECISIONS updated.
+- 385 tests (+6), green on Node 22 and 24.
+
 ## v0.20.0 — 2026-06-22
 
 Production-cohort validation (roadmap: rule governance and falsification) — the

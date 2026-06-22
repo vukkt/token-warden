@@ -538,3 +538,21 @@ all fixed) and motivated one algorithm change.
 - **Scope note:** this is the first step toward measuring rules on a user's *own* workload
   instead of the bundled fixture — the architectural direction for scaling beyond the four
   shipped agents.
+
+## v0.21.0 — cohort governance + the falsification path
+
+- **The cohort verdict flags, it does not auto-evict.** A REGRESSED production cohort maps
+  to a "re-audit" recommendation, not a delete. The signal is observational (task-mix
+  confounded), so letting it remove a rule directly would violate "measured, not vibes" —
+  it recommends a *controlled* fixture re-audit (`/warden-select`), which stays the only
+  authority that evicts. This keeps the production signal and the controlled gate cleanly
+  separated: production raises the alarm, the fixture makes the call.
+- **`--gate` for CI.** `/warden-cohort --gate` exits non-zero only on a regression, so a
+  pipeline can fail and prompt the re-audit. Other verdicts never gate (a no-signal or
+  insufficient-data result must not break CI).
+- **`validation/full-loop-experiment.ts` reuses the real distiller, not a reimplementation.**
+  It calls the exported `buildPrompt` + `parseRulesJson` (and the same haiku invocation) so
+  the experiment exercises the actual distillation path; only the p75 trigger and the DB
+  plumbing are bypassed, because the experiment is a controlled one-shot, not production
+  collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
+  `assessDelta`, same as the naive-headroom experiment.

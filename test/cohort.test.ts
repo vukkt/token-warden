@@ -1,12 +1,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	assessAgentCohorts,
 	assessCohorts,
 	type CohortStat,
+	cohortGovernance,
 	cohortStats,
+	main,
 	parseCohortArgs,
 	renderCohort,
 } from "../src/cohort.js";
@@ -171,7 +173,17 @@ describe("parseCohortArgs", () => {
 				"8",
 				"--json",
 			]),
-		).toEqual({ agent: "sql", project: "/p", minN: 8, json: true });
+		).toEqual({
+			agent: "sql",
+			project: "/p",
+			minN: 8,
+			json: true,
+			gate: false,
+		});
+	});
+
+	it("parses --gate", () => {
+		expect(parseCohortArgs(["--gate"]).gate).toBe(true);
 	});
 
 	it("defaults agent/project to null and min-n to 5", () => {
@@ -180,6 +192,7 @@ describe("parseCohortArgs", () => {
 			project: null,
 			minN: 5,
 			json: false,
+			gate: false,
 		});
 	});
 
@@ -198,6 +211,91 @@ describe("renderCohort", () => {
 		const text = renderCohort("sql", null, a);
 		expect(text).toContain("cohort validation — sql");
 		expect(text).toContain("verdict: IMPROVED");
+		expect(text).toContain("governance: CORROBORATED");
 		expect(text).toContain("observational");
+	});
+});
+
+describe("cohortGovernance", () => {
+	const a = (
+		verdict: "improved" | "regressed" | "no-change" | "insufficient-data",
+	) =>
+		cohortGovernance({
+			baseline: null,
+			latest: null,
+			delta: null,
+			pctDelta: null,
+			pooledStdErr: null,
+			confident: false,
+			verdict,
+			reason: "x",
+		});
+
+	it("maps each verdict to an action", () => {
+		expect(a("regressed").action).toBe("re-audit");
+		expect(a("improved").action).toBe("corroborated");
+		expect(a("no-change").action).toBe("no-signal");
+		expect(a("insufficient-data").action).toBe("insufficient-data");
+	});
+
+	it("only a regression recommends re-audit (the eviction trigger)", () => {
+		expect(a("improved").action).not.toBe("re-audit");
+		expect(a("no-change").action).not.toBe("re-audit");
+	});
+});
+
+describe("main --gate", () => {
+	let dir: string;
+	const prevDb = process.env.TOKEN_WARDEN_DB;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-gate-"));
+		process.env.TOKEN_WARDEN_DB = join(dir, "warden.db");
+		vi.spyOn(console, "log").mockImplementation(() => {});
+	});
+	afterEach(() => {
+		if (prevDb === undefined) delete process.env.TOKEN_WARDEN_DB;
+		else process.env.TOKEN_WARDEN_DB = prevDb;
+		vi.restoreAllMocks();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	function seedAgent(version: number, total: number, label: string): void {
+		const db = openDb();
+		for (let i = 0; i < 6; i++) {
+			upsertRun(db, {
+				agent: "sql",
+				sessionId: `${label}-${i}`,
+				taskHash: null,
+				inputTokens: total + i * 100,
+				outputTokens: 0,
+				cacheCreation: 0,
+				cacheRead: 0,
+				toolCalls: 1,
+				fileRereads: 0,
+				completed: true,
+				rulesetVersion: version,
+				ts: new Date().toISOString(),
+			});
+		}
+		db.close();
+	}
+
+	it("exits 1 when an agent regressed in production", () => {
+		seedAgent(0, 40_000, "v0");
+		seedAgent(1, 60_000, "v1"); // costlier after rules -> regressed
+		expect(main(["--gate", "--agent", "sql"])).toBe(1);
+	});
+
+	it("exits 0 when an agent improved", () => {
+		seedAgent(0, 60_000, "v0");
+		seedAgent(1, 40_000, "v1"); // cheaper after rules -> improved
+		expect(main(["--gate", "--agent", "sql"])).toBe(0);
+	});
+
+	it("does not gate without --gate", () => {
+		seedAgent(0, 40_000, "v0");
+		seedAgent(1, 60_000, "v1");
+		expect(main(["--agent", "sql"])).toBe(0);
 	});
 });
