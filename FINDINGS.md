@@ -209,9 +209,14 @@ invariant to between-task savings heterogeneity (`test/variance.test.ts`).
 
 This reframes the bottleneck a third time: not the engine, not only candidate
 quality, but **where we spend benchmark runs.** Uniform runs waste budget on
-quiet tasks; the next lever (Neyman/variance-proportional allocation) pours
-top-up runs into the high-variance tasks that dominate the SE — the
-token-efficient path to a confident verdict.
+quiet tasks. **Implemented in v0.24.0:** variance-proportional (Neyman) top-up
+allocation. When a verdict is uncertain, the selector no longer re-runs the whole
+suite — it spends the same run budget where the variance is, handing each extra
+run to the task with the largest marginal SE reduction `s²ᵢ/(nᵢ(nᵢ+1))`. On the
+full-loop profile (within-task σ ≈ 38k/27k/28k on three tasks, ≈0 on the other
+two) this pours the budget into `sql-05`/`sql-04`/`sql-01` and skips
+`sql-02`/`sql-03` — the same tokens, a much tighter error bar. It falls back to a
+uniform pass at runs=1 (no variance signal to allocate against).
 
 ## Still open
 
@@ -220,13 +225,12 @@ the distiller propose a high-impact rule, and do real-world workloads have
 catchable, generalizable headroom?** The shipped agents do not — their
 prompts already encode the obvious efficiencies — so the loop's value depends on
 novel, workload-specific waste that only real dogfood on real repositories
-surfaces. The precision lever is now real (the within-task SE shrinks with runs),
-so the next step on the measurement side is **variance-proportional (Neyman)
-top-up allocation** — spend extra runs on the few high-variance tasks that
-dominate the SE rather than re-running the whole suite uniformly. Secondary work:
-reduce golden-suite variance further (add quieter task files; baselines stay
-frozen), and fold cache-weighted cost (read ~0.1x, write ~1.25x, output ~5x) into
-the verdict so "tokens saved" becomes "dollars saved."
+surfaces. The measurement side is now sharp on both axes — the within-task SE
+shrinks with runs (v0.23.0) and Neyman allocation spends those runs where the
+variance is (v0.24.0). Secondary work: reduce golden-suite variance further (add
+quieter task files; baselines stay frozen), and fold cache-weighted cost (read
+~0.1x, write ~1.25x, output ~5x) into the verdict so "tokens saved" becomes
+"dollars saved."
 
 Re-run any time: `npx tsx validation/naive-headroom-experiment.ts` (positive
 control; `--yes` to spend tokens), `./validation/run.sh sql` (controlled on the

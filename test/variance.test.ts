@@ -6,8 +6,10 @@ import type { TaskSummary } from "../src/bench.js";
 import { getRuleById, insertRule, openDb, type WardenDb } from "../src/db.js";
 import { buildNudge } from "../src/notify.js";
 import {
+	allocateTopUpRuns,
 	assessDelta,
 	mergeSummaries,
+	type RunAllocation,
 	type SuiteRunner,
 	selectForAgent,
 } from "../src/select.js";
@@ -168,6 +170,47 @@ describe("assessDelta (within-task variance, fixed-suite estimand)", () => {
 	});
 });
 
+describe("allocateTopUpRuns (Neyman top-up allocation)", () => {
+	const stableRef = [summary("t1", [1000, 1000]), summary("t2", [1000, 1000])];
+
+	it("pours the whole budget into the high-variance task, skips the stable one", () => {
+		const measured = [
+			summary("t1", [900, 1100]), // variance 20,000
+			summary("t2", [1000, 1000]), // variance 0
+		];
+		const alloc = allocateTopUpRuns(stableRef, measured, 4);
+		expect(alloc?.get("t1")).toBe(4);
+		expect(alloc?.has("t2")).toBe(false);
+	});
+
+	it("splits a budget toward the noisier of two variable tasks", () => {
+		const measured = [
+			summary("t1", [800, 1200]), // variance 80,000
+			summary("t2", [900, 1100]), // variance 20,000
+		];
+		const alloc = allocateTopUpRuns(stableRef, measured, 6);
+		expect(alloc?.get("t1") ?? 0).toBeGreaterThan(alloc?.get("t2") ?? 0);
+		const total = [...(alloc?.values() ?? [])].reduce((a, b) => a + b, 0);
+		expect(total).toBe(6);
+	});
+
+	it("returns null (uniform fallback) when no within-task variance exists", () => {
+		const ref = [summary("t1", [1000]), summary("t2", [1000])];
+		const measured = [summary("t1", [900]), summary("t2", [1100])];
+		expect(allocateTopUpRuns(ref, measured, 4)).toBeNull();
+	});
+
+	it("never allocates to a regressed (no completed run) task", () => {
+		const measured = [
+			summary("t1", [900, 1100]),
+			summary("t2", [0, 0], false), // failed both runs
+		];
+		const alloc = allocateTopUpRuns(stableRef, measured, 4);
+		expect(alloc?.has("t2")).toBe(false);
+		expect(alloc?.get("t1")).toBe(4);
+	});
+});
+
 describe("mergeSummaries", () => {
 	it("pools results per task and recomputes means", () => {
 		const first = [summary("t1", [1000])];
@@ -249,6 +292,55 @@ describe("selectForAgent variance top-up", () => {
 		expect(decision?.delta).toBe(110);
 		expect(getRuleById(db, id)?.status).toBe("active");
 		expect(getRuleById(db, id)?.decided_reason).toContain("variance top-up");
+	});
+
+	it("routes the top-up by Neyman allocation — runs land on the noisy task", () => {
+		insertRule(db, {
+			agent,
+			body: "A rule whose worth hides behind one very noisy task.",
+			contextCost: 25,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		const allocations: (RunAllocation | undefined)[] = [];
+		const runner: SuiteRunner = (rules, label, _record, allocation) => {
+			if (label.endsWith("-topup")) allocations.push(allocation);
+			if (rules.length === 0) {
+				// Stable baseline, 2 runs/task.
+				return [
+					summary("t1", [1000, 1000]),
+					summary("t2", [1000, 1000]),
+					summary("t3", [1000, 1000]),
+				];
+			}
+			if (label.endsWith("-topup")) {
+				// Only the allocated tasks run; t1 resolves clearly cheaper.
+				const out: TaskSummary[] = [];
+				for (const t of ["t1", "t2", "t3"]) {
+					const n = allocation?.get(t);
+					if (n) out.push(summary(t, Array(n).fill(900)));
+				}
+				return out;
+			}
+			// First candidate pass: t1 is wildly noisy, t2/t3 quiet → uncertain.
+			return [
+				summary("t1", [850, 1150]),
+				summary("t2", [960, 1000]),
+				summary("t3", [940, 980]),
+			];
+		};
+
+		const report = selectForAgent(db, agent, runner, { topUpBudget: 1 });
+
+		expect(report.decisions[0]?.toppedUp).toBe(true);
+		// The top-up pass received an allocation, and it concentrated runs on the
+		// high-variance task while sparing the quiet ones.
+		expect(allocations).toHaveLength(1);
+		const alloc = allocations[0];
+		expect(alloc).toBeDefined();
+		expect((alloc?.get("t1") ?? 0) > 0).toBe(true);
+		expect(alloc?.has("t2")).toBe(false);
+		expect(alloc?.has("t3")).toBe(false);
 	});
 
 	it("does not top up when the budget is zero", () => {

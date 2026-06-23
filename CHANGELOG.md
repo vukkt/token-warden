@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.24.0 — 2026-06-23
+
+Neyman (variance-proportional) top-up allocation — the precision lever the
+within-task SE made possible (see FINDINGS.md). Same token budget, placed where
+it shrinks the error bar.
+
+- **An uncertain verdict now tops up by variance, not uniformly** (`src/select.ts`,
+  new `allocateTopUpRuns`). The old top-up re-ran the whole measured side once
+  more. Since the SE is `sqrt((1/K²)·Σᵢ s²ᵢ/nᵢ)`, one extra run on task i cuts its
+  term by `s²ᵢ/(nᵢ(nᵢ+1))`; the selector greedily hands each run in the budget to
+  the task with the largest such marginal — pouring runs into the few
+  high-variance tasks that dominate the error bar and skipping the quiet ones.
+- **Cost-neutral, not a loosened bar.** The budget equals one full duplicate pass
+  (what the uniform top-up cost), so this spends the same tokens, just better
+  placed. The verdict logic, 2× threshold, and uncertainty test are unchanged.
+- **Falls back to a uniform pass at runs=1** (no within-task variance to allocate
+  against), matching the v0.23.0 SE fallback; regressed tasks are never allocated
+  to. `SuiteRunner` gained an optional `allocation` argument (backward-compatible).
+- Docs: FINDINGS lever now shipped, DECISIONS rationale.
+- 394 tests (+5: 4 allocator unit tests + 1 selector routing test), green on
+  Node 22 and 24.
+
 ## v0.23.0 — 2026-06-23
 
 The within-task standard error — a correctness fix to the verdict's statistics

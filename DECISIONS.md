@@ -557,6 +557,30 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.24.0 — Neyman (variance-proportional) top-up allocation
+
+- **An uncertain verdict now tops up by variance, not uniformly.** The old top-up re-ran
+  the whole measured side once more (`runs` extra runs on every task). The SE is
+  `sqrt((1/K²)·Σᵢ s²ᵢ/nᵢ)`, so one extra run on task i cuts its term by `s²ᵢ/(nᵢ(nᵢ+1))`;
+  greedily handing each run in the budget to the task with the largest such marginal
+  minimizes the SE for a fixed number of runs (classic Neyman allocation, here with equal
+  per-task weights so optimal `nᵢ ∝ σᵢ`). `allocateTopUpRuns` returns that per-task map;
+  the runner runs only those tasks, each for its allocated count.
+- **Same budget, better placed — deliberately cost-neutral.** The top-up budget equals the
+  measured side's run count (one full duplicate pass, what the uniform top-up cost), so this
+  does not spend more tokens; it spends the same tokens where they shrink the error bar. No
+  loosening of the bar: the verdict logic, threshold, and uncertainty test are unchanged.
+- **Allocation uses the measured side only.** The baseline is shared across candidates and
+  measured once; the top-up re-runs only the measured (toppable) side, so allocation is
+  driven by the measured side's per-task variance. A task whose noise lives in the shared
+  baseline cannot be helped by more measured runs — correctly, those runs go elsewhere.
+- **Falls back to a uniform pass at runs=1.** With one run per task there is no within-task
+  variance to allocate against, so `allocateTopUpRuns` returns null and the selector does the
+  legacy uniform top-up — matching the v0.23.0 between-task SE fallback at runs=1. Regressed
+  (no completed run) tasks are never allocated to; re-running them would not un-regress them.
+- **`SuiteRunner` gained an optional `allocation` argument** rather than a new runner type, so
+  fake runners in tests stay backward-compatible (they ignore it and the uniform path runs).
+
 ## v0.23.0 — the within-task standard error (fixed-suite estimand)
 
 - **`assessDelta` now propagates within-task run variance instead of cross-task spread.**

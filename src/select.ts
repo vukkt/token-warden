@@ -249,6 +249,73 @@ export function assessDelta(
 	return { delta, regression, standardError, standardErrorBasis, uncertain };
 }
 
+/** Completed-run tokens for one task in a summary set. */
+function completedTokens(summary: TaskSummary | undefined): number[] {
+	return (summary?.results ?? [])
+		.filter((r) => r.completed)
+		.map((r) => r.tokens);
+}
+
+/**
+ * Variance-proportional (Neyman) allocation of a fixed top-up run budget across
+ * the measured side's tasks. The SE is `sqrt( (1/K²)·Σᵢ s²ᵢ/nᵢ )`; one extra run
+ * on task i cuts its term by `s²ᵢ/(nᵢ(nᵢ+1))`, so greedily handing each run to
+ * the task with the largest such marginal minimizes the SE for the budget. This
+ * pours runs into the few high-variance tasks that dominate the error bar
+ * instead of re-running the whole suite uniformly.
+ *
+ * Returns null — meaning "fall back to a uniform full top-up pass" — when no
+ * within-task variance is estimable (every task has <2 runs, i.e. runs=1), since
+ * there is then no variance signal to allocate against.
+ */
+export function allocateTopUpRuns(
+	reference: TaskSummary[],
+	measured: TaskSummary[],
+	budget: number,
+): Map<string, number> | null {
+	const measuredById = new Map(measured.map((s) => [s.taskId, s]));
+	type Stratum = { taskId: string; variance: number; n: number; alloc: number };
+	const strata: Stratum[] = [];
+	const measuredVectors: number[][] = [];
+	for (const base of reference) {
+		if (!base.results.some((r) => r.completed)) continue;
+		const tokens = completedTokens(measuredById.get(base.taskId));
+		if (tokens.length === 0) continue; // regression / not comparable
+		measuredVectors.push(tokens);
+		strata.push({
+			taskId: base.taskId,
+			variance: 0,
+			n: tokens.length,
+			alloc: 0,
+		});
+	}
+	const pooled = pooledVariance(measuredVectors);
+	if (pooled === null || strata.length === 0 || budget <= 0) return null;
+	for (let i = 0; i < strata.length; i++) {
+		const s = strata[i];
+		if (s) s.variance = sampleVariance(measuredVectors[i] ?? []) ?? pooled;
+	}
+
+	for (let spent = 0; spent < budget; spent++) {
+		let best: Stratum | null = null;
+		let bestMarginal = 0;
+		for (const s of strata) {
+			const marginal = s.variance / (s.n * (s.n + 1));
+			if (marginal > bestMarginal) {
+				bestMarginal = marginal;
+				best = s;
+			}
+		}
+		if (!best) break; // every task perfectly stable — nothing to gain
+		best.n++;
+		best.alloc++;
+	}
+
+	const allocation = new Map<string, number>();
+	for (const s of strata) if (s.alloc > 0) allocation.set(s.taskId, s.alloc);
+	return allocation.size > 0 ? allocation : null;
+}
+
 /** Combine two measurement passes of the same configuration: pool the raw
  * results per task and re-summarize. */
 export function mergeSummaries(
@@ -275,12 +342,20 @@ export function memoryFilePath(agent: string): string {
 	return join(base, agent, "MEMORY.md");
 }
 
+/** Per-task run allocation for a Neyman top-up: taskId → number of extra runs
+ * to spend on that task. Absent tasks get none. */
+export type RunAllocation = ReadonlyMap<string, number>;
+
 /** Runs the golden suite under an explicit rule set; injected so unit tests
- * can fake measurements. The real one wraps bench.runSuite. */
+ * can fake measurements. The real one wraps bench.runSuite. When `allocation`
+ * is given, only those tasks run, each for its allocated number of runs (the
+ * variance-proportional top-up); otherwise the full suite runs at the default
+ * run count. */
 export type SuiteRunner = (
 	rules: RuleRow[],
 	label: string,
 	recordBaselines: boolean,
+	allocation?: RunAllocation,
 ) => TaskSummary[];
 
 interface Decision {
@@ -359,7 +434,7 @@ export function selectForAgent(
 	 * (reference = baseline) and re-audits (reference = without-rule). */
 	function assessWithTopUp(
 		reference: () => TaskSummary[],
-		measureOnce: (suffix: string) => TaskSummary[],
+		measure: (suffix: string, allocation?: RunAllocation) => TaskSummary[],
 		contextCost: number,
 		invert: boolean,
 	): {
@@ -367,7 +442,7 @@ export function selectForAgent(
 		toppedUp: boolean;
 		measured: TaskSummary[];
 	} {
-		let measured = measureOnce("");
+		let measured = measure("");
 		const assess = () =>
 			invert
 				? assessDelta(measured, reference(), contextCost)
@@ -375,7 +450,17 @@ export function selectForAgent(
 		let assessment = assess();
 		let toppedUp = false;
 		if (assessment.uncertain && topUpBudget > 0) {
-			measured = mergeSummaries(measured, measureOnce("-topup"));
+			// Spend a top-up pass worth of runs (one full duplicate of the measured
+			// side), but place them by variance: Neyman allocation pours runs into
+			// the high-variance tasks that dominate the SE rather than re-running
+			// every task. `measured` is always the side being topped up (the
+			// candidate's with-rule side, or the re-audit's without side).
+			const budget = measured.reduce((sum, s) => sum + s.results.length, 0);
+			const allocation = allocateTopUpRuns(reference(), measured, budget);
+			const extra = allocation
+				? measure("-topup", allocation)
+				: measure("-topup"); // runs=1: no variance signal — uniform fallback
+			measured = mergeSummaries(measured, extra);
 			assessment = assess();
 			toppedUp = true;
 		}
@@ -397,14 +482,14 @@ export function selectForAgent(
 		const decide = (params: {
 			rule: RuleRow;
 			kind: Decision["kind"];
-			measureOnce: (suffix: string) => TaskSummary[];
+			measure: (suffix: string, allocation?: RunAllocation) => TaskSummary[];
 			invert: boolean;
 			evictWhenUncertain: boolean;
 			reasonPrefix: string;
 		}): void => {
 			const { assessment, toppedUp, measured } = assessWithTopUp(
 				() => baseline,
-				params.measureOnce,
+				params.measure,
 				params.rule.context_cost,
 				params.invert,
 			);
@@ -473,11 +558,12 @@ export function selectForAgent(
 			decide({
 				rule: candidate,
 				kind: "candidate",
-				measureOnce: (suffix) =>
+				measure: (suffix, allocation) =>
 					runner(
 						[...activeSet, candidate],
 						`candidate-${candidate.id}${suffix}`,
 						false,
+						allocation,
 					),
 				invert: false,
 				evictWhenUncertain: true,
@@ -496,8 +582,13 @@ export function selectForAgent(
 			decide({
 				rule: auditTarget,
 				kind: "re-audit",
-				measureOnce: (suffix) =>
-					runner(withoutIt, `audit-${auditTarget.id}${suffix}`, false),
+				measure: (suffix, allocation) =>
+					runner(
+						withoutIt,
+						`audit-${auditTarget.id}${suffix}`,
+						false,
+						allocation,
+					),
 				invert: true,
 				evictWhenUncertain: false,
 				reasonPrefix: "re-audit: ",
@@ -603,19 +694,40 @@ function main(args: SelectArgs): void {
 	const db = openDb();
 	try {
 		const tasks: GoldenTask[] = loadGoldenTasks(args.agent);
-		const runner: SuiteRunner = (rules, label, recordBaselines) =>
-			runSuite(db, args.agent, tasks, {
-				rules,
-				runs: args.runs,
-				recordBaselines,
-				rulesetVersion: getRulesetVersion(db, args.agent),
-				label,
-				config: recordBaselines
-					? "active"
-					: label.startsWith("audit-")
-						? "audit"
-						: "candidate",
-			});
+		const runner: SuiteRunner = (rules, label, recordBaselines, allocation) => {
+			const rulesetVersion = getRulesetVersion(db, args.agent);
+			const config = recordBaselines
+				? "active"
+				: label.startsWith("audit-")
+					? "audit"
+					: "candidate";
+			if (!allocation) {
+				return runSuite(db, args.agent, tasks, {
+					rules,
+					runs: args.runs,
+					recordBaselines,
+					rulesetVersion,
+					label,
+					config,
+				});
+			}
+			// Neyman top-up: run only the allocated tasks, each for its own count.
+			const summaries: TaskSummary[] = [];
+			for (const task of tasks) {
+				const extraRuns = allocation.get(task.id);
+				if (!extraRuns) continue;
+				const [summary] = runSuite(db, args.agent, [task], {
+					rules,
+					runs: extraRuns,
+					recordBaselines: false,
+					rulesetVersion,
+					label,
+					config,
+				});
+				if (summary) summaries.push(summary);
+			}
+			return summaries;
+		};
 
 		console.log(
 			`Selecting for agent=${args.agent} (runs=${args.runs} per config, top-up budget ${args.topUp})`,
