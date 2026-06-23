@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.23.0 — 2026-06-23
+
+The within-task standard error — a correctness fix to the verdict's statistics
+that makes the run-count lever actually buy confidence (see FINDINGS.md).
+
+- **`assessDelta` now builds the standard error from propagated within-task run
+  variance**, not the spread between tasks (`src/select.ts`). For a frozen golden
+  suite the tasks are the whole population — their differing savings are fixed
+  offsets, not sampling error — so the only sampling error is run-to-run noise
+  within a task: `SE = sqrt( (1/K²)·Σᵢ [s²_without,i/n_i + s²_with,i/n_i] )`.
+- **The point estimate and the regression gate are unchanged.** This is a
+  correctness fix, not a loosening of the 2× bar — only the confidence interval
+  changes, to the one the frozen-suite design implies.
+- **Why it matters:** the old SE was independent of run count, so "more runs"
+  could not tighten it — the v0.18 run-count lever was statistically inert. The
+  new SE shrinks as `1/√runs`. On the real full-loop data the old SE was a
+  falsely-confident 4,711; the corrected SE is an honest 7,995 at runs=2 and
+  collapses as runs rise. Two new unit tests pin both properties.
+- **`DeltaAssessment.standardErrorBasis`** (`"within-task" | "between-task"`) is
+  reported so a verdict's confidence basis is auditable; at runs=1 it falls back
+  to the legacy between-task spread rather than silently dropping the uncertainty
+  flag. The validation harnesses print the basis.
+- Docs: FINDINGS statistical-correction section with the real before/after,
+  DECISIONS rationale (fixed-task vs generalization), README roadmap note on the
+  next lever (Neyman top-up allocation).
+- 389 tests (+4), green on Node 22 and 24.
+
 ## v0.22.0 — 2026-06-22
 
 Distiller candidate-quality upgrade — the full-loop experiment localized the

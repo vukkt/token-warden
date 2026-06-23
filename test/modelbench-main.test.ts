@@ -185,12 +185,35 @@ describe("modelbench main() orchestration", () => {
 	});
 
 	it("reports a within-noise comparison as no clear difference", () => {
-		// Per-task costs jitter around equal — the delta is indistinguishable
-		// from zero, so the verdict lands within measurement noise.
-		wireRunSuite(
-			"haiku",
-			{ "sql-01": 1000, "sql-02": 1000, "sql-03": 1000 },
-			{ "sql-01": 1010, "sql-02": 980, "sql-03": 1030 },
+		// Per-task costs jitter around equal — the delta is tiny next to genuine
+		// run-to-run noise, so the verdict lands within measurement noise. The
+		// top-up pass returns *different* values from the first (as real runs do),
+		// giving the within-task estimator real noise to measure against; with
+		// identical duplicate passes the variance would be a misleading zero.
+		const baselineP1 = { "sql-01": 950, "sql-02": 1050, "sql-03": 950 };
+		const baselineTU = { "sql-01": 1050, "sql-02": 950, "sql-03": 1050 };
+		const candidateP1 = { "sql-01": 1060, "sql-02": 970, "sql-03": 1080 };
+		const candidateTU = { "sql-01": 960, "sql-02": 990, "sql-03": 980 };
+		runSuiteMock.mockImplementation(
+			(
+				_db: unknown,
+				_agent: unknown,
+				tasks: Array<{ id: string }>,
+				options: { model: string; label: string },
+			): TaskSummary[] => {
+				const isCandidate = options.model === "haiku";
+				const isTopUp = options.label.endsWith("-topup");
+				const map = isCandidate
+					? isTopUp
+						? candidateTU
+						: candidateP1
+					: isTopUp
+						? baselineTU
+						: baselineP1;
+				return tasks.map((t) =>
+					summaryFor(t.id, map[t.id as keyof typeof map] ?? 0, true),
+				);
+			},
 		);
 
 		main({

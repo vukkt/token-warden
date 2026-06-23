@@ -183,7 +183,7 @@ function main(): number {
 	const threshold = 2 * rent;
 	console.log("\n=== VERDICT (system-distilled rule) ===");
 	console.log(
-		`mean delta=${a.delta} tok/run  rent=${rent}  threshold(2x)=${threshold}  stderr=${a.standardError?.toFixed(0) ?? "n/a"}`,
+		`mean delta=${a.delta} tok/run  rent=${rent}  threshold(2x)=${threshold}  stderr=${a.standardError?.toFixed(0) ?? "n/a"} (${a.standardErrorBasis ?? "—"})`,
 	);
 	if (a.regression) {
 		console.log("[EVICT] the distilled rule broke a task (regression).");

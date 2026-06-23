@@ -160,6 +160,59 @@ distiller propose a high-impact rule?**" — a model/prompt problem on
 `src/distill.ts` (a stronger distill model, few-shot exemplars of high-impact
 rules, and feeding real waste metrics), not a measurement problem.
 
+## The statistical correction (2026-06): we were measuring the wrong variance
+
+The full-loop run above landed INCONCLUSIVE with `stderr=4711` against a
+`delta=3048`. Investigating *why* the error bar was 4711 surfaced a real
+estimator bug, not a tuning problem.
+
+The old `assessDelta` computed one saving per task `dᵢ = mean(without) −
+mean(with)`, then took the standard error as the spread **across tasks**:
+`SE = sqrt(Var{d₁…d₅} / 5)`. Two consequences, both fatal:
+
+1. **It measured task heterogeneity, not measurement precision.** `sql-05` saves
+   ~35k, `sql-01` ~−3k; the error bar was mostly "tasks differ from each other"
+   — which is real and obvious, not noise about the *average* saving.
+2. **It could not shrink with runs.** `savings.length` stays at 5 no matter how
+   many runs per task, so the v0.18 "default runs 2→3" lever — our main
+   precision tool — was **statistically inert**. That is the deeper reason
+   nothing survived: we could not *buy* confidence with runs.
+
+For a **frozen, fixed golden suite** (the whole design — baselines never change),
+the tasks are the entire population of interest, not a sample. The `μᵢ` are fixed
+constants; the only sampling error is run-to-run noise *within* each task. The
+correct error bar is the **propagated within-task standard error**:
+
+```
+Var(mean saving) = (1/K²) · Σᵢ [ s²_without,i / n_without,i  +  s²_with,i / n_with,i ]
+```
+
+This is the right estimand for fixed tasks, it **shrinks as 1/√runs** (so the
+run lever finally bites), and it stops penalizing a rule for helping some tasks
+more than others. The keep/evict *point estimate* is unchanged; the regression
+gate is untouched. This is a correctness fix, not a loosening of the bar.
+
+Recomputed on the exact full-loop data:
+
+| Estimator | SE | What it means |
+|---|---|---|
+| old (between-task spread / √5) | **4,711** | falsely confident; runs-invariant |
+| new (propagated within-task) | **7,995** | honest; dominated by `sql-05`/`sql-04`/`sql-01` |
+
+The corrected SE is *larger* here — the old 4,711 was over-confident. At
+`--runs 2` on this noisy agent we genuinely cannot resolve a 3k effect: `sql-05`
+without swung 96k→42k on the **same task**. But the new SE is dominated by three
+tasks (within-task σ ≈ 38k, 27k, 28k) while `sql-02`/`sql-03` contribute almost
+nothing (σ ≈ 0.3k, 3.6k) — and crucially it now collapses as runs increase. Unit
+tests pin both properties: the SE shrinks monotonically with run count, and it is
+invariant to between-task savings heterogeneity (`test/variance.test.ts`).
+
+This reframes the bottleneck a third time: not the engine, not only candidate
+quality, but **where we spend benchmark runs.** Uniform runs waste budget on
+quiet tasks; the next lever (Neyman/variance-proportional allocation) pours
+top-up runs into the high-variance tasks that dominate the SE — the
+token-efficient path to a confident verdict.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can
@@ -167,9 +220,13 @@ the distiller propose a high-impact rule, and do real-world workloads have
 catchable, generalizable headroom?** The shipped agents do not — their
 prompts already encode the obvious efficiencies — so the loop's value depends on
 novel, workload-specific waste that only real dogfood on real repositories
-surfaces. Secondary work: reduce golden-suite variance further (add quieter task
-files; baselines stay frozen), and fold cache-weighted cost (read ~0.1x, write
-~1.25x, output ~5x) into the verdict so "tokens saved" becomes "dollars saved."
+surfaces. The precision lever is now real (the within-task SE shrinks with runs),
+so the next step on the measurement side is **variance-proportional (Neyman)
+top-up allocation** — spend extra runs on the few high-variance tasks that
+dominate the SE rather than re-running the whole suite uniformly. Secondary work:
+reduce golden-suite variance further (add quieter task files; baselines stay
+frozen), and fold cache-weighted cost (read ~0.1x, write ~1.25x, output ~5x) into
+the verdict so "tokens saved" becomes "dollars saved."
 
 Re-run any time: `npx tsx validation/naive-headroom-experiment.ts` (positive
 control; `--yes` to spend tokens), `./validation/run.sh sql` (controlled on the

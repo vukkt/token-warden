@@ -557,6 +557,38 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.23.0 — the within-task standard error (fixed-suite estimand)
+
+- **`assessDelta` now propagates within-task run variance instead of cross-task spread.**
+  The old SE was `sqrt(Var{per-task savings} / K)` — the spread *between* tasks. For a
+  frozen golden suite the tasks are the whole population (their differing savings are fixed
+  offsets, not sampling error), so the only sampling error is run-to-run noise *within* a
+  task. The correct SE is `sqrt( (1/K²)·Σᵢ [s²_without,i/n_i + s²_with,i/n_i] )`. This is a
+  *correctness* fix, not a loosening: the keep/evict point estimate (`delta`) and the
+  regression gate are unchanged — only the confidence interval changes, to the one the
+  frozen-suite design actually implies.
+- **Why it matters mathematically.** The old SE was independent of run count (`K` tasks no
+  matter how many runs), so the v0.18 "more runs" lever was statistically inert — we could
+  not buy confidence with runs. The new SE shrinks as `1/√runs`. On the real full-loop data
+  the old SE was a falsely-confident 4,711; the corrected within-task SE is 7,995 (honest at
+  runs=2 on a noisy agent), and it collapses as runs rise. Two unit tests pin the new
+  properties: SE shrinks monotonically with runs, and it is invariant to between-task
+  heterogeneity.
+- **Fixed-task vs generalization, deliberately.** The within-task SE answers "how cheap is
+  this rule *on this suite*", which is exactly what the verdict claims. Generalizing to
+  unseen tasks would warrant the wider between-task interval — but token-warden's design is
+  measure-on-this-frozen-suite, so fixed-task inference is the right call and is documented
+  as such.
+- **Graceful fallback, never silent.** At runs=1 (no within-task variance estimable) it
+  falls back to the legacy between-task spread rather than dropping the uncertainty flag, and
+  reports `standardErrorBasis: "within-task" | "between-task"` so a verdict's confidence
+  basis is auditable. A degrees-of-freedom-weighted pooled variance backstops any single
+  task too sparse to estimate its own noise.
+- **Not done here, named next:** variance-proportional (Neyman) top-up allocation. The SE is
+  dominated by a few high-variance tasks; spending top-up runs there instead of re-running
+  the whole suite uniformly is the token-efficient path to confidence. Deferred to its own
+  release because it changes token-spend behavior and deserves a real benchmark run.
+
 ## v0.22.0 — distiller candidate-quality upgrade
 
 - **Default distill model is `sonnet`, not `haiku`.** The full-loop experiment (FINDINGS.md)

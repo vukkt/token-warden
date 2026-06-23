@@ -105,33 +105,79 @@ interface DeltaResult {
 	regression: boolean;
 }
 
-/** Per-task savings for tasks completed in both configurations
+/** One golden task measured under both configurations: the point saving plus
+ * the raw completed-run token vectors needed to estimate run-to-run noise. */
+interface TaskComparison {
+	saving: number;
+	withoutTokens: number[];
+	withTokens: number[];
+}
+
+/** Per-task comparisons for tasks completed in both configurations
  * (invariant #3), plus the regression flag. */
-function perTaskSavings(
+function perTaskComparisons(
 	without: TaskSummary[],
 	withRule: TaskSummary[],
-): { savings: number[]; regression: boolean } {
+): { comparisons: TaskComparison[]; regression: boolean } {
 	const withById = new Map(withRule.map((s) => [s.taskId, s]));
-	const savings: number[] = [];
+	const comparisons: TaskComparison[] = [];
 	let regression = false;
 	for (const base of without) {
-		const baseCompleted = base.results.some((r) => r.completed);
-		if (!baseCompleted) continue;
+		const withoutTokens = base.results
+			.filter((r) => r.completed)
+			.map((r) => r.tokens);
+		if (withoutTokens.length === 0) continue;
 		const other = withById.get(base.taskId);
-		const otherCompleted = other?.results.some((r) => r.completed) ?? false;
-		if (!other || !otherCompleted) {
+		const withTokens = (other?.results ?? [])
+			.filter((r) => r.completed)
+			.map((r) => r.tokens);
+		if (!other || withTokens.length === 0) {
 			regression = true;
 			continue;
 		}
-		savings.push(base.meanCompletedTokens - other.meanCompletedTokens);
+		comparisons.push({
+			saving: base.meanCompletedTokens - other.meanCompletedTokens,
+			withoutTokens,
+			withTokens,
+		});
 	}
-	return { savings, regression };
+	return { comparisons, regression };
+}
+
+/** Unbiased sample variance; null when fewer than two observations. */
+function sampleVariance(xs: number[]): number | null {
+	if (xs.length < 2) return null;
+	const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+	return xs.reduce((acc, x) => acc + (x - m) ** 2, 0) / (xs.length - 1);
+}
+
+/** Degrees-of-freedom-weighted pooled variance across many run vectors —
+ * borrowed when an individual task has too few runs to estimate its own
+ * run-to-run noise (default runs=3 gives each task its own estimate; this is
+ * the backstop at the n=2 edge). Null when no vector has ≥2 observations. */
+function pooledVariance(vectors: number[][]): number | null {
+	let sumSq = 0;
+	let dof = 0;
+	for (const xs of vectors) {
+		if (xs.length < 2) continue;
+		const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+		sumSq += xs.reduce((acc, x) => acc + (x - m) ** 2, 0);
+		dof += xs.length - 1;
+	}
+	return dof > 0 ? sumSq / dof : null;
 }
 
 export interface DeltaAssessment extends DeltaResult {
-	/** Standard error of the mean per-task savings; null with <2 comparable
-	 * tasks. */
+	/** Standard error of the mean saving. Computed from propagated *within-task*
+	 * run-to-run variance when ≥2 runs/side exist (the correct estimand for a
+	 * frozen, fixed golden suite — it shrinks as 1/√runs); falls back to the
+	 * between-task spread only when no within-task variance is estimable. Null
+	 * with <2 comparable tasks. */
 	standardError: number | null;
+	/** Which variance the standard error is built from. "within-task" is the
+	 * correct fixed-suite estimator; "between-task" is the legacy fallback at
+	 * runs=1 — surfaced so a verdict's confidence basis is auditable. */
+	standardErrorBasis: "within-task" | "between-task" | null;
 	/** True when the keep/evict verdict could flip within one standard
 	 * error — the signal to spend a top-up measurement. */
 	uncertain: boolean;
@@ -139,33 +185,68 @@ export interface DeltaAssessment extends DeltaResult {
 
 /**
  * Variance-aware delta: alongside the point estimate, report whether the
- * verdict is within noise of the 2×rent threshold. LLM run-to-run variance
- * is the dominant error source at small effect sizes.
+ * verdict is within noise of the 2×rent threshold. LLM run-to-run variance is
+ * the dominant error source at small effect sizes.
+ *
+ * The standard error is the *propagated within-task* error
+ *   Var(mean saving) = (1/K²) · Σᵢ [ s²_without,i/n_without,i + s²_with,i/n_with,i ]
+ * — the right estimand for a frozen golden suite, where the tasks are the whole
+ * population (their differing savings are fixed offsets, not sampling error) and
+ * the only randomness is run-to-run noise. Critically, this SE shrinks as more
+ * runs are added, so the run-count lever actually tightens confidence. When no
+ * task has ≥2 completed runs per side (runs=1), it falls back to the legacy
+ * between-task spread so the uncertainty flag is never silently lost.
  */
 export function assessDelta(
 	without: TaskSummary[],
 	withRule: TaskSummary[],
 	contextCost: number,
 ): DeltaAssessment {
-	const { savings, regression } = perTaskSavings(without, withRule);
-	if (savings.length === 0) {
-		return { delta: null, regression, standardError: null, uncertain: false };
+	const { comparisons, regression } = perTaskComparisons(without, withRule);
+	if (comparisons.length === 0) {
+		return {
+			delta: null,
+			regression,
+			standardError: null,
+			standardErrorBasis: null,
+			uncertain: false,
+		};
 	}
-	const mean = savings.reduce((a, b) => a + b, 0) / savings.length;
+	const savings = comparisons.map((c) => c.saving);
+	const k = savings.length;
+	const mean = savings.reduce((a, b) => a + b, 0) / k;
 	const delta = Math.round(mean);
+
+	// Propagated within-task standard error (the fixed-suite estimand). Borrow a
+	// pooled per-side variance for any task too sparse to estimate its own.
+	const pooledWithout = pooledVariance(comparisons.map((c) => c.withoutTokens));
+	const pooledWith = pooledVariance(comparisons.map((c) => c.withTokens));
 	let standardError: number | null = null;
-	if (savings.length >= 2) {
+	let standardErrorBasis: "within-task" | "between-task" | null = null;
+	if (pooledWithout !== null && pooledWith !== null) {
+		let sumVar = 0;
+		for (const c of comparisons) {
+			const vW = sampleVariance(c.withoutTokens) ?? pooledWithout;
+			const vR = sampleVariance(c.withTokens) ?? pooledWith;
+			sumVar += vW / c.withoutTokens.length + vR / c.withTokens.length;
+		}
+		standardError = Math.sqrt(sumVar / k ** 2);
+		standardErrorBasis = "within-task";
+	} else if (k >= 2) {
+		// runs=1 everywhere: no run-to-run estimate exists. Fall back to the
+		// legacy between-task spread so confidence is never silently dropped.
 		const variance =
-			savings.reduce((acc, s) => acc + (s - mean) ** 2, 0) /
-			(savings.length - 1);
-		standardError = Math.sqrt(variance / savings.length);
+			savings.reduce((acc, s) => acc + (s - mean) ** 2, 0) / (k - 1);
+		standardError = Math.sqrt(variance / k);
+		standardErrorBasis = "between-task";
 	}
+
 	const threshold = 2 * contextCost;
 	const uncertain =
 		!regression &&
 		standardError !== null &&
 		Math.abs(mean - threshold) < standardError;
-	return { delta, regression, standardError, uncertain };
+	return { delta, regression, standardError, standardErrorBasis, uncertain };
 }
 
 /** Combine two measurement passes of the same configuration: pool the raw

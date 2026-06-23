@@ -128,7 +128,7 @@ function main(): void {
 		);
 	}
 	console.log(
-		`\nmean delta=${assessment.delta} tok/run  rent=${rent}  threshold(2x)=${threshold}  stderr=${assessment.standardError?.toFixed(0) ?? "n/a"}`,
+		`\nmean delta=${assessment.delta} tok/run  rent=${rent}  threshold(2x)=${threshold}  stderr=${assessment.standardError?.toFixed(0) ?? "n/a"} (${assessment.standardErrorBasis ?? "—"})`,
 	);
 	if (assessment.regression) {
 		console.log("[EVICT] the rule broke a task (regression).");

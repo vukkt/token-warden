@@ -106,6 +106,68 @@ describe("assessDelta", () => {
 	});
 });
 
+describe("assessDelta (within-task variance, fixed-suite estimand)", () => {
+	it("builds the SE from within-task run noise when ≥2 runs/side exist", () => {
+		const without = [summary("t1", [1000, 1040]), summary("t2", [2000, 2080])];
+		const withRule = [summary("t1", [900, 940]), summary("t2", [1850, 1930])];
+		const a = assessDelta(without, withRule, 25);
+		expect(a.standardErrorBasis).toBe("within-task");
+		expect(a.standardError).toBeGreaterThan(0);
+	});
+
+	it("falls back to between-task spread at one run/side", () => {
+		const without = [summary("t1", [1000]), summary("t2", [2000])];
+		const withRule = [summary("t1", [900]), summary("t2", [1850])];
+		expect(assessDelta(without, withRule, 25).standardErrorBasis).toBe(
+			"between-task",
+		);
+	});
+
+	it("SHRINKS the SE as runs increase — the run-count lever now bites", () => {
+		// Same run-to-run spread (±20), same per-task savings; only the number of
+		// runs differs. The corrected estimator must report a smaller SE with more
+		// runs (the legacy between-task SE could not — it was independent of runs).
+		const twoRuns = assessDelta(
+			[summary("t1", [980, 1020]), summary("t2", [1980, 2020])],
+			[summary("t1", [880, 920]), summary("t2", [1880, 1920])],
+			25,
+		);
+		const fourRuns = assessDelta(
+			[
+				summary("t1", [980, 1020, 980, 1020]),
+				summary("t2", [1980, 2020, 1980, 2020]),
+			],
+			[
+				summary("t1", [880, 920, 880, 920]),
+				summary("t2", [1880, 1920, 1880, 1920]),
+			],
+			25,
+		);
+		expect(twoRuns.delta).toBe(fourRuns.delta); // identical point estimate
+		expect(fourRuns.standardError).toBeLessThan(twoRuns.standardError ?? 0);
+	});
+
+	it("does not inflate the SE for tasks that simply save different amounts", () => {
+		// Two suites with identical within-task noise (±20) but very different
+		// per-task savings. The fixed-suite estimand treats differing savings as
+		// fixed offsets, not error — so both must report the same within-task SE.
+		const homogeneous = assessDelta(
+			[summary("t1", [980, 1020]), summary("t2", [980, 1020])],
+			[summary("t1", [880, 920]), summary("t2", [880, 920])],
+			25,
+		);
+		const heterogeneous = assessDelta(
+			[summary("t1", [980, 1020]), summary("t2", [980, 1020])],
+			[summary("t1", [880, 920]), summary("t2", [480, 520])],
+			25,
+		);
+		expect(heterogeneous.standardError).toBeCloseTo(
+			homogeneous.standardError ?? 0,
+			6,
+		);
+	});
+});
+
 describe("mergeSummaries", () => {
 	it("pools results per task and recomputes means", () => {
 		const first = [summary("t1", [1000])];
