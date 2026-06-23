@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.25.1 — 2026-06-23
+
+Refinement pass on the v0.25.0 features.
+
+- **Fix: `/warden-contradict` now checks the user's project CLAUDE.md.** The slash
+  command `cd`s into the plugin root, so the previous `process.cwd()/CLAUDE.md`
+  default read token-warden's own file. It now prefers `$CLAUDE_PROJECT_DIR`
+  (the user's repo root) and falls back to cwd.
+- **Fix: verdict reason rounding.** The displayed cache-aware bar used `round`,
+  which could print `savings 21 < 2× rent (21)`; it now uses `ceil` so a
+  sub-threshold delta always reads strictly below the bar.
+- **`/warden-sample-tasks` gives a clear error** when `--from` does not exist
+  instead of a raw `ENOENT`.
+- Perf: `findContradictions` tokenizes each CLAUDE.md line once instead of once
+  per rule.
+- 437 tests (+2), green on Node 22 and 24.
+
 ## v0.25.0 — 2026-06-23
 
 Four features hardening the scope boundary raised in review: the token gate

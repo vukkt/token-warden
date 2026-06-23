@@ -12,6 +12,7 @@
  * task, preserving the baseline-immutability invariant. Spends no tokens.
  */
 import {
+	existsSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -121,6 +122,9 @@ export function renderDraft(
 }
 
 function readTranscripts(from: string): { sessionId: string; jsonl: string }[] {
+	if (!existsSync(from)) {
+		throw new Error(`--from path not found: ${from}`);
+	}
 	const stat = statSync(from);
 	const files = stat.isDirectory()
 		? readdirSync(from)

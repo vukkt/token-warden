@@ -80,6 +80,17 @@ describe("parseContradictArgs", () => {
 		expect(args.gate).toBe(false);
 	});
 
+	it("defaults to CLAUDE_PROJECT_DIR when set (slash command cd's away)", () => {
+		const prev = process.env.CLAUDE_PROJECT_DIR;
+		process.env.CLAUDE_PROJECT_DIR = "/my/project";
+		try {
+			expect(parseContradictArgs([]).file).toBe("/my/project/CLAUDE.md");
+		} finally {
+			if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+			else process.env.CLAUDE_PROJECT_DIR = prev;
+		}
+	});
+
 	it("parses --agent, --file and --gate", () => {
 		const args = parseContradictArgs([
 			"--agent",

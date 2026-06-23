@@ -113,7 +113,9 @@ export function verdictWithReason(
 		return { status: "evicted", reason: `non-positive delta (${delta})` };
 	}
 	const status = verdict({ measuredDelta: delta, contextCost });
-	const bar = Math.round(2 * effectiveRent(contextCost));
+	// Ceil so the displayed bar never rounds down to equal a sub-threshold delta
+	// (which would read "savings 21 < ... (21)"); an active delta still reads ≥.
+	const bar = Math.ceil(2 * effectiveRent(contextCost));
 	return status === "active"
 		? { status, reason: `savings ${delta} ≥ 2× cache-aware rent (${bar})` }
 		: {

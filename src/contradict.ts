@@ -145,24 +145,28 @@ export function findContradictions(
 	rules: { id: number; body: string }[],
 	claudeMd: string,
 ): Contradiction[] {
-	const lines = directiveLines(claudeMd);
+	// Tokenize each directive line once, not once per rule.
+	const lines = directiveLines(claudeMd).map((text) => ({
+		text,
+		content: contentWords(text),
+		negated: isNegated(text),
+		all: new Set(words(text)),
+	}));
 	const found: Contradiction[] = [];
 	for (const rule of rules) {
 		const rw = contentWords(rule.body);
 		const rNeg = isNegated(rule.body);
 		const rWords = new Set(words(rule.body));
 		for (const line of lines) {
-			const lw = contentWords(line);
-			const shared = intersectionSize(rw, lw);
-			const lWords = new Set(words(line));
+			const shared = intersectionSize(rw, line.content);
 			let reason: string | null = null;
-			if (shared >= 2 && rNeg !== isNegated(line)) {
+			if (shared >= 2 && rNeg !== line.negated) {
 				reason = `shares ${shared} key terms with an opposite-polarity directive`;
 			} else if (shared >= 1) {
 				for (const [a, b] of ANTONYMS) {
 					const conflict =
-						(rWords.has(a) && lWords.has(b)) ||
-						(rWords.has(b) && lWords.has(a));
+						(rWords.has(a) && line.all.has(b)) ||
+						(rWords.has(b) && line.all.has(a));
 					if (conflict) {
 						reason = `uses "${a}"/"${b}" against a shared-topic directive`;
 						break;
@@ -173,7 +177,7 @@ export function findContradictions(
 				found.push({
 					ruleId: rule.id,
 					ruleBody: rule.body,
-					conflictingLine: line,
+					conflictingLine: line.text,
 					reason,
 				});
 				break; // one flag per rule is enough to prompt review
@@ -207,9 +211,13 @@ interface ContradictArgs {
 }
 
 export function parseContradictArgs(argv: string[]): ContradictArgs {
+	// The slash command cd's into the plugin root, so process.cwd() would read
+	// token-warden's own CLAUDE.md. Claude Code exposes the user's project root as
+	// CLAUDE_PROJECT_DIR — prefer it so the check runs against the user's repo.
+	const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 	const args: ContradictArgs = {
 		agent: null,
-		file: join(process.cwd(), "CLAUDE.md"),
+		file: join(projectDir, "CLAUDE.md"),
 		gate: false,
 	};
 	for (let i = 0; i < argv.length; i++) {

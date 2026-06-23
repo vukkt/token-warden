@@ -138,4 +138,10 @@ describe("sample-tasks main()", () => {
 		expect(main(["--agent", "sql", "--from", file, "--out", out])).toBe(0);
 		expect(existsSync(out)).toBe(false);
 	});
+
+	it("gives a clear error when --from does not exist", () => {
+		expect(() =>
+			main(["--agent", "sql", "--from", join(dir, "missing")]),
+		).toThrow(/--from path not found/);
+	});
 });
