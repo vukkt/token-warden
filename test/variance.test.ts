@@ -356,7 +356,9 @@ describe("selectForAgent variance top-up", () => {
 			labels.push(label);
 			return rules.length === 0
 				? [summary("t1", [1000]), summary("t2", [1000]), summary("t3", [1000])]
-				: [summary("t1", [940]), summary("t2", [1100]), summary("t3", [800])];
+				: // Savings {70, -90, 210}: mean 63 clears the cache-aware bar (~53)
+					// but sits within one SE (~87) — active yet uncertain.
+					[summary("t1", [930]), summary("t2", [1090]), summary("t3", [790])];
 		};
 
 		const report = selectForAgent(db, agent, runner, { topUpBudget: 0 });

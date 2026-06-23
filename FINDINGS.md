@@ -227,10 +227,14 @@ prompts already encode the obvious efficiencies — so the loop's value depends 
 novel, workload-specific waste that only real dogfood on real repositories
 surfaces. The measurement side is now sharp on both axes — the within-task SE
 shrinks with runs (v0.23.0) and Neyman allocation spends those runs where the
-variance is (v0.24.0). Secondary work: reduce golden-suite variance further (add
-quieter task files; baselines stay frozen), and fold cache-weighted cost (read
-~0.1x, write ~1.25x, output ~5x) into the verdict so "tokens saved" becomes
-"dollars saved."
+variance is (v0.24.0). v0.25.0 added the rule-typing boundary (protected
+behavioral rules are never token-evicted), a cache-aware rent (the 2× bar now
+prices in the one-time cache re-prefill on a ruleset change), a zero-token
+CLAUDE.md-contradiction check, and production-sampled task drafts. Secondary
+work: reduce golden-suite variance further (add quieter task files; baselines
+stay frozen), and extend the cache-aware rent to a full read ~0.1x / write
+~1.25x / output ~5x weighting on *both* sides of the verdict so "tokens saved"
+becomes "dollars saved."
 
 Re-run any time: `npx tsx validation/naive-headroom-experiment.ts` (positive
 control; `--yes` to spend tokens), `./validation/run.sh sql` (controlled on the

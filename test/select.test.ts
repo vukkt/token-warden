@@ -14,6 +14,7 @@ import {
 } from "../src/db.js";
 import {
 	assessDelta,
+	effectiveRent,
 	memoryFilePath,
 	parseSelectArgs,
 	type SuiteRunner,
@@ -41,10 +42,26 @@ describe("verdict", () => {
 		expect(verdict({ measuredDelta: -500, contextCost: 10 })).toBe("evicted");
 	});
 
-	it("requires savings of at least twice the context rent", () => {
+	it("requires savings of at least twice the cache-aware rent", () => {
+		// effectiveRent(10) = 10 + 10·1.25/20 = 10.625, so the bar is 2×10.625 ≈ 21.25.
 		expect(verdict({ measuredDelta: 19, contextCost: 10 })).toBe("evicted");
-		expect(verdict({ measuredDelta: 20, contextCost: 10 })).toBe("active");
+		expect(verdict({ measuredDelta: 21, contextCost: 10 })).toBe("evicted");
+		expect(verdict({ measuredDelta: 22, contextCost: 10 })).toBe("active");
 		expect(verdict({ measuredDelta: 2000, contextCost: 10 })).toBe("active");
+	});
+});
+
+describe("effectiveRent (cache-aware rent)", () => {
+	it("adds an amortized cache re-prefill surcharge above the raw cost", () => {
+		expect(effectiveRent(0)).toBe(0);
+		expect(effectiveRent(10)).toBeGreaterThan(10);
+		// Surcharge is small and bounded: contextCost·1.25/sessionsPerWeek.
+		expect(effectiveRent(10)).toBeCloseTo(10.625, 6);
+	});
+
+	it("makes the 2× bar slightly harder, never easier", () => {
+		// A rule saving exactly 2× the *raw* rent no longer clears the bar.
+		expect(verdict({ measuredDelta: 20, contextCost: 10 })).toBe("evicted");
 	});
 });
 

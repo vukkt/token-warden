@@ -14,6 +14,9 @@
 		"src/receipt.ts",
 		"src/attribute.ts",
 		"src/cohort.ts",
+		"src/protect.ts",
+		"src/contradict.ts",
+		"src/sample-tasks.ts",
 		"scripts/*.mjs"
 	],
 	"project": ["src/**/*.ts"],

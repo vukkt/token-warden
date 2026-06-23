@@ -557,6 +557,35 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.25.0 — rule typing, cache-aware rent, falsification, sampled tasks
+
+- **Protected rules answer "you'll evict my behavioral rule" structurally, not by promise.**
+  A protected rule bypasses the candidate token-gate (inserted active — the human vouches
+  for it), is exempt from re-audit (`oldestDecidedActiveRule` filters `protected = 0`), and
+  is never token-evicted. The token gate is the correct test for efficiency; for behavioral
+  value it is the *wrong* unit, so those rules are simply outside its authority. Today all
+  rules are distiller-proposed efficiency rules (there was no human-add path), so this is
+  also the first way to author a rule directly.
+- **Cache-aware rent makes the bar harder, never easier — on purpose.** The "fold the
+  cache bust into rent" critique is real but cuts toward *more* cost, not less: a ruleset
+  change forces a one-time re-prefill of the memory block at ~1.25× input. `effectiveRent`
+  amortizes that over a week of sessions, nudging the 2× bar up slightly. We deliberately
+  did *not* also apply cache-*read* discounts (which would lower the bar), because that is
+  the larger two-sided dollar-weighting job and lowering the bar needs the full treatment.
+- **The contradiction check flags, it does not evict — consistent with cohort governance.**
+  A lexical heuristic can have false positives, so it recommends human review and leaves the
+  controlled fixture as the only authority that removes a rule. `--gate` lets CI surface it
+  without making the heuristic an auto-deleter. Detection is best-effort by design (shared
+  content words + opposite polarity, or an explicit antonym pair) — documented as such.
+- **Sampled tasks draft, they do not freeze.** Auto-generating a runnable success check
+  from a transcript is unreliable, and silently adding tasks would violate baseline
+  immutability. So the sampler emits review stubs (`success_check: TODO`) into a drafts dir;
+  a human writes the check and moves the task into the frozen suite. It cuts the *drafting*
+  burden, not the curation discipline.
+- **`SuiteRunner` and memory-compile reuse.** The protect command recompiles MEMORY.md via
+  the same `compileActiveMemory` helper the selector uses (single writer of the artifact),
+  so an authored rule lands in memory through exactly one code path.
+
 ## v0.24.0 — Neyman (variance-proportional) top-up allocation
 
 - **An uncertain verdict now tops up by variance, not uniformly.** The old top-up re-ran

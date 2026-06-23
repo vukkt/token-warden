@@ -217,6 +217,9 @@ Active rules land in the agent's memory; the next session starts cheaper.
 | `/warden-attribute [--agent a] [--kind builtin\|mcp\|skill] [--transcript path] [--json]` | Attributes real-work token footprint to the tools, skills, and MCP servers that produced it — cross-session by default, or one transcript with `--transcript`. Decomposition only; it never changes a rule verdict |
 | `/warden-receipt [--agent a] [--json]` | The per-rule verdict card: token savings vs. context rent (with variance + ROI), per-task pass/fail and the tool-call/file-reread activity profile with vs. without the rule, plus the model and golden-suite hash it was measured under. Read-only evidence behind each keep/evict decision |
 | `/warden-cohort [--agent a] [--project p] [--min-n N] [--gate] [--json]` | Production-cohort validation: did rules make REAL work cheaper? Compares the agent's own completed real-work sessions before rules vs. after, with a standard error and a confidence verdict (improved/regressed/no-change) plus a governance action (a regression recommends a fixture re-audit; `--gate` exits non-zero in CI). Out-of-fixture signal; spends no tokens. See [docs/production-cohort-validation.md](docs/production-cohort-validation.md) |
+| `/warden-protect --agent a (--add "<rule>" \| --protect <id> \| --unprotect <id> \| --list)` | Mark a rule as **protected** — human-authored / behavioral. Protected rules are compiled into memory and counted for rent but are **never token-evicted** (a behavioral rule's value is not measured in tokens). The boundary that stops the 2× gate from ever deleting a constraint you wrote on purpose |
+| `/warden-contradict [--agent a] [--file path] [--gate]` | Zero-token falsification: flags active rules that may contradict the repo's `CLAUDE.md` conventions (shared topic + opposite polarity). Recommends review, **never auto-evicts**; `--gate` exits non-zero in CI |
+| `/warden-sample-tasks --agent a --from <dir\|file> [--out path]` | Drafts candidate golden tasks from real session transcripts (opening prompt, de-duplicated, `success_check` left as TODO) to cut suite-building burden. Never auto-freezes a task; a human writes the check and moves it into the suite |
 
 When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
 nudge into new sessions — selection itself always stays a user decision, because it
@@ -527,12 +530,19 @@ savings proof exists today (each decision writes an immutable receipt — saving
 vs. rent, ROI, per-task pass/fail, the suite hash, and a dated audit trail). The
 falsification path is the next layer of work:
 
-- **Declarative eviction triggers.** Today eviction is implicit: a rule is dropped
-  only when a re-benchmark shows it no longer clears 2x rent or regressed. Explicit
-  triggers would be stronger and often cheaper — "N regressions", "unused for N
-  runs", and especially **"contradicted by repo instructions"** (check a rule
-  against the repo's `CLAUDE.md`/conventions and evict on contradiction, spending
-  no tokens).
+- **Shipped — Protected (human-authored / behavioral) rules.** The 2× token gate is
+  the right test for an *efficiency* rule and the wrong one for a *behavioral*
+  rule (an edge-case fix, a safety constraint), whose value is not measured in
+  tokens. `/warden-protect` marks a rule protected: compiled into memory and
+  counted for rent, but **never token-evicted** — only a human removes it. The
+  selector never re-audits a protected rule. This is the boundary that keeps the
+  token gate from ever deleting a constraint a developer wrote on purpose.
+- **Shipped — Contradicted-by-CLAUDE.md falsification.** `/warden-contradict` is a
+  zero-token check that flags active rules contradicting the repo's `CLAUDE.md`
+  conventions (shared topic + opposite polarity). It **recommends review, never
+  auto-evicts** (the controlled fixture stays the only authority that removes a
+  rule), with `--gate` for CI. Remaining declarative triggers — "N regressions",
+  "unused for N runs" — are still open.
 - **Out-of-fixture re-audit.** Re-audit currently reuses the same frozen fixture,
   so it cannot detect a rule that the fixture happens to reward but that is harmful
   elsewhere. The real-work production signal (token cost per ruleset version) is
@@ -544,9 +554,11 @@ falsification path is the next layer of work:
   context and inert in another instead of globally on or off.
 - **Representative suites and richer metrics.** The golden suite is hand-curated,
   not sampled to a production task distribution, so a rule protecting a rare,
-  expensive case is only measured if that case is in the suite. Distribution
-  weighting, plus **latency** and **per-category regression** reporting (today the
-  axes are tokens and completion), would price a rule's true expected value.
+  expensive case is only measured if that case is in the suite. `/warden-sample-tasks`
+  is a first step — it drafts candidate golden tasks from real session transcripts
+  (deduplicated, `success_check` left for a human, never auto-frozen) to cut the
+  suite-building burden. Distribution weighting, plus **latency** and **per-category
+  regression** reporting (today the axes are tokens and completion), are still open.
 
 ## Contributing
 

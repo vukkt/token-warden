@@ -33,7 +33,7 @@ import {
 	runSuite,
 } from "../src/bench.js";
 import { insertRule, openDb, type RuleRow } from "../src/db.js";
-import { assessDelta } from "../src/select.js";
+import { assessDelta, effectiveRent } from "../src/select.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const AGENT = "sql";
@@ -116,7 +116,7 @@ function main(): void {
 	});
 
 	const assessment = assessDelta(without, withRule, rent);
-	const threshold = 2 * rent;
+	const threshold = Math.round(2 * effectiveRent(rent));
 
 	console.log("\n═══ VERDICT ═══");
 	console.log("per task: without → with");
@@ -128,7 +128,7 @@ function main(): void {
 		);
 	}
 	console.log(
-		`\nmean delta=${assessment.delta} tok/run  rent=${rent}  threshold(2x)=${threshold}  stderr=${assessment.standardError?.toFixed(0) ?? "n/a"} (${assessment.standardErrorBasis ?? "—"})`,
+		`\nmean delta=${assessment.delta} tok/run  rent=${rent}  threshold(2x cache-aware)=${threshold}  stderr=${assessment.standardError?.toFixed(0) ?? "n/a"} (${assessment.standardErrorBasis ?? "—"})`,
 	);
 	if (assessment.regression) {
 		console.log("[EVICT] the rule broke a task (regression).");

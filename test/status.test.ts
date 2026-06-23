@@ -193,7 +193,8 @@ describe("verdictWithReason", () => {
 			status: "evicted",
 			reason: expect.stringContaining("sub-threshold"),
 		});
-		expect(verdictWithReason(20, 10, false)).toMatchObject({
+		// Cache-aware bar for rent 10 is ~21.25, so 22 clears it (20 no longer does).
+		expect(verdictWithReason(22, 10, false)).toMatchObject({
 			status: "active",
 		});
 	});

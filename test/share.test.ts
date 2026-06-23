@@ -30,6 +30,7 @@ function rule(overrides: Partial<RuleRow> = {}): RuleRow {
 		decided_at: "t",
 		created_at: "2026-06-11T00:00:00.000Z",
 		decided_reason: "savings 3673 ≥ 2× context rent 13",
+		protected: 0,
 		...overrides,
 	};
 }

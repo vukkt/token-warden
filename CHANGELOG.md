@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.25.0 — 2026-06-23
+
+Four features hardening the scope boundary raised in review: the token gate
+should govern efficiency rules, not behavioral ones, and shouldn't depend on a
+perfect suite to stay safe.
+
+- **Protected (human-authored / behavioral) rules** (`/warden-protect`, new
+  `protected` column). A protected rule is compiled into memory and counted for
+  rent but is **never token-evicted** — the selector never re-audits it, and only
+  a human removes it. The 2× gate is the right test for an efficiency rule and the
+  wrong one for a behavioral rule (an edge-case fix, a safety constraint) whose
+  value is not measured in tokens. `--add`, `--protect <id>`, `--unprotect <id>`,
+  `--list`.
+- **Cache-aware rent.** `effectiveRent` now prices in the one-time cache
+  re-prefill a rule incurs when the ruleset changes (memory block re-created at
+  ~1.25× input, amortized over a week). The 2× bar is now slightly *harder*, never
+  easier — pricing the cache bust in rather than ignoring it. Verdict logic and
+  the regression gate are otherwise unchanged.
+- **Contradicted-by-CLAUDE.md falsification** (`/warden-contradict`). A zero-token
+  lexical check (shared topic + opposite polarity, or an antonym pair on a shared
+  topic) that flags active rules conflicting with the repo's conventions. It
+  **recommends review, never auto-evicts** (the controlled fixture stays the only
+  authority that removes a rule); `--gate` exits non-zero in CI.
+- **Production-sampled task drafts** (`/warden-sample-tasks`). Drafts candidate
+  golden tasks from real session transcripts (opening prompt, de-duplicated,
+  `success_check` left as TODO) to cut the suite-building burden. Never
+  auto-freezes a task — a human writes the check and moves it into the suite.
+- DB migration #10 (`rules.protected`). Append-only; existing rules default to 0.
+- Docs: README commands + roadmap, DECISIONS rationale, FINDINGS note.
+- 435 tests (+41), green on Node 22 and 24.
+
 ## v0.24.0 — 2026-06-23
 
 Neyman (variance-proportional) top-up allocation — the precision lever the

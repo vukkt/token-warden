@@ -131,6 +131,9 @@ const MIGRATIONS: readonly string[] = [
 		PRIMARY KEY (rule_id, decided_at)
 	);
 	`,
+	`
+	ALTER TABLE rules ADD COLUMN protected INTEGER NOT NULL DEFAULT 0;
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -283,6 +286,10 @@ export interface RuleRow {
 	decided_at: string | null;
 	created_at: string;
 	decided_reason: string | null;
+	/** 1 = human-authored / behavioral rule, exempt from token-based eviction
+	 * (compiled and rent-counted, but never auto-evicted for sub-threshold
+	 * savings). 0 = distilled efficiency rule, token-gated as usual. */
+	protected: number;
 }
 
 export function getRuleById(db: WardenDb, id: number): RuleRow | undefined {
@@ -350,6 +357,43 @@ export function insertRule(db: WardenDb, rule: NewRule): number {
 	return row.id;
 }
 
+/** Insert a human-authored, protected rule directly as active. The author
+ * vouches for it, so it bypasses the candidate token-gate, is compiled into
+ * memory immediately, and is exempt from token-based eviction (a behavioral
+ * rule's value is not measured in tokens). `decided_at` is set so it sorts in
+ * the re-audit ordering even though it is never an audit target. */
+export function insertAuthoredRule(db: WardenDb, rule: NewRule): number {
+	const row = db
+		.prepare<unknown[], { id: number }>(
+			`INSERT INTO rules
+				(agent, body, status, context_cost, source_run, created_at, decided_at, decided_reason, protected)
+			 VALUES (?, ?, 'active', ?, NULL, ?, ?, 'authored: protected behavioral rule (not token-gated)', 1)
+			 RETURNING id`,
+		)
+		.get(
+			rule.agent,
+			rule.body,
+			rule.contextCost,
+			rule.createdAt,
+			rule.createdAt,
+		);
+	if (row === undefined) throw new Error("insertAuthoredRule produced no row");
+	return row.id;
+}
+
+/** Toggle a rule's protected flag. Protecting an evicted rule reactivates it
+ * (the human is overriding the token verdict); unprotecting returns it to the
+ * token-gated pool as an active rule. */
+export function setRuleProtected(
+	db: WardenDb,
+	id: number,
+	isProtected: boolean,
+): void {
+	db.prepare(
+		"UPDATE rules SET protected = ?, status = 'active' WHERE id = ?",
+	).run(isProtected ? 1 : 0, id);
+}
+
 export function listRulesByAgent(db: WardenDb, agent: string): RuleRow[] {
 	return db
 		.prepare<unknown[], RuleRow>(
@@ -375,7 +419,8 @@ export function listCandidates(
 }
 
 /** The active rule least recently (re-)decided — the round-robin re-audit
- * target. */
+ * target. Protected rules are excluded: they are never token-evicted, so
+ * re-auditing them would waste a measurement. */
 export function oldestDecidedActiveRule(
 	db: WardenDb,
 	agent: string,
@@ -383,7 +428,7 @@ export function oldestDecidedActiveRule(
 	return db
 		.prepare<unknown[], RuleRow>(
 			`SELECT * FROM rules
-			 WHERE agent = ? AND status = 'active'
+			 WHERE agent = ? AND status = 'active' AND protected = 0
 			 ORDER BY decided_at ASC, id ASC LIMIT 1`,
 		)
 		.get(agent);

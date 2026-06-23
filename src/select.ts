@@ -49,18 +49,43 @@ export interface VerdictInput {
 	contextCost: number;
 }
 
-/** Keep/evict inequality from the spec: a rule must save at least twice its
- * context rent. SESSIONS_PER_WEEK cancels algebraically but is kept so the
- * policy reads as the spec states it. */
-export function verdict(rule: VerdictInput): "active" | "evicted" {
-	// A zero/negative/NaN override would invert or trivialize the
-	// inequality; fall back to the default instead.
+/** Cache-write price relative to a base input token (Anthropic ~1.25×). A rule
+ * re-enters the prompt at this price on the session after the ruleset changes
+ * (a cache miss on the memory block), then at cache-read price thereafter. */
+const CACHE_CREATE_MULTIPLIER = 1.25;
+
+function sessionsPerWeek(): number {
+	// A zero/negative/NaN override would invert or trivialize the inequality;
+	// fall back to the default instead.
 	const raw = Number(process.env.WARDEN_SESSIONS_PER_WEEK ?? 20);
-	const sessionsPerWeek = Number.isFinite(raw) && raw > 0 ? raw : 20;
+	return Number.isFinite(raw) && raw > 0 ? raw : 20;
+}
+
+/**
+ * Effective per-session rent of carrying a rule, in tokens. Beyond the raw
+ * context cost paid every session, a rule incurs a one-time cache re-prefill
+ * each time the ruleset changes — the memory block misses the cache and is
+ * re-created at ~1.25× input price. Amortized over a week of sessions
+ * (assuming ≈one ruleset change per week) that adds `contextCost·1.25/sessions`
+ * per session. This is deliberately conservative: it makes the 2× bar slightly
+ * *harder*, never easier, and answers the "you bust the cache on every change"
+ * critique by pricing the bust in rather than ignoring it.
+ */
+export function effectiveRent(contextCost: number): number {
+	return (
+		contextCost + (contextCost * CACHE_CREATE_MULTIPLIER) / sessionsPerWeek()
+	);
+}
+
+/** Keep/evict inequality from the spec: a rule must save at least twice its
+ * (cache-aware) context rent. SESSIONS_PER_WEEK cancels in the carry term but
+ * is kept so the policy reads as the spec states it, and now also amortizes the
+ * one-time cache re-prefill. */
+export function verdict(rule: VerdictInput): "active" | "evicted" {
 	if (rule.measuredDelta === null || rule.measuredDelta <= 0) return "evicted";
-	const weeklySavings = rule.measuredDelta * sessionsPerWeek;
-	const weeklyRent = rule.contextCost * sessionsPerWeek;
-	return weeklySavings >= weeklyRent * 2 ? "active" : "evicted";
+	return rule.measuredDelta >= 2 * effectiveRent(rule.contextCost)
+		? "active"
+		: "evicted";
 }
 
 export interface ReasonedVerdict {
@@ -88,11 +113,12 @@ export function verdictWithReason(
 		return { status: "evicted", reason: `non-positive delta (${delta})` };
 	}
 	const status = verdict({ measuredDelta: delta, contextCost });
+	const bar = Math.round(2 * effectiveRent(contextCost));
 	return status === "active"
-		? { status, reason: `savings ${delta} ≥ 2× context rent ${contextCost}` }
+		? { status, reason: `savings ${delta} ≥ 2× cache-aware rent (${bar})` }
 		: {
 				status,
-				reason: `sub-threshold: savings ${delta} < 2× context rent ${contextCost}`,
+				reason: `sub-threshold: savings ${delta} < 2× cache-aware rent (${bar})`,
 			};
 }
 
@@ -241,7 +267,7 @@ export function assessDelta(
 		standardErrorBasis = "between-task";
 	}
 
-	const threshold = 2 * contextCost;
+	const threshold = 2 * effectiveRent(contextCost);
 	const uncertain =
 		!regression &&
 		standardError !== null &&
@@ -340,6 +366,18 @@ export function memoryFilePath(agent: string): string {
 		process.env.TOKEN_WARDEN_MEMORY_DIR ??
 		join(homedir(), ".claude", "agent-memory");
 	return join(base, agent, "MEMORY.md");
+}
+
+/** Recompile the agent's MEMORY.md from its current active rule set (including
+ * protected rules) and bump the ruleset version. The single writer of agent
+ * memory — shared by the selector and the protect command so the file is always
+ * the wholesale, never-hand-edited artifact (invariant #2). */
+export function compileActiveMemory(db: WardenDb, agent: string): number {
+	const active = getActiveRules(db, agent);
+	const memoryPath = memoryFilePath(agent);
+	mkdirSync(dirname(memoryPath), { recursive: true });
+	writeFileSync(memoryPath, compileMemoryMd(active));
+	return bumpRulesetVersion(db, agent, new Date().toISOString());
 }
 
 /** Per-task run allocation for a Neyman top-up: taskId → number of extra runs
@@ -599,10 +637,7 @@ export function selectForAgent(
 	let rulesetVersion: number | null = null;
 	const finalActive = getActiveRules(db, agent);
 	if (decisions.length > 0) {
-		const memoryPath = memoryFilePath(agent);
-		mkdirSync(dirname(memoryPath), { recursive: true });
-		writeFileSync(memoryPath, compileMemoryMd(finalActive));
-		rulesetVersion = bumpRulesetVersion(db, agent, new Date().toISOString());
+		rulesetVersion = compileActiveMemory(db, agent);
 	}
 
 	return {

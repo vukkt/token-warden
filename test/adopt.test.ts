@@ -38,6 +38,7 @@ function existingRule(id: number, body: string, status: string): RuleRow {
 		decided_at: "t",
 		created_at: "t",
 		decided_reason: "r",
+		protected: 0,
 	};
 }
 

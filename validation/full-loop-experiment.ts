@@ -31,7 +31,7 @@ import {
 } from "../src/bench.js";
 import { insertRule, openDb, type RuleRow, type RunRow } from "../src/db.js";
 import { buildPrompt, contextCost, parseRulesJson } from "../src/distill.js";
-import { assessDelta } from "../src/select.js";
+import { assessDelta, effectiveRent } from "../src/select.js";
 import { digestTranscript } from "../src/transcript.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -180,10 +180,10 @@ function main(): number {
 	});
 
 	const a = assessDelta(without, withRule, rent);
-	const threshold = 2 * rent;
+	const threshold = Math.round(2 * effectiveRent(rent));
 	console.log("\n=== VERDICT (system-distilled rule) ===");
 	console.log(
-		`mean delta=${a.delta} tok/run  rent=${rent}  threshold(2x)=${threshold}  stderr=${a.standardError?.toFixed(0) ?? "n/a"} (${a.standardErrorBasis ?? "—"})`,
+		`mean delta=${a.delta} tok/run  rent=${rent}  threshold(2x cache-aware)=${threshold}  stderr=${a.standardError?.toFixed(0) ?? "n/a"} (${a.standardErrorBasis ?? "—"})`,
 	);
 	if (a.regression) {
 		console.log("[EVICT] the distilled rule broke a task (regression).");
