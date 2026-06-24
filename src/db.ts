@@ -625,6 +625,30 @@ export interface VersionedTotal {
 	total: number;
 }
 
+export interface AgentTokenMix {
+	input: number;
+	output: number;
+	cacheCreation: number;
+	cacheRead: number;
+}
+
+/** Summed token-type counts across all of an agent's completed runs — the raw
+ * material for a blended $/token rate that reflects this agent's actual mix of
+ * input / output / cache-write / cache-read tokens. */
+export function agentTokenMix(db: WardenDb, agent: string): AgentTokenMix {
+	const row = db
+		.prepare<[string], AgentTokenMix>(
+			`SELECT
+				COALESCE(SUM(input_tokens), 0)   AS input,
+				COALESCE(SUM(output_tokens), 0)  AS output,
+				COALESCE(SUM(cache_creation), 0) AS cacheCreation,
+				COALESCE(SUM(cache_read), 0)     AS cacheRead
+			 FROM runs WHERE agent = ? AND completed = 1`,
+		)
+		.get(agent);
+	return row ?? { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
+}
+
 /**
  * Per-session completed real-work token totals for one agent, tagged with the
  * ruleset version active at the time. Unlike `realWorkCurveByAgent` (which

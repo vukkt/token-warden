@@ -17,6 +17,7 @@
 		"src/protect.ts",
 		"src/contradict.ts",
 		"src/sample-tasks.ts",
+		"src/cost.ts",
 		"scripts/*.mjs"
 	],
 	"project": ["src/**/*.ts"],

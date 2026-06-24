@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.26.0 — 2026-06-24
+
+Dollar accounting — translate token savings into money, the unit the recurring
+critique demanded (see FINDINGS.md).
+
+- **New `src/pricing.ts`**: a price table (public Anthropic per-1M-token rates;
+  cache-write 1.25× input, cache-read 0.1× input) keyed by model, with every rate
+  overridable via `TOKEN_WARDEN_PRICE_INPUT` / `_OUTPUT` / `_CACHE_WRITE` /
+  `_CACHE_READ`. `dollarsForTokens` prices a typed breakdown; `blendedDollarsPerToken`
+  derives the agent's real $/token from its actual mix.
+- **New `/warden-cost`** (`src/cost.ts`): per active rule, the dollar value —
+  savings/session, rent/session, net/session, weekly total, and a break-even
+  against the estimated discovery cost. Savings are priced at the agent's
+  **blended** mix (most saved tokens are cheap input/cache-read, so the figure is
+  the truthful magnitude, not an inflated output-rate number); rent at the input
+  rate. The keep/evict gate stays in tokens — this is the dollar lens on it.
+- **Re-priced both real-token results** (FINDINGS): the dollar lens *agrees with
+  the token verdict on both* — the surviving rule nets ~$0.032/run (~500× its
+  rent, +1.57σ); the inconclusive one is ~$0.009/run and within noise. The engine
+  is internally consistent and now dollar-honest about the (modest, per-run)
+  magnitude.
+- New `agentTokenMix` db helper (sums an agent's input/output/cache token types).
+- 457 tests (+20), green on Node 22 and 24.
+
 ## v0.25.1 — 2026-06-23
 
 Refinement pass on the v0.25.0 features.

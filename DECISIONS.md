@@ -557,6 +557,27 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.26.0 — dollar accounting (the price table)
+
+- **Dollars are a reporting lens, not a second gate.** The keep/evict decision stays in
+  tokens — a stable, model-independent unit that does not drift when prices change. `/warden-cost`
+  translates the *already-decided* token verdict into money. This keeps the gate stable and
+  testable while answering "your tool just counts tokens" with a real dollar figure.
+- **Savings priced at the blended mix, rent at the input rate — deliberately.** Most saved
+  tokens are cheap input/cache-read, not expensive output, so pricing savings at the agent's
+  actual token-type mix gives the *truthful* magnitude. Pricing them at the headline output
+  rate would inflate the number — the opposite of the honesty the critique asked for. Rent is
+  the rule's text carried every session = input tokens, priced at the input rate.
+- **Prices are public-rate defaults, fully overridable.** The table ships the public Anthropic
+  per-1M rates (cache-write 1.25× input, cache-read 0.1× input — from the rate card) but every
+  field is env-overridable. "Apply your own per-token rates" is the explicit answer to the
+  cache/dollar critique, so the table must not be load-bearing or hard-coded as gospel.
+- **Discovery cost is estimated, labelled approximate.** The one-time benchmark spend to find a
+  rule is reconstructed from the receipt (`runs × (with+without mean tokens)`) rather than
+  linked to exact measurement sessions — enough for a break-even, honest about being an estimate.
+- **Consulted the live rate card before hard-coding prices** (claude-api skill) rather than
+  trusting training-prior numbers — model IDs and rates drift.
+
 ## v0.25.0 — rule typing, cache-aware rent, falsification, sampled tasks
 
 - **Protected rules answer "you'll evict my behavioral rule" structurally, not by promise.**

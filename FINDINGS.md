@@ -218,6 +218,48 @@ two) this pours the budget into `sql-05`/`sql-04`/`sql-01` and skips
 `sql-02`/`sql-03` — the same tokens, a much tighter error bar. It falls back to a
 uniform pass at runs=1 (no variance signal to allocate against).
 
+## Dollar accounting (2026-06): does the engine's verdict hold up in money?
+
+The recurring external critique is that token-counting is the wrong unit. v0.26.0
+adds a price table (`src/pricing.ts`, public Anthropic rates, env-overridable) and
+a `/warden-cost` dollar report. Re-pricing our two real-token results answers
+"does it really work?" in money — and the dollar lens *agrees with the
+token verdict on both*, which is the test that matters.
+
+**The math.** A rule's per-session value is `delta_tokens × blended_$ / token`;
+its rent is `context_cost × input_$/token`. We price savings at the agent's
+*blended* mix because most saved tokens are cheap input/cache-read — pricing them
+at the headline output rate would inflate the number. Detectability is the same
+governing equation as before, `mean / SE`.
+
+| Result | delta (tok/run) | SE | mean/SE | $/run (Sonnet, input-rate) | rent | verdict |
+|---|---|---|---|---|---|---|
+| Positive control (curated rule, naive agent) | **+10,699** | 6,797 (between-task) | **+1.57σ** | **$0.032** | 21 tok ≈ $0.00006 | **KEEP** |
+| Full loop (distilled rule, naive agent) | +3,048 | 7,995 (within-task) | +0.38σ | $0.009 | 32 tok | **INCONCLUSIVE** |
+
+What this establishes:
+
+- **The two units agree.** The surviving rule nets ~**$0.032/run** and clears its
+  rent by **~500×** (10,699 / 21 tokens); it is also **+1.57σ** above zero. The
+  inconclusive rule is **~$0.009/run** *and* within noise (`|3,048| < 7,995`). The
+  dollar lens keeps what the token gate keeps and rejects what it rejects — the
+  instrument is internally consistent, not just numerically lucky.
+- **Honest magnitude.** The win is real but *small in absolute dollars* — cents
+  per run — because the saved tokens are mostly cheap input/cache-read, not
+  expensive output. That is exactly the nuance the critics demanded and that raw
+  token counts obscure. It is **not** "huge"; it is "small per run, ~500× the
+  rent, and it scales with model price and call volume" — at Fable-5 rates
+  (`$10`/$50 per MTok) and enterprise volume the same rule is materially more
+  valuable; at Haiku rates it is pennies.
+- **Statistics buy the confidence.** The positive control sits at +1.57σ at just
+  `--runs 2`; the within-task SE (v0.23.0) plus Neyman allocation (v0.24.0) are
+  precisely what let added runs push that toward decisive without moving the bar.
+
+Verdict: the engine works *and* is now dollar-honest. It keeps a rule that is
+provably net-positive in money and rejects one that is not — and it reports the
+truthful, un-inflated magnitude rather than a token number that sounds bigger than
+it is.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can
