@@ -23,10 +23,14 @@ import {
 	latestReceipts,
 	openDb,
 	type ReceiptRow,
+	realWorkTotalsByVersion,
 	type WardenDb,
 } from "./db.js";
 import { blendedDollarsPerToken, type Price, priceFor } from "./pricing.js";
 import { DOMAIN_AGENTS } from "./types.js";
+
+/** Average weeks per calendar month, for --months → weeks. */
+const WEEKS_PER_MONTH = 4.345;
 
 function sessionsPerWeek(): number {
 	const raw = Number(process.env.WARDEN_SESSIONS_PER_WEEK ?? 20);
@@ -101,6 +105,109 @@ export function agentCosts(db: WardenDb, agent: string): RuleCost[] {
 	return costs.sort((a, b) => b.weeklyDollars - a.weeklyDollars);
 }
 
+/**
+ * A horizon projection for one agent: what its active rules save (and cost to
+ * operate) over a stretch of time, and the with-vs-without-plugin comparison.
+ */
+export interface Projection {
+	agent: string;
+	weeks: number;
+	sessionsPerWeek: number;
+	horizonSessions: number;
+	rules: number;
+	/** Sum of per-rule net (savings − rent) per session, in dollars. */
+	netPerSession: number;
+	/** Gross savings over the horizon (before the one-time discovery cost). */
+	grossSavings: number;
+	/** One-time benchmark spend that found the active rules (operating cost). */
+	operatingCost: number;
+	/** grossSavings − rent − operatingCost over the horizon. */
+	netBenefit: number;
+	breakEvenSessions: number | null;
+	/** Cost of the same work WITHOUT the plugin — null when no real-work runs
+	 * exist to estimate a per-session baseline. */
+	baselineCost: number | null;
+	withPluginCost: number | null;
+	pctSaved: number | null;
+}
+
+export function projectAgent(
+	db: WardenDb,
+	agent: string,
+	weeks: number,
+	sessionsPerWeek: number,
+): Projection {
+	const costs = agentCosts(db, agent);
+	const horizonSessions = Math.round(weeks * sessionsPerWeek);
+	const savingsPerSession = costs.reduce((a, c) => a + c.savingsDollars, 0);
+	const netPerSession = costs.reduce((a, c) => a + c.netDollars, 0);
+	const operatingCost = costs.reduce((a, c) => a + c.discoveryDollars, 0);
+	const grossSavings = savingsPerSession * horizonSessions;
+	const netBenefit = netPerSession * horizonSessions - operatingCost;
+
+	// Baseline: mean real-work session tokens × the agent's blended $/token.
+	const price = priceFor(costs[0]?.model ?? null);
+	const blended = blendedDollarsPerToken(agentTokenMix(db, agent), price);
+	const realTotals = realWorkTotalsByVersion(db, agent).map((t) => t.total);
+	const meanTokens =
+		realTotals.length > 0
+			? realTotals.reduce((a, b) => a + b, 0) / realTotals.length
+			: null;
+	const baselineCost =
+		meanTokens !== null ? meanTokens * blended * horizonSessions : null;
+	const withPluginCost =
+		baselineCost !== null
+			? baselineCost - netPerSession * horizonSessions + operatingCost
+			: null;
+	const pctSaved =
+		baselineCost !== null && baselineCost > 0
+			? netBenefit / baselineCost
+			: null;
+
+	return {
+		agent,
+		weeks,
+		sessionsPerWeek,
+		horizonSessions,
+		rules: costs.length,
+		netPerSession,
+		grossSavings,
+		operatingCost,
+		netBenefit,
+		breakEvenSessions:
+			netPerSession > 0 && operatingCost > 0
+				? Math.ceil(operatingCost / netPerSession)
+				: null,
+		baselineCost,
+		withPluginCost,
+		pctSaved,
+	};
+}
+
+export function renderProjection(p: Projection): string {
+	const months = (p.weeks / WEEKS_PER_MONTH).toFixed(1);
+	const head = `${p.agent}: projection over ${p.weeks} weeks (~${months} months) at ${p.sessionsPerWeek} sessions/week = ${p.horizonSessions} sessions`;
+	if (p.rules === 0) return `${head}\n  no active rules to project.`;
+	const lines = [
+		head,
+		`  active rules: ${p.rules}`,
+		`  gross savings: ${usd(p.grossSavings)}`,
+		`  operating (discovery) cost: ${usd(p.operatingCost)}`,
+		`  NET benefit: ${usd(p.netBenefit)}`,
+	];
+	if (p.breakEvenSessions !== null) {
+		lines.push(`  breaks even after ${p.breakEvenSessions} sessions`);
+	}
+	if (p.baselineCost !== null && p.withPluginCost !== null) {
+		const pct = p.pctSaved !== null ? `${(p.pctSaved * 100).toFixed(1)}%` : "—";
+		lines.push(
+			`  cost WITHOUT plugin: ${usd(p.baselineCost)}`,
+			`  cost WITH plugin:    ${usd(p.withPluginCost)}  (${pct} cheaper)`,
+		);
+	}
+	return lines.join("\n");
+}
+
 const usd = (n: number): string =>
 	n >= 0.01 || n <= -0.01 ? `$${n.toFixed(2)}` : `$${n.toFixed(5)}`;
 
@@ -132,15 +239,42 @@ export function renderCosts(agent: string, costs: RuleCost[]): string {
 interface CostArgs {
 	agent: string | null;
 	json: boolean;
+	project: boolean;
+	weeks: number;
+	sessionsPerWeek: number;
 }
 
 export function parseCostArgs(argv: string[]): CostArgs {
-	const args: CostArgs = { agent: null, json: false };
+	const spwDefault = sessionsPerWeek();
+	const args: CostArgs = {
+		agent: null,
+		json: false,
+		project: false,
+		weeks: 13, // ~3 months
+		sessionsPerWeek: spwDefault,
+	};
+	const posInt = (raw: string | undefined, label: string): number => {
+		const n = Number(raw);
+		if (!Number.isFinite(n) || n <= 0) {
+			throw new Error(`${label} must be a positive number`);
+		}
+		return n;
+	};
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
 		if (flag === "--agent") args.agent = argv[++i] ?? null;
 		else if (flag === "--json") args.json = true;
-		else throw new Error(`unknown flag: ${flag}`);
+		else if (flag === "--project") args.project = true;
+		else if (flag === "--weeks") {
+			args.weeks = posInt(argv[++i], "--weeks");
+			args.project = true;
+		} else if (flag === "--months") {
+			args.weeks = Math.round(posInt(argv[++i], "--months") * WEEKS_PER_MONTH);
+			args.project = true;
+		} else if (flag === "--sessions-per-week") {
+			args.sessionsPerWeek = posInt(argv[++i], "--sessions-per-week");
+			args.project = true;
+		} else throw new Error(`unknown flag: ${flag}`);
 	}
 	if (
 		args.agent &&
@@ -156,6 +290,17 @@ export function main(argv: string[]): number {
 	const agents = args.agent ? [args.agent] : [...DOMAIN_AGENTS];
 	const db = openDb();
 	try {
+		if (args.project) {
+			const projections = agents.map((agent) =>
+				projectAgent(db, agent, args.weeks, args.sessionsPerWeek),
+			);
+			console.log(
+				args.json
+					? JSON.stringify(projections, null, 2)
+					: projections.map(renderProjection).join("\n\n"),
+			);
+			return 0;
+		}
 		const results = agents.map((agent) => ({
 			agent,
 			costs: agentCosts(db, agent),

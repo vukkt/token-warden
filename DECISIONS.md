@@ -557,6 +557,24 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.27.0 — horizon projection
+
+- **Operating cost = the one-time discovery spend, not an ongoing tax.** The benchmark
+  tokens that *found* a rule are a sunk cost recovered in ~tens of sessions; after that the
+  rule is pure savings. The projection models that honestly (gross savings − rent − one-time
+  discovery), with a break-even, rather than pretending the plugin charges rent forever.
+- **The with-vs-without baseline needs real-work data, so it degrades gracefully.** Cost
+  "without the plugin" is `mean real-work session tokens × blended $/token × sessions`. When
+  the agent has no real-work runs yet, the baseline (and the % comparison) is `null` and the
+  projection still reports savings vs. operating cost — never a fabricated baseline.
+- **README numbers are the positive control, labelled as such.** The charts/table use the
+  naive-agent saving (67,252 → 56,553 tok/session, −15.9%) because it is *real measured data*
+  with a known baseline — but it is manufactured headroom, so every figure is explicitly
+  framed as "what the engine captures if a rule of this size survives on your workload",
+  conditional, not a guarantee. The same honesty the dollar lens was built for.
+- **Mermaid `xychart-beta` for the charts** — renders natively on GitHub (already used in
+  FINDINGS), single-series bars to avoid overlap, with the data also in a table as fallback.
+
 ## v0.26.0 — dollar accounting (the price table)
 
 - **Dollars are a reporting lens, not a second gate.** The keep/evict decision stays in

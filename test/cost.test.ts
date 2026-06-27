@@ -7,7 +7,9 @@ import {
 	computeRuleCost,
 	main,
 	parseCostArgs,
+	projectAgent,
 	renderCosts,
+	renderProjection,
 } from "../src/cost.js";
 import {
 	decideRule,
@@ -153,6 +155,61 @@ describe("agentCosts (db-backed)", () => {
 	it("returns nothing when there are no active rules", () => {
 		expect(agentCosts(db, "sql")).toEqual([]);
 	});
+
+	it("projects savings, operating cost, and a with/without comparison", () => {
+		const id = insertRule(db, {
+			agent: "sql",
+			body: "An active, earning rule.",
+			contextCost: 20,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		decideRule(db, id, "active", 10_000, "savings", "t");
+		seedReceipt(db, id);
+		// One real-work session establishes the without-plugin baseline.
+		upsertRun(db, {
+			agent: "sql",
+			sessionId: "s1",
+			taskHash: null,
+			inputTokens: 1000,
+			outputTokens: 200,
+			cacheCreation: 0,
+			cacheRead: 50_000,
+			toolCalls: 1,
+			fileRereads: 0,
+			completed: true,
+			rulesetVersion: 1,
+			ts: "t",
+			config: "real",
+		});
+
+		const p = projectAgent(db, "sql", 13, 20);
+		expect(p.horizonSessions).toBe(260); // 13 × 20
+		expect(p.rules).toBe(1);
+		expect(p.netBenefit).toBeGreaterThan(0);
+		expect(p.operatingCost).toBeGreaterThan(0);
+		expect(p.breakEvenSessions).toBeGreaterThan(0);
+		expect(p.baselineCost).not.toBeNull();
+		expect(p.withPluginCost ?? 0).toBeLessThan(p.baselineCost ?? 0);
+		expect(p.pctSaved ?? 0).toBeGreaterThan(0);
+		expect(p.pctSaved ?? 1).toBeLessThan(1);
+	});
+
+	it("projects a null baseline when there are no real-work runs", () => {
+		const id = insertRule(db, {
+			agent: "sql",
+			body: "Active rule, no real-work history.",
+			contextCost: 20,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		decideRule(db, id, "active", 10_000, "savings", "t");
+		seedReceipt(db, id);
+		const p = projectAgent(db, "sql", 13, 20);
+		expect(p.baselineCost).toBeNull();
+		expect(p.withPluginCost).toBeNull();
+		expect(p.netBenefit).toBeGreaterThan(0); // savings still computed
+	});
 });
 
 describe("renderCosts / parseCostArgs", () => {
@@ -186,6 +243,39 @@ describe("renderCosts / parseCostArgs", () => {
 		expect(parseCostArgs(["--agent", "sql"]).agent).toBe("sql");
 		expect(() => parseCostArgs(["--agent", "nope"])).toThrow(/--agent/);
 	});
+
+	it("parses projection flags (--project, --months, --sessions-per-week)", () => {
+		expect(parseCostArgs(["--project"]).weeks).toBe(13); // ~3 months default
+		const m = parseCostArgs(["--months", "6"]);
+		expect(m.project).toBe(true);
+		expect(m.weeks).toBe(Math.round(6 * 4.345)); // 26
+		const s = parseCostArgs(["--sessions-per-week", "40"]);
+		expect(s.project).toBe(true);
+		expect(s.sessionsPerWeek).toBe(40);
+		expect(() => parseCostArgs(["--weeks", "-1"])).toThrow(/positive/);
+	});
+
+	it("renders a projection with a with/without comparison", () => {
+		const out = renderProjection({
+			agent: "sql",
+			weeks: 13,
+			sessionsPerWeek: 20,
+			horizonSessions: 260,
+			rules: 1,
+			netPerSession: 0.004,
+			grossSavings: 1.07,
+			operatingCost: 0.27,
+			netBenefit: 0.78,
+			breakEvenSessions: 67,
+			baselineCost: 5.46,
+			withPluginCost: 4.68,
+			pctSaved: 0.143,
+		});
+		expect(out).toMatch(/~3\.0 months/);
+		expect(out).toContain("NET benefit: $0.78");
+		expect(out).toContain("WITHOUT plugin: $5.46");
+		expect(out).toContain("14.3% cheaper");
+	});
 });
 
 describe("cost main()", () => {
@@ -205,5 +295,10 @@ describe("cost main()", () => {
 	it("returns 0 for both text and json output", () => {
 		expect(main(["--agent", "sql"])).toBe(0);
 		expect(main(["--agent", "sql", "--json"])).toBe(0);
+	});
+
+	it("returns 0 for projection output", () => {
+		expect(main(["--agent", "sql", "--project"])).toBe(0);
+		expect(main(["--agent", "sql", "--months", "3", "--json"])).toBe(0);
 	});
 });

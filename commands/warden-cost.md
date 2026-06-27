@@ -12,9 +12,15 @@ cd "${CLAUDE_SKILL_DIR}/.." && npx tsx src/cost.ts $ARGUMENTS
 
 Argument forms (pass through verbatim as `$ARGUMENTS`):
 
-- *(no args)* — every domain agent
+- *(no args)* — per-rule dollar report for every domain agent
 - `--agent sql` — one agent
 - `--json` — machine-readable output
+- `--project` — horizon projection (default **13 weeks ≈ 3 months**): gross
+  savings, operating (discovery) cost, NET benefit, break-even, and the cost
+  **with vs without** the plugin over that span
+- `--months 6` / `--weeks 26` — set the projection horizon (implies `--project`)
+- `--sessions-per-week 40` — assumed session volume for the projection (implies
+  `--project`; defaults to `WARDEN_SESSIONS_PER_WEEK`)
 
 Prices default to the public Anthropic rate card; override any rate with the
 `TOKEN_WARDEN_PRICE_INPUT` / `_OUTPUT` / `_CACHE_WRITE` / `_CACHE_READ` env vars

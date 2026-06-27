@@ -24,6 +24,7 @@ positive return.
 ## Table of contents
 
 - [How it works](#how-it-works)
+- [What it saves](#what-it-saves)
 - [Getting started](#getting-started)
 - [Commands](#commands)
 - [The benchmark system](#the-benchmark-system)
@@ -115,6 +116,72 @@ least-recently-audited active rule — memory must keep earning its place. Survi
 compiled into `MEMORY.md`, which Claude Code injects into the agent's system prompt.
 
 ---
+
+## What it saves
+
+token-warden's keep/evict decision is measured in **tokens**; `/warden-cost`
+prices that into **dollars** (public Anthropic rates, every rate
+[overridable](CONTRIBUTING.md), savings priced at your agent's real token-type
+mix). `/warden-cost --project` then scales it over a horizon — default 13 weeks
+(~3 months) — and shows the cost **with vs. without** the plugin.
+
+> ⚠️ **These numbers are the [positive control](FINDINGS.md)** — one curated
+> "grep before reading" rule on a *deliberately naive* agent, where headroom was
+> manufactured to validate the engine. On the already-optimized shipped agents the
+> same rule saves ~$0 (correctly evicted). This is *"what the engine captures when
+> a rule of this size survives on your workload"* — conditional on that, not a
+> guarantee. The open question is whether your real agents have such a rule to
+> catch; that's what dogfooding answers.
+
+On that naive agent the rule cut a session from **67,252 → 56,553 processing
+tokens (−15.9%)** — about **$0.0321/session** at Sonnet input pricing, ~500× the
+rule's context rent.
+
+```mermaid
+xychart-beta
+    title "Cost per session: without vs. with token-warden (naive agent, Sonnet pricing)"
+    x-axis ["without rule", "with rule"]
+    y-axis "US cents / session" 0 --> 22
+    bar [20.2, 17.0]
+```
+
+Scaled per surviving rule (Sonnet pricing, minus the one-time ~$1.98 benchmark
+discovery cost):
+
+| Usage profile | Sessions/week | Net savings — 3 months | Net savings — 1 year |
+|---|---|---|---|
+| Solo dev (moderate) | 20 | **$6** | **$31** |
+| Active dev | 50 | $19 | $81 |
+| Power user | 250 | $102 | $415 |
+| Small team (10×) | 1,000 | $415 | $1,667 |
+| Enterprise (100×) | 10,000 | $4,171 | $16,690 |
+
+The per-run win is cents; it becomes money through **volume × rule count × model
+price** (Opus is ~1.7× these figures, Fable 5 ~3.3×, Haiku ~0.3×).
+
+```mermaid
+xychart-beta
+    title "3-month net savings per surviving rule, by usage (Sonnet)"
+    x-axis ["solo 20/wk", "active 50/wk", "power 250/wk", "team 1k/wk"]
+    y-axis "US dollars" 0 --> 450
+    bar [6, 19, 102, 415]
+```
+
+The operating cost is the one-time benchmark spend that *found* the rule
+(~$1.98 in our run, recovered in ~67 sessions); after that it is pure savings.
+For a power user over 3 months that nets out to ~16% off the agent's token bill:
+
+```mermaid
+xychart-beta
+    title "3-month cost, power user (250 sessions/week): without vs. with plugin"
+    x-axis ["without plugin", "with plugin (incl. discovery cost)"]
+    y-axis "US dollars" 0 --> 700
+    bar [656, 554]
+```
+
+Run `/warden-cost --project --sessions-per-week <n>` (or `--months <n>`) to
+compute this table from **your own** surviving rules and volume instead of the
+illustration above.
 
 ## Getting started
 

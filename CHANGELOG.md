@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.27.0 — 2026-06-25
+
+Horizon projection — scale the dollar savings over time, with a with-vs-without
+comparison, plus visual docs.
+
+- **`/warden-cost --project`** (`src/cost.ts`, new `projectAgent`): projects an
+  agent's active rules over a horizon (default **13 weeks ≈ 3 months**; set with
+  `--months` / `--weeks` and `--sessions-per-week`). Reports gross savings, the
+  one-time operating (benchmark discovery) cost, NET benefit, break-even, and —
+  when real-work runs exist to estimate a baseline — the cost **with vs. without**
+  the plugin and the % saved.
+- **README "What it saves"** section with three GitHub-native Mermaid bar charts
+  (cost/session with vs. without, 3-month net savings by usage profile, and a
+  power-user 3-month with-vs-without comparison) plus a 3-month/annual savings
+  table — all clearly labelled as the positive-control illustration (manufactured
+  headroom), conditional on a rule surviving on the user's workload.
+- 462 tests (+5), green on Node 22 and 24.
+
 ## v0.26.0 — 2026-06-24
 
 Dollar accounting — translate token savings into money, the unit the recurring
