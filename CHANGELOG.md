@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.29.0 — 2026-06-29
+
+The engine calibrates itself, tightens its confidence default, and feeds its wins
+back into proposals.
+
+- **Calibration harness** (`validation/calibration.ts`, zero-token). A Monte-Carlo
+  that injects synthetic rules with known effect + noise into the *real*
+  `assessDelta`/`verdict` path and measures false-positive rate and statistical
+  power. It found the old `|delta − bar| < 1·SE` band kept a **zero-value rule
+  ~16% of the time**.
+- **Confidence default tightened to `z = 2`** (`WARDEN_CONFIDENCE_Z`, ~95%
+  one-sided), dropping the false-positive rate to **~2.5%**. The honest cost is
+  power — at ~25% noise the engine confidently banks only rules worth ≳ 30% of a
+  session at low run counts; smaller ones need more runs (which the Neyman top-up
+  spends). Lower toward 1 to trade precision for power.
+- **Self-reinforcing distiller** (`src/distill.ts`). `buildPrompt` now feeds the
+  agent's already-banked rules back in with a "do NOT repeat — propose a new
+  practice they don't cover" instruction, so each proven rule shapes the next.
+- FINDINGS: calibration table, and an honest re-framing of the positive control
+  (banked under the old z=1 band, borderline under z=2 at runs=2 — the engine
+  keeps a real rule but runs=2 was underpowered).
+- 486 tests (+5), green on Node 22 and 24.
+
 ## v0.28.0 — 2026-06-29
 
 Three roadmap features plus a concise, more visual README.

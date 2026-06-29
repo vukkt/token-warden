@@ -170,6 +170,39 @@ describe("assessDelta (within-task variance, fixed-suite estimand)", () => {
 	});
 });
 
+describe("assessDelta confidence band (WARDEN_CONFIDENCE_Z)", () => {
+	// Savings {70,50,90} over baseline 1000: mean 70, between-task SE ≈ 11.6,
+	// 2×-rent bar ≈ 53 → ~1.5 SE above the bar. Uncertain at z=2, not at z=1.
+	const baseline = [
+		summary("t1", [1000]),
+		summary("t2", [1000]),
+		summary("t3", [1000]),
+	];
+	const withRule = [
+		summary("t1", [930]),
+		summary("t2", [950]),
+		summary("t3", [910]),
+	];
+
+	afterEach(() => {
+		delete process.env.WARDEN_CONFIDENCE_Z;
+	});
+
+	it("defaults to z=2 (a ~1.5-SE margin is uncertain)", () => {
+		expect(assessDelta(baseline, withRule, 25).uncertain).toBe(true);
+	});
+
+	it("z=1 is looser — the same margin is confident", () => {
+		process.env.WARDEN_CONFIDENCE_Z = "1";
+		expect(assessDelta(baseline, withRule, 25).uncertain).toBe(false);
+	});
+
+	it("ignores a sub-1 / garbage override (clamps to the default)", () => {
+		process.env.WARDEN_CONFIDENCE_Z = "0";
+		expect(assessDelta(baseline, withRule, 25).uncertain).toBe(true);
+	});
+});
+
 describe("allocateTopUpRuns (Neyman top-up allocation)", () => {
 	const stableRef = [summary("t1", [1000, 1000]), summary("t2", [1000, 1000])];
 

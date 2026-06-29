@@ -49,6 +49,28 @@ describe("buildPrompt", () => {
 		expect(prompt).toContain("total tokens processed: 30000");
 		expect(prompt).toContain("TOOL Read");
 	});
+
+	it("feeds banked rules back in, telling the model not to repeat them", () => {
+		const prompt = buildPrompt(
+			run,
+			"TOOL Read {}",
+			[],
+			[
+				"Grep before reading whole files.",
+				"State a one-line plan before editing.",
+			],
+		);
+		expect(prompt).toMatch(/ALREADY follows these proven/);
+		expect(prompt).toMatch(/do NOT repeat/i);
+		expect(prompt).toContain("- Grep before reading whole files.");
+		expect(prompt).toContain("- State a one-line plan before editing.");
+	});
+
+	it("omits the proven-rules section when the agent has none yet", () => {
+		expect(buildPrompt(run, "TOOL Read {}", [], [])).not.toMatch(
+			/ALREADY follows these proven/,
+		);
+	});
 });
 
 describe("trigramSimilarity", () => {

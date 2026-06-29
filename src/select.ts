@@ -62,6 +62,19 @@ function sessionsPerWeek(): number {
 }
 
 /**
+ * Confidence multiple on the standard error for the "uncertain" band. Default 2
+ * (~95% one-sided): a candidate must clear the 2×-rent bar by ≥ 2 standard
+ * errors to be promoted. The calibration harness (validation/calibration.ts)
+ * showed the old 1-SE band gave a ~16% false-positive rate (keeping a zero-effect
+ * rule); 2 SE drops that to ~2-3%. Lower it (toward 1) to trade precision for
+ * power once you trust your benchmark's variance. Clamped to ≥ 1.
+ */
+function confidenceZ(): number {
+	const raw = Number(process.env.WARDEN_CONFIDENCE_Z ?? 2);
+	return Number.isFinite(raw) && raw >= 1 ? raw : 2;
+}
+
+/**
  * Effective per-session rent of carrying a rule, in tokens. Beyond the raw
  * context cost paid every session, a rule incurs a one-time cache re-prefill
  * each time the ruleset changes — the memory block misses the cache and is
@@ -273,7 +286,7 @@ export function assessDelta(
 	const uncertain =
 		!regression &&
 		standardError !== null &&
-		Math.abs(mean - threshold) < standardError;
+		Math.abs(mean - threshold) < confidenceZ() * standardError;
 	return { delta, regression, standardError, standardErrorBasis, uncertain };
 }
 

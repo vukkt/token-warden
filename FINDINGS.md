@@ -260,6 +260,43 @@ provably net-positive in money and rejects one that is not — and it reports th
 truthful, un-inflated magnitude rather than a token number that sounds bigger than
 it is.
 
+## Engine calibration (2026-06): the instrument measures itself
+
+`validation/calibration.ts` is a zero-token Monte-Carlo: it injects synthetic
+rules with a **known** true effect and **known** run-to-run noise into the *real*
+verdict path (`assessDelta` + `verdict`) and measures how often the engine keeps
+them. With a 0-effect rule, the keep-rate *is* the false-positive rate; with a
+real effect, it's statistical power.
+
+It found a real miscalibration. The old uncertainty band was `|delta − bar| <
+1·SE` — only ~84% one-sided confidence — which let the engine **keep a zero-value
+rule ~16% of the time**:
+
+| Confidence band | False-positive rate (runs 2/3/5) | Min. saving for 80% power |
+|---|---|---|
+| `z = 1` (old default) | **17.6% / 16.3% / 15.8%** | ~30% / ~20% / ~15% of a session |
+| `z = 2` (new default) | **4.2% / 2.7% / 2.4%** | ~30% (needs runs ≥ 5 or a big effect) |
+
+For a "measured, not vibes" tool, a 16% false-positive rate is indefensible, so
+**the default is now `z = 2`** (`WARDEN_CONFIDENCE_Z`, ~95% one-sided, ~2.5% FP).
+The honest cost is power: at 25% run-to-run noise over 5 tasks, the engine can only
+*confidently* bank a rule worth roughly **≥ 30% of a session** at low run counts —
+smaller real rules need more runs, which is exactly what the Neyman top-up spends.
+The heavy-tailed "derailment" noise model (a fraction of runs blowing up to ~1.8×,
+as `sql-05` did) barely moves the false-positive rate but costs more power —
+motivating robust aggregation as the next lever.
+
+This re-frames the positive control honestly: at `--runs 2` it sat ~1.3–1.6 SE
+above the bar — *banked under the old z=1 band, but borderline under z=2*. The
+engine demonstrably keeps a real rule, but runs=2 was underpowered; the rigorous
+bar wants more runs (or a larger effect). That's a sharper, truer claim than the
+original "SURVIVES".
+
+Alongside this, the loop is now **self-reinforcing**: the distiller's prompt feeds
+the agent's already-banked rules back in ("you already follow these — propose a
+*new* practice that targets waste they don't cover"), so each proven rule shapes
+the next proposal instead of re-treading covered ground.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can

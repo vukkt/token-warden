@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 import {
 	defaultDbPath,
+	getActiveRules,
 	insertRule,
 	listRulesByAgent,
 	openDb,
@@ -175,6 +176,7 @@ export function buildPrompt(
 	run: RunRow,
 	digest: string,
 	recentQuestions: string[] = [],
+	activeRules: string[] = [],
 ): string {
 	const total =
 		run.input_tokens + run.output_tokens + run.cache_creation + run.cache_read;
@@ -183,6 +185,17 @@ export function buildPrompt(
 			? [
 					"Questions this agent recently had to ask other agents (a sign its own knowledge or approach has gaps):",
 					...recentQuestions.map((q) => `- ${q}`),
+					"",
+				]
+			: [];
+	// Self-reinforcing loop: feed the rules this agent has ALREADY proven (banked
+	// after surviving the benchmark) back in, so each new proposal builds on
+	// what worked instead of re-proposing covered ground.
+	const provenSection =
+		activeRules.length > 0
+			? [
+					"This agent ALREADY follows these proven, measured best-practice rules — do NOT repeat, rephrase, or narrow any of them. Propose a genuinely NEW practice that targets waste they do not already cover:",
+					...activeRules.map((r) => `- ${r}`),
 					"",
 				]
 			: [];
@@ -196,6 +209,7 @@ export function buildPrompt(
 		`- task completed: ${run.completed === 1 ? "yes" : "no"}`,
 		"",
 		...questionSection,
+		...provenSection,
 		"Action trace (truncated):",
 		digest,
 		"",
@@ -283,6 +297,7 @@ export function distill(args: DistillArgs): void {
 			run,
 			digest,
 			recentQuestionsFrom(db, run.agent, 5),
+			getActiveRules(db, run.agent).map((r) => r.body),
 		);
 
 		const claude = spawnSync(

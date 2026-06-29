@@ -557,6 +557,29 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.29.0 — self-calibration, confidence default, self-reinforcing loop
+
+- **The confidence default moved to z=2 despite the power cost.** Calibration showed the
+  old 1-SE band kept zero-value rules ~16% of the time. For a tool whose whole identity is
+  "measured, not vibes", a 1-in-6 false-positive rate is the worst possible default. z=2
+  (~2.5% FP) is the right default even though it means only large rules clear at low run
+  counts — the Neyman top-up exists precisely to spend more runs on the uncertain ones, so
+  rigor + top-up resolves real rules rather than rejecting them outright. Configurable via
+  `WARDEN_CONFIDENCE_Z` for those who want power over precision; clamped to ≥ 1 (a sub-1 band
+  would re-introduce the high FP rate by construction).
+- **Calibration lives in `validation/`, not `src/`.** It's a diagnostic Monte-Carlo over the
+  real decision functions (`assessDelta`/`verdict`), the same place as the other zero-token
+  validation harnesses — not shipped engine code, so it stays out of coverage gating while
+  still exercising the genuine verdict path.
+- **The positive-control claim was revised down, on purpose.** The harness proved runs=2 sits
+  ~1.3–1.6 SE above the bar — banked under z=1, borderline under z=2. Rather than keep the
+  rosier "SURVIVES" framing, FINDINGS now states it honestly (real effect, underpowered at
+  runs=2). The calibration is exactly the instrument that justifies the correction.
+- **Self-reinforcing loop feeds banked rules back as "don't repeat these".** Not as few-shot
+  exemplars to copy (that risks near-duplicates the dedup would reject anyway), but as a
+  *coverage* signal pushing the distiller toward novel, uncovered waste. Building it is
+  zero-token; proving it raises candidate quality still needs real runs (dogfood).
+
 ## v0.28.0 — provenance, per-rule scope, stale-rule flag
 
 - **Provenance is a stored digest excerpt, not a transcript link.** Real transcripts live
