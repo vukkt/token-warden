@@ -333,6 +333,9 @@ export function distill(args: DistillArgs): void {
 				contextCost: contextCost(rule.body),
 				sourceRun: run.id,
 				createdAt: ts,
+				// Provenance: keep a short excerpt of the session that produced the
+				// rule so its receipt can show what waste motivated it.
+				bornDigest: digest.slice(0, 1200),
 			});
 			logLine(
 				`run ${run.id}: new candidate ${id} for ${run.agent}: "${rule.body}"`,

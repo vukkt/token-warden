@@ -18,6 +18,8 @@
 		"src/contradict.ts",
 		"src/sample-tasks.ts",
 		"src/cost.ts",
+		"src/scope.ts",
+		"src/health.ts",
 		"scripts/*.mjs"
 	],
 	"project": ["src/**/*.ts"],

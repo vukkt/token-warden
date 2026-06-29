@@ -43,77 +43,33 @@ positive return.
 
 ## How it works
 
-The optimizer is a four-stage, feed-forward loop. Lessons are extracted from finished
-sessions and applied to future ones — past work is never re-done.
+A four-stage, feed-forward loop: lessons are extracted from finished sessions and applied
+to future ones. Past work is never re-done, and nothing reaches an agent's memory until it
+has been measured.
 
-```
-                  agent session (any project, any repo)
-                                  │
-                                  │  Stop hook · parses the transcript:
-                                  │  tokens, tool calls, file re-reads, completion
-                                  ▼
-                ┌─────────────────────────────────────┐
-                │  1 · COLLECT                        │
-                │  one row per session in SQLite      │
-                └─────────────────────────────────────┘
-                                  │
-                                  │  fires only when a run exceeds the
-                                  │  agent's rolling p75 token cost
-                                  ▼
-                ┌─────────────────────────────────────┐
-                │  2 · DISTILL                        │
-                │  one haiku call over the waste      │
-                │  stats → 0–2 candidate rules        │
-                └─────────────────────────────────────┘
-                                  │
-                                  │  candidates wait in SQLite —
-                                  │  never injected until measured
-                                  ▼
-                ┌─────────────────────────────────────┐
-                │  3 · BENCH                          │
-                │  golden suite on a frozen fixture,  │
-                │  run with vs. without the candidate │
-                └─────────────────────────────────────┘
-                                  │
-                                  │  measured delta vs. context rent
-                                  ▼
-                ┌─────────────────────────────────────┐
-                │  4 · SELECT                         │
-                │  keep if savings ≥ 2× rent, else    │
-                │  evict · re-audit the oldest rule   │
-                └─────────────────────────────────────┘
-                                  │
-                                  ▼
-              ~/.claude/agent-memory/<agent>/MEMORY.md
-        compiled wholesale from surviving rules and injected
-            into the agent's system prompt next session
+```mermaid
+flowchart TD
+    A([Agent session · any project]) -->|"Stop hook parses the transcript"| B[1 · COLLECT<br/>one row per session in SQLite]
+    B -->|"only when a run exceeds the agent's p75 cost"| C[2 · DISTILL<br/>one model call → 0–2 candidate rules]
+    C -->|"candidates wait — never injected until measured"| D[3 · BENCH<br/>golden suite on a frozen fixture,<br/>with vs. without the rule]
+    D -->|"measured delta vs. context rent"| E[4 · SELECT<br/>keep if savings ≥ 2× rent, else evict]
+    E --> F[("MEMORY.md — only rules<br/>with proven, positive return")]
+    F -.->|"injected into the agent's prompt next session"| A
 ```
 
-**1 · Collect.** `Stop` and `SubagentStop` hooks fire after every turn (main session and
-subagent work respectively) and parse the session transcript
-into one ledger row: input/output/cache tokens (deduplicated by API message id — the
-transcript repeats usage per streamed block), tool-call count, files read more than once,
-and whether the session completed. The hook is hard-capped under the 2-second budget,
-wraps every failure, and exits 0 regardless — it can never break your session.
-
-**2 · Distill.** Collection is cheap, analysis is not, so analysis is rationed: only runs
-above the agent's rolling 75th-percentile cost (minimum 5 prior runs) are distilled. A
-single detached haiku-tier call receives the waste statistics plus an 8 KB action trace
-and must return strict JSON: at most two one-sentence, generalizable rules. Invalid output
-is dropped, never retried. Near-duplicates of *any* existing rule — including evicted
-ones — are rejected by trigram similarity, so a falsified rule cannot be re-proposed.
-
-**3 · Bench.** Candidates are measured on a golden task suite against a frozen fixture
-repository (see [The benchmark system](#the-benchmark-system)). Each configuration runs
-the suite headlessly in a throwaway copy with the candidate compiled into a temporary,
-fully isolated agent memory.
-
-**4 · Select.** A rule's verdict is the spec inequality: with `delta` = mean tokens saved
-per completed golden run and `rent` = the rule's own size in tokens, the rule goes active
-iff `delta × sessions/week ≥ 2 × rent × sessions/week`. Failing a previously-passing task
-is instant eviction regardless of tokens. Every selector run also re-benchmarks the
-least-recently-audited active rule — memory must keep earning its place. Survivors are
-compiled into `MEMORY.md`, which Claude Code injects into the agent's system prompt.
+1. **Collect** — `Stop` / `SubagentStop` hooks parse each transcript into one ledger row
+   (tokens, tool calls, file re-reads, completion). Hard-capped under 2s, fail-open, exits
+   0 regardless — it can never break your session.
+2. **Distill** — only runs above the agent's rolling p75 cost (≥ 5 prior runs) are analyzed.
+   One detached model call (Sonnet by default) returns ≤ 2 one-sentence rules as strict
+   JSON; invalid output is dropped, and near-duplicates of *any* past rule (even evicted
+   ones) are rejected — a falsified rule can't sneak back in.
+3. **Bench** — candidates run the golden suite on a frozen fixture repo, with vs. without
+   the rule, in throwaway copies (see [The benchmark system](#the-benchmark-system)).
+4. **Select** — a rule goes active only if it saves **≥ 2× its context rent** and breaks no
+   task (failing a previously-passing task is instant eviction). Every run also re-audits
+   the oldest active rule. Survivors compile into `MEMORY.md`, which Claude Code injects
+   into the agent's prompt next session.
 
 ---
 
@@ -287,7 +243,9 @@ Active rules land in the agent's memory; the next session starts cheaper.
 | `/warden-protect --agent a (--add "<rule>" \| --protect <id> \| --unprotect <id> \| --list)` | Mark a rule as **protected** — human-authored / behavioral. Protected rules are compiled into memory and counted for rent but are **never token-evicted** (a behavioral rule's value is not measured in tokens). The boundary that stops the 2× gate from ever deleting a constraint you wrote on purpose |
 | `/warden-contradict [--agent a] [--file path] [--gate]` | Zero-token falsification: flags active rules that may contradict the repo's `CLAUDE.md` conventions (shared topic + opposite polarity). Recommends review, **never auto-evicts**; `--gate` exits non-zero in CI |
 | `/warden-sample-tasks --agent a --from <dir\|file> [--out path]` | Drafts candidate golden tasks from real session transcripts (opening prompt, de-duplicated, `success_check` left as TODO) to cut suite-building burden. Never auto-freezes a task; a human writes the check and moves it into the suite |
-| `/warden-cost [--agent a] [--json]` | Dollar accounting: translates each active rule's token-measured savings into money using a price table (public Anthropic rates, env-overridable) and the agent's own token-type mix — per-session net, weekly total, and a break-even. Savings priced at the blended (mostly cheap input/cache-read) rate, rent at the input rate. Read-only; the keep/evict gate stays in tokens |
+| `/warden-cost [--agent a] [--project] [--months n] [--json]` | Dollar accounting: translates each rule's token savings into money (price table, env-overridable; savings priced at your agent's real token-type mix). `--project` scales it over a horizon (default ~3 months) with a cost **with vs. without** the plugin. Read-only; the gate stays in tokens |
+| `/warden-scope --agent a (--rule <id> --scope "<where>" \| --clear \| --list)` | Scope a rule to a context (a language, a service, a task type) — it compiles into memory as `(when <where>) <rule>` so the agent applies it only there. Advisory; doesn't change the measurement |
+| `/warden-health [--agent a] [--stale-after <days>] [--gate]` | Flags active rules not re-audited within N days (default 30) so their savings can be re-validated. Recommends a re-audit, **never auto-evicts**; protected rules exempt; `--gate` exits non-zero in CI |
 
 When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
 nudge into new sessions — selection itself always stays a user decision, because it
@@ -569,8 +527,9 @@ Near-term (where the next *surviving* rule comes from):
   prompt/model tuning so it proposes rules that can clear 2× rent.
 - **Fully scheduled selection** — auto-running the selector on a cron/routine once
   variance handling has earned trust; today it deliberately stays a user decision.
-- **Transcript provenance** — link a rule's `born-of` run to its archived transcript
-  digest for post-hoc review.
+- **Shipped — Transcript provenance.** Each distilled rule stores a digest of the session
+  it was born from; `/warden-receipt` shows it as a "born of:" line, so you can see exactly
+  the wasteful behavior that motivated each rule (memory review becomes code review).
 
 Bigger directions — the reusable asset is the *frozen-benchmark + measured-verdict*
 discipline, which generalizes well beyond efficiency rules:
@@ -609,17 +568,22 @@ falsification path is the next layer of work:
   zero-token check that flags active rules contradicting the repo's `CLAUDE.md`
   conventions (shared topic + opposite polarity). It **recommends review, never
   auto-evicts** (the controlled fixture stays the only authority that removes a
-  rule), with `--gate` for CI. Remaining declarative triggers — "N regressions",
-  "unused for N runs" — are still open.
+  rule), with `--gate` for CI.
+- **Shipped — Stale-rule flagging.** `/warden-health` flags active rules not re-audited
+  within N days (default 30) so their measured savings can be re-validated — the
+  measurable form of "un-revalidated for too long". Flags and recommends a re-audit,
+  never auto-evicts; protected rules exempt; `--gate` for CI. (A single regression already
+  evicts on re-audit, so an "N regressions" threshold would be redundant.)
 - **Out-of-fixture re-audit.** Re-audit currently reuses the same frozen fixture,
   so it cannot detect a rule that the fixture happens to reward but that is harmful
   elsewhere. The real-work production signal (token cost per ruleset version) is
   already tracked but only reported; wiring it — and **friction reports** (an agent
   finding a rule false or contradicted in this repo) — into eviction makes the
   benchmark falsifiable by production reality, not just by itself.
-- **Per-rule scope.** Rules are scoped per agent today; a finer "allowed where"
-  predicate (repo, language, task category) would let a rule be valid in one
-  context and inert in another instead of globally on or off.
+- **Shipped — Per-rule scope.** `/warden-scope` gives a rule an "allowed where" predicate
+  (a language, a service, a task type); it compiles into memory as `(when <where>) <rule>`
+  so the agent applies it only there instead of globally. Advisory — the agent self-applies
+  it; it does not change the measurement.
 - **Representative suites and richer metrics.** The golden suite is hand-curated,
   not sampled to a production task distribution, so a rule protecting a rare,
   expensive case is only measured if that case is in the suite. `/warden-sample-tasks`

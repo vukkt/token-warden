@@ -134,6 +134,8 @@ describe("distill() orchestration", () => {
 		expect(rules[0]?.body).toBe(
 			"Use Grep to locate symbols before reading any file.",
 		);
+		// Provenance: the candidate carries a digest of its born-of session.
+		expect(rules[0]?.born_digest).toBeTruthy();
 	});
 
 	it("inserts nothing for an invalid/garbage model reply, never throws", () => {

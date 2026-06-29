@@ -64,6 +64,9 @@ export function renderReceipt(r: ReceiptRow): string {
 		`    activity: tool calls ${fmt(r.without_tool_calls)} → ${fmt(r.with_tool_calls)}${pctDelta(r.with_tool_calls, r.without_tool_calls)}` +
 			` · file re-reads ${fmt(r.without_file_rereads)} → ${fmt(r.with_file_rereads)}${pctDelta(r.with_file_rereads, r.without_file_rereads)}`,
 		`    decided ${displayText(r.decided_at, 30)} (${displayText(r.kind, 16)}) — ${displayText(r.reason ?? "no reason recorded")}`,
+		...(r.born_digest
+			? [`    born of: ${displayText(r.born_digest, 160)}`]
+			: []),
 	].join("\n");
 }
 

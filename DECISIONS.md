@@ -557,6 +557,27 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.28.0 — provenance, per-rule scope, stale-rule flag
+
+- **Provenance is a stored digest excerpt, not a transcript link.** Real transcripts live
+  outside the plugin (`~/.claude/projects`) and get garbage-collected, so linking to them
+  would rot. The distiller already builds a digest for its prompt; we persist a truncated
+  copy (1,200 chars) on the rule. Self-contained, survives transcript deletion, enough for a
+  "born of:" receipt line.
+- **Scope is advisory, compiled into the memory line — not a new gate.** Enforcing scope at
+  measurement time would need per-session repo/language context the selector doesn't have.
+  Instead a scoped rule renders as `(when <where>) <rule>` and the agent self-applies it.
+  This ships a useful capability today without a speculative enforcement engine, and keeps
+  the keep/evict measurement untouched.
+- **Stale-rule trigger flags, and is the *measurable* form of "unused".** There is no
+  per-rule "was it applied" signal (memory is injected wholesale), so true usage-tracking
+  isn't available. Age-since-last-decision *is* measurable, so "un-revalidated for N days"
+  is the honest version of the roadmap's "unused for N runs". It flags (never auto-evicts —
+  evicting a good rule for being old without re-measuring would violate "measured, not
+  vibes") and exempts protected rules, which are deliberately never re-audited.
+- **No "N regressions" trigger** — a single regression already evicts on re-audit, so a
+  streak threshold would be redundant. Documented rather than built.
+
 ## v0.27.0 — horizon projection
 
 - **Operating cost = the one-time discovery spend, not an ongoing tax.** The benchmark

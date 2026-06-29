@@ -142,6 +142,7 @@ describe("renderReceipt", () => {
 			tasks_passed_with: 3,
 			tasks_passed_without: 3,
 			body: "Use Grep before reading files.",
+			born_digest: null,
 			...over,
 		};
 	}
@@ -160,6 +161,17 @@ describe("renderReceipt", () => {
 
 	it("marks a regression", () => {
 		expect(renderReceipt(row({ regression: 1 }))).toContain("⚠ REGRESSION");
+	});
+
+	it("shows born-of provenance when present, omits it when null", () => {
+		expect(
+			renderReceipt(
+				row({
+					born_digest: "read whole file orders.sql 5 times; never grepped",
+				}),
+			),
+		).toMatch(/born of: read whole file orders\.sql/);
+		expect(renderReceipt(row({ born_digest: null }))).not.toContain("born of:");
 	});
 
 	it("shows activity as a signed percent change, without editorializing", () => {

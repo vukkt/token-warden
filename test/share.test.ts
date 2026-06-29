@@ -31,6 +31,8 @@ function rule(overrides: Partial<RuleRow> = {}): RuleRow {
 		created_at: "2026-06-11T00:00:00.000Z",
 		decided_reason: "savings 3673 ≥ 2× context rent 13",
 		protected: 0,
+		born_digest: null,
+		scope: null,
 		...overrides,
 	};
 }

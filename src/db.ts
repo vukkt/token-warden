@@ -134,6 +134,10 @@ const MIGRATIONS: readonly string[] = [
 	`
 	ALTER TABLE rules ADD COLUMN protected INTEGER NOT NULL DEFAULT 0;
 	`,
+	`
+	ALTER TABLE rules ADD COLUMN born_digest TEXT;
+	ALTER TABLE rules ADD COLUMN scope TEXT;
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -290,6 +294,13 @@ export interface RuleRow {
 	 * (compiled and rent-counted, but never auto-evicted for sub-threshold
 	 * savings). 0 = distilled efficiency rule, token-gated as usual. */
 	protected: number;
+	/** Truncated digest of the session this rule was distilled from — the
+	 * provenance shown on its receipt ("born of:"). Null for authored rules. */
+	born_digest: string | null;
+	/** Optional "allowed where" predicate (repo / language / task category). When
+	 * set, the rule is compiled into memory with a "(when <scope>)" prefix so the
+	 * agent applies it conditionally; null = always-on. */
+	scope: string | null;
 }
 
 export function getRuleById(db: WardenDb, id: number): RuleRow | undefined {
@@ -336,6 +347,8 @@ export interface NewRule {
 	contextCost: number;
 	sourceRun: number | null;
 	createdAt: string;
+	/** Provenance digest of the session this rule was distilled from. */
+	bornDigest?: string | null;
 }
 
 /** Insert a candidate rule. Candidates live only in SQLite until measured
@@ -343,8 +356,8 @@ export interface NewRule {
 export function insertRule(db: WardenDb, rule: NewRule): number {
 	const row = db
 		.prepare<unknown[], { id: number }>(
-			`INSERT INTO rules (agent, body, status, context_cost, source_run, created_at)
-			 VALUES (?, ?, 'candidate', ?, ?, ?) RETURNING id`,
+			`INSERT INTO rules (agent, body, status, context_cost, source_run, created_at, born_digest)
+			 VALUES (?, ?, 'candidate', ?, ?, ?, ?) RETURNING id`,
 		)
 		.get(
 			rule.agent,
@@ -352,9 +365,19 @@ export function insertRule(db: WardenDb, rule: NewRule): number {
 			rule.contextCost,
 			rule.sourceRun,
 			rule.createdAt,
+			rule.bornDigest ?? null,
 		);
 	if (row === undefined) throw new Error("insertRule produced no row");
 	return row.id;
+}
+
+/** Set (or clear, with null) a rule's "allowed where" scope predicate. */
+export function setRuleScope(
+	db: WardenDb,
+	id: number,
+	scope: string | null,
+): void {
+	db.prepare("UPDATE rules SET scope = ? WHERE id = ?").run(scope, id);
 }
 
 /** Insert a human-authored, protected rule directly as active. The author
@@ -864,6 +887,8 @@ export interface ReceiptRow {
 	tasks_passed_without: number;
 	/** The rule body, joined from `rules` for rendering. */
 	body: string;
+	/** Provenance digest of the rule's born-of session, joined from `rules`. */
+	born_digest: string | null;
 }
 
 /** Append a verdict receipt. One row per decision event (initial + each
@@ -908,7 +933,7 @@ export function recordReceipt(db: WardenDb, receipt: NewReceipt): void {
 export function latestReceipts(db: WardenDb, agent: string): ReceiptRow[] {
 	return db
 		.prepare<unknown[], ReceiptRow>(
-			`SELECT rc.*, r.body AS body
+			`SELECT rc.*, r.body AS body, r.born_digest AS born_digest
 			 FROM rule_receipts rc
 			 JOIN rules r ON r.id = rc.rule_id
 			 WHERE rc.agent = ?

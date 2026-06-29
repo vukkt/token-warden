@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.28.0 — 2026-06-29
+
+Three roadmap features plus a concise, more visual README.
+
+- **Transcript provenance** (`rules.born_digest`). Each distilled rule stores a
+  short digest of the session it was born from; `/warden-receipt` shows it as a
+  "born of:" line, so you can see exactly the wasteful behavior that motivated
+  each rule. Memory review becomes code review.
+- **Per-rule scope** (`/warden-scope`, `rules.scope`). Give a rule an "allowed
+  where" predicate (a language, a service, a task type); it compiles into memory
+  as `(when <where>) <rule>` so the agent applies it only there. Advisory — the
+  agent self-applies it; the keep/evict measurement is unchanged.
+- **Stale-rule flagging** (`/warden-health`). Flags active rules not re-audited
+  within N days (default 30) so their measured savings can be re-validated.
+  Recommends a re-audit, **never auto-evicts** (the controlled fixture stays the
+  only evictor); protected rules are exempt; `--gate` exits non-zero in CI.
+- **README rewrite**: the loop is now a GitHub-native Mermaid flowchart (was
+  ASCII), the four stages condensed to a tight list, the distiller note corrected
+  to Sonnet, and the new commands added.
+- DB migration #11 (`rules.born_digest`, `rules.scope`). Append-only.
+- 481 tests (+19), green on Node 22 and 24.
+
 ## v0.27.0 — 2026-06-25
 
 Horizon projection — scale the dollar savings over time, with a with-vs-without
