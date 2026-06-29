@@ -170,6 +170,51 @@ describe("assessDelta (within-task variance, fixed-suite estimand)", () => {
 	});
 });
 
+describe("assessDelta robust aggregation + tail-risk", () => {
+	it("is inert on clean data — no trim, robust delta == delta, no tail-risk", () => {
+		const without = [summary("t1", [1000, 1040]), summary("t2", [2000, 2080])];
+		const withRule = [summary("t1", [900, 940]), summary("t2", [1850, 1930])];
+		const a = assessDelta(without, withRule, 25);
+		expect(a.tailRisk).toBe(false);
+		expect(a.robustDelta).toBe(a.delta);
+	});
+
+	it("does NOT promote on the robust SE — the verdict keeps the raw (correctly calibrated) SE", () => {
+		// A derailment that cancels (each run still saves 10k). Robust ≈ mean so
+		// no tail-risk, but the SE stays RAW (large) — using the tiny robust SE
+		// here would over-confidently keep noise (the calibration's negative result).
+		const without = [
+			summary("t1", [59000, 61000, 110000]),
+			summary("t2", [59000, 61000, 60000]),
+		];
+		const withRule = [
+			summary("t1", [49000, 51000, 100000]),
+			summary("t2", [49000, 51000, 50000]),
+		];
+		const a = assessDelta(without, withRule, 25);
+		expect(a.tailRisk).toBe(false);
+		expect(a.robustDelta).toBeCloseTo(10000, -3); // robust estimate is reported
+		expect(a.standardError ?? 0).toBeGreaterThan(5000); // raw SE, not the tiny robust one
+	});
+
+	it("flags tail-risk when an outlier materially moves the saving", () => {
+		// The derailed run saves far more (108k vs 76k = 32k) than the clean runs
+		// (10k): trimming it changes the answer, so the rule is tail-heavy.
+		const without = [
+			summary("t1", [59000, 61000, 108000]),
+			summary("t2", [59000, 61000, 60000]),
+		];
+		const withRule = [
+			summary("t1", [49000, 51000, 76000]),
+			summary("t2", [49000, 51000, 50000]),
+		];
+		const a = assessDelta(without, withRule, 25);
+		expect(a.tailRisk).toBe(true);
+		// When flagged, the verdict stays on the mean (which keeps the tail).
+		expect(a.delta).toBeGreaterThan(a.robustDelta ?? 0);
+	});
+});
+
 describe("assessDelta confidence band (WARDEN_CONFIDENCE_Z)", () => {
 	// Savings {70,50,90} over baseline 1000: mean 70, between-task SE ≈ 11.6,
 	// 2×-rent bar ≈ 53 → ~1.5 SE above the bar. Uncertain at z=2, not at z=1.

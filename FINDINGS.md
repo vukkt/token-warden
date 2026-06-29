@@ -283,8 +283,21 @@ The honest cost is power: at 25% run-to-run noise over 5 tasks, the engine can o
 *confidently* bank a rule worth roughly **≥ 30% of a session** at low run counts —
 smaller real rules need more runs, which is exactly what the Neyman top-up spends.
 The heavy-tailed "derailment" noise model (a fraction of runs blowing up to ~1.8×,
-as `sql-05` did) barely moves the false-positive rate but costs more power —
-motivating robust aggregation as the next lever.
+as `sql-05` did) barely moves the false-positive rate but costs more power.
+
+**Robust aggregation — and the negative result that saved us.** The obvious next
+lever was to trim those derailment outliers and use the tighter (robust) standard
+error in the verdict, recovering power. We built it and re-ran the harness — and
+it **made the engine worse**: on the derailment model the false-positive rate rose
+from ~3% back up to ~7%. The reason is exactly why robust estimators are
+dangerous here — trimming a zero-effect rule's blow-ups leaves a low-variance
+remainder, so the shrunken SE looks *over*-confident and admits noise as signal.
+So the verdict **stays on the mean and the raw SE** (correctly calibrated), and
+robust aggregation ships as a **tail-risk *warning* only**: when trimming
+materially moves the saving, the decision is flagged `⚠ TAIL-RISK` (the rule's
+cost is unstable / occasionally blows up) without changing the keep/evict call.
+This is the calibration harness doing its job — it caught a regression in our own
+"improvement" before it shipped.
 
 This re-frames the positive control honestly: at `--runs 2` it sat ~1.3–1.6 SE
 above the bar — *banked under the old z=1 band, but borderline under z=2*. The

@@ -557,6 +557,25 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.30.0 — robust aggregation as a flag, not a gate input
+
+- **The calibration harness vetoed our own feature.** Robust aggregation (trim derailment
+  outliers, use the tighter SE) was built to recover power. Re-running `validation/calibration.ts`
+  showed it *raised* the false-positive rate (~3% → ~7% on the derailment model), because a
+  trimmed zero-effect rule's residual variance understates the true uncertainty of the mean —
+  the shrunken SE is over-confident. We shipped the harness specifically so an "improvement"
+  couldn't regress the engine on vibes; here it earned its keep. The verdict therefore stays
+  on the mean + raw within-task SE (unchanged from v0.29.0).
+- **Robust is a warning, not a decision.** `tailRisk` fires when trimming materially moves the
+  saving (|mean − robust| > robust SE), surfaced as `⚠ TAIL-RISK`. It tells a human "this rule
+  occasionally blows up" without ever changing keep/evict — the honest split between *measuring*
+  instability and *acting* on it. Acting (e.g. evicting a tail-heavy rule) would need a policy
+  decision and is deliberately left to the human.
+- **Conservative trimming so clean data is identical.** The outlier filter requires a run to be
+  both >50% off the median *and* a 3-MAD outlier, and is a no-op below 3 runs. On well-behaved
+  data nothing is trimmed, so `robustDelta == delta` and every pre-existing test passes
+  unchanged — robust only activates on genuine heavy tails.
+
 ## v0.29.0 — self-calibration, confidence default, self-reinforcing loop
 
 - **The confidence default moved to z=2 despite the power cost.** Calibration showed the

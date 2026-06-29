@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.30.0 — 2026-06-30
+
+Robust aggregation as a tail-risk warning — and the calibration harness catching
+a regression in it (see FINDINGS.md).
+
+- **Tail-risk flag** (`src/select.ts`). `assessDelta` now trims genuine
+  "derailment" outliers (a run >50% off the median *and* a 3-MAD outlier;
+  conservative, so clean data is untouched) and reports `robustDelta` + `tailRisk`.
+  When trimming materially moves the saving, the decision is flagged
+  `⚠ TAIL-RISK` (in the selector output and the `Decision`) — the rule's cost is
+  unstable / occasionally blows up.
+- **The verdict deliberately does NOT use the robust SE.** Re-running the
+  calibration harness with robust-SE-in-the-gate *raised* the false-positive rate
+  (~3% → ~7% on the derailment model): a trimmed zero-effect rule's SE is
+  over-confident. So keep/evict stays on the mean and the raw (correctly
+  calibrated) within-task SE; robust aggregation is a *warning*, not a gate input.
+- No behavior change to the keep/evict decision vs v0.29.0 — only the added
+  `robustDelta`/`tailRisk` reporting fields and the output flag.
+- 489 tests (+3), green on Node 22 and 24.
+
 ## v0.29.0 — 2026-06-29
 
 The engine calibrates itself, tightens its confidence default, and feeds its wins

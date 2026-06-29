@@ -208,20 +208,79 @@ function pooledVariance(vectors: number[][]): number | null {
 	return dof > 0 ? sumSq / dof : null;
 }
 
+function median(xs: number[]): number {
+	const s = [...xs].sort((a, b) => a - b);
+	const mid = Math.floor(s.length / 2);
+	return s.length % 2 === 0
+		? ((s[mid - 1] as number) + (s[mid] as number)) / 2
+		: (s[mid] as number);
+}
+
+/**
+ * Drop genuine "derailment" outliers — a run that costs both >50% away from the
+ * median *and* more than 3 MADs out (a Hampel filter with a relative floor).
+ * Conservative on purpose: clean, symmetric noise is never trimmed (so the
+ * estimate is unchanged on well-behaved data), and only a real blow-up like
+ * `sql-05`'s 96k-vs-42k run is removed. Never trims below one observation; a
+ * no-op below 3 runs (an outlier can't be identified from two points).
+ */
+function filterOutliers(xs: number[]): number[] {
+	if (xs.length < 3) return xs;
+	const med = median(xs);
+	const mad = median(xs.map((x) => Math.abs(x - med)));
+	const threshold = Math.max(3 * mad, 0.5 * Math.abs(med));
+	const kept = xs.filter((x) => Math.abs(x - med) <= threshold);
+	return kept.length >= 1 ? kept : xs;
+}
+
+interface SidePair {
+	without: number[];
+	with: number[];
+}
+
+/** Propagated within-task standard error of the mean saving:
+ * `sqrt( (1/K²)·Σᵢ [s²_without,i/n_i + s²_with,i/n_i] )`. Null when no task has
+ * ≥2 runs/side. */
+function withinTaskSE(pairs: SidePair[]): number | null {
+	const k = pairs.length;
+	if (k === 0) return null;
+	const pooledWithout = pooledVariance(pairs.map((p) => p.without));
+	const pooledWith = pooledVariance(pairs.map((p) => p.with));
+	if (pooledWithout === null || pooledWith === null) return null;
+	let sumVar = 0;
+	for (const p of pairs) {
+		const vW = sampleVariance(p.without) ?? pooledWithout;
+		const vR = sampleVariance(p.with) ?? pooledWith;
+		sumVar += vW / p.without.length + vR / p.with.length;
+	}
+	return Math.sqrt(sumVar / k ** 2);
+}
+
+const mean = (xs: number[]): number =>
+	xs.reduce((a, b) => a + b, 0) / xs.length;
+
 export interface DeltaAssessment extends DeltaResult {
-	/** Standard error of the mean saving. Computed from propagated *within-task*
-	 * run-to-run variance when ≥2 runs/side exist (the correct estimand for a
-	 * frozen, fixed golden suite — it shrinks as 1/√runs); falls back to the
-	 * between-task spread only when no within-task variance is estimable. Null
-	 * with <2 comparable tasks. */
+	/** Standard error of the saving. Propagated *within-task* run-to-run variance
+	 * when ≥2 runs/side exist (the correct fixed-suite estimand — shrinks as
+	 * 1/√runs); falls back to the between-task spread only when no within-task
+	 * variance is estimable. Null with <2 comparable tasks. */
 	standardError: number | null;
 	/** Which variance the standard error is built from. "within-task" is the
 	 * correct fixed-suite estimator; "between-task" is the legacy fallback at
 	 * runs=1 — surfaced so a verdict's confidence basis is auditable. */
 	standardErrorBasis: "within-task" | "between-task" | null;
-	/** True when the keep/evict verdict could flip within one standard
-	 * error — the signal to spend a top-up measurement. */
+	/** True when the keep/evict verdict could flip within `WARDEN_CONFIDENCE_Z`
+	 * standard errors — the signal to spend a top-up measurement. */
 	uncertain: boolean;
+	/** The saving after dropping derailment outliers (robust location). Null when
+	 * robust aggregation could not run (runs=1). */
+	robustDelta: number | null;
+	/** True when trimming outliers materially changed the saving (by more than a
+	 * robust standard error) — the rule's measured cost is unstable / tail-heavy.
+	 * When set, the verdict deliberately stays on the *mean* (which keeps the tail
+	 * cost) rather than the optimistic robust estimate, so a rule that occasionally
+	 * blows up cannot be promoted by trimming its worst runs away. */
+	tailRisk: boolean;
 }
 
 /**
@@ -251,33 +310,50 @@ export function assessDelta(
 			standardError: null,
 			standardErrorBasis: null,
 			uncertain: false,
+			robustDelta: null,
+			tailRisk: false,
 		};
 	}
 	const savings = comparisons.map((c) => c.saving);
 	const k = savings.length;
-	const mean = savings.reduce((a, b) => a + b, 0) / k;
-	const delta = Math.round(mean);
+	const meanDelta = mean(savings);
+	const delta = Math.round(meanDelta);
 
-	// Propagated within-task standard error (the fixed-suite estimand). Borrow a
-	// pooled per-side variance for any task too sparse to estimate its own.
-	const pooledWithout = pooledVariance(comparisons.map((c) => c.withoutTokens));
-	const pooledWith = pooledVariance(comparisons.map((c) => c.withTokens));
-	let standardError: number | null = null;
-	let standardErrorBasis: "within-task" | "between-task" | null = null;
-	if (pooledWithout !== null && pooledWith !== null) {
-		let sumVar = 0;
-		for (const c of comparisons) {
-			const vW = sampleVariance(c.withoutTokens) ?? pooledWithout;
-			const vR = sampleVariance(c.withTokens) ?? pooledWith;
-			sumVar += vW / c.withoutTokens.length + vR / c.withTokens.length;
-		}
-		standardError = Math.sqrt(sumVar / k ** 2);
-		standardErrorBasis = "within-task";
-	} else if (k >= 2) {
+	// The verdict uses the *mean* and the *raw* within-task SE. We deliberately do
+	// NOT promote on the robust (outlier-trimmed) SE: the calibration harness
+	// showed that the trimmed SE is over-confident and *raises* the false-positive
+	// rate (a zero-effect rule whose blow-ups are trimmed away looks decisively
+	// cheap). Robust aggregation is therefore a *reporting/flag* only — the
+	// raw-SE verdict stays correctly calibrated.
+	const rawPairs: SidePair[] = comparisons.map((c) => ({
+		without: c.withoutTokens,
+		with: c.withTokens,
+	}));
+	const robustPairs: SidePair[] = comparisons.map((c) => ({
+		without: filterOutliers(c.withoutTokens),
+		with: filterOutliers(c.withTokens),
+	}));
+	const rawSE = withinTaskSE(rawPairs);
+	const robustSE = withinTaskSE(robustPairs);
+	const robustSavingsMean = mean(
+		robustPairs.map((p) => mean(p.without) - mean(p.with)),
+	);
+	const robustDelta = robustSE === null ? null : Math.round(robustSavingsMean);
+	// Tail-risk: trimming derailment outliers materially moves the saving — the
+	// rule's measured cost is unstable. A warning for a human, not a gate input.
+	const tailRisk =
+		rawSE !== null &&
+		robustSE !== null &&
+		Math.abs(meanDelta - robustSavingsMean) > robustSE;
+
+	let standardError: number | null = rawSE;
+	let standardErrorBasis: "within-task" | "between-task" | null =
+		rawSE !== null ? "within-task" : null;
+	if (rawSE === null && k >= 2) {
 		// runs=1 everywhere: no run-to-run estimate exists. Fall back to the
 		// legacy between-task spread so confidence is never silently dropped.
 		const variance =
-			savings.reduce((acc, s) => acc + (s - mean) ** 2, 0) / (k - 1);
+			savings.reduce((acc, s) => acc + (s - meanDelta) ** 2, 0) / (k - 1);
 		standardError = Math.sqrt(variance / k);
 		standardErrorBasis = "between-task";
 	}
@@ -286,8 +362,16 @@ export function assessDelta(
 	const uncertain =
 		!regression &&
 		standardError !== null &&
-		Math.abs(mean - threshold) < confidenceZ() * standardError;
-	return { delta, regression, standardError, standardErrorBasis, uncertain };
+		Math.abs(meanDelta - threshold) < confidenceZ() * standardError;
+	return {
+		delta,
+		regression,
+		standardError,
+		standardErrorBasis,
+		uncertain,
+		robustDelta,
+		tailRisk,
+	};
 }
 
 /** Completed-run tokens for one task in a summary set. */
@@ -422,6 +506,9 @@ interface Decision {
 	uncertain: boolean;
 	/** True when an extra measurement pass was spent on this decision. */
 	toppedUp: boolean;
+	/** True when the rule's measured cost was tail-heavy (outlier runs materially
+	 * moved the saving) — surfaced so a human can see the savings are unstable. */
+	tailRisk: boolean;
 }
 
 export interface SelectionReport {
@@ -546,7 +633,7 @@ export function selectForAgent(
 				params.rule.context_cost,
 				params.invert,
 			);
-			const { delta, regression, uncertain } = assessment;
+			const { delta, regression, uncertain, tailRisk } = assessment;
 			const { status, reason } = finalizeVerdict(
 				delta,
 				params.rule.context_cost,
@@ -601,6 +688,7 @@ export function selectForAgent(
 				status,
 				uncertain,
 				toppedUp,
+				tailRisk,
 			});
 		};
 
@@ -798,7 +886,8 @@ function main(args: SelectArgs): void {
 					` (delta=${decision.delta ?? "n/a"}, rent=${decision.rule.context_cost}` +
 					`${decision.regression ? ", REGRESSION" : ""}` +
 					`${decision.toppedUp ? ", topped-up" : ""}` +
-					`${decision.uncertain ? ", LOW-CONFIDENCE" : ""}): "${decision.rule.body}"`,
+					`${decision.uncertain ? ", LOW-CONFIDENCE" : ""}` +
+					`${decision.tailRisk ? ", ⚠ TAIL-RISK" : ""}): "${decision.rule.body}"`,
 			);
 		}
 		console.log(
