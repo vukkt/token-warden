@@ -567,7 +567,7 @@ all fixed) and motivated one algorithm change.
   couldn't regress the engine on vibes; here it earned its keep. The verdict therefore stays
   on the mean + raw within-task SE (unchanged from v0.29.0).
 - **Robust is a warning, not a decision.** `tailRisk` fires when trimming materially moves the
-  saving (|mean − robust| > robust SE), surfaced as `⚠ TAIL-RISK`. It tells a human "this rule
+  saving (|mean − robust| > robust SE), surfaced as `TAIL-RISK`. It tells a human "this rule
   occasionally blows up" without ever changing keep/evict — the honest split between *measuring*
   instability and *acting* on it. Acting (e.g. evicting a tail-heavy rule) would need a policy
   decision and is deliberately left to the human.

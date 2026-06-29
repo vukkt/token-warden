@@ -196,7 +196,7 @@ export function renderContradictions(
 	}
 	const lines = contradictions.map(
 		(c) =>
-			`  ⚠ rule ${c.ruleId}: "${c.ruleBody}"\n    ${c.reason}\n    CLAUDE.md: "${c.conflictingLine}"`,
+			`  rule ${c.ruleId}: "${c.ruleBody}"\n    ${c.reason}\n    CLAUDE.md: "${c.conflictingLine}"`,
 	);
 	return [
 		`${agent}: ${contradictions.length} rule(s) may contradict CLAUDE.md (review recommended — not auto-evicted):`,

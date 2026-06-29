@@ -55,7 +55,7 @@ export function renderHealth(
 	}
 	const lines = stale.map(
 		(s) =>
-			`  ⚠ rule ${s.id}: last decided ${Math.floor(s.ageDays)} days ago — "${s.body}"`,
+			`  rule ${s.id}: last decided ${Math.floor(s.ageDays)} days ago — "${s.body}"`,
 	);
 	return [
 		`${agent}: ${stale.length} rule(s) not re-audited in ${staleAfterDays}+ days (re-audit recommended — not auto-evicted):`,

@@ -303,7 +303,7 @@ export function main(args: EvolveArgs): void {
 				`accepted variant for ${args.agent}: ${comparison.pct} → ${outPath}`,
 			);
 			console.log(
-				`✓ Proposed variant is measurably cheaper (${comparison.pct} processing tokens, no regressions).`,
+				`OK: Proposed variant is measurably cheaper (${comparison.pct} processing tokens, no regressions).`,
 			);
 			console.log(`  Written to: ${outPath}`);
 			console.log(
@@ -315,7 +315,7 @@ export function main(args: EvolveArgs): void {
 		} else {
 			logLine(`rejected variant for ${args.agent}: verdict not a clear win`);
 			console.log(
-				"✗ Proposed variant is not a measurable improvement — discarded, nothing changed.",
+				"NO: Proposed variant is not a measurable improvement — discarded, nothing changed.",
 			);
 		}
 

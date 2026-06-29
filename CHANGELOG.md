@@ -9,7 +9,7 @@ a regression in it (see FINDINGS.md).
   "derailment" outliers (a run >50% off the median *and* a 3-MAD outlier;
   conservative, so clean data is untouched) and reports `robustDelta` + `tailRisk`.
   When trimming materially moves the saving, the decision is flagged
-  `⚠ TAIL-RISK` (in the selector output and the `Decision`) — the rule's cost is
+  `TAIL-RISK` (in the selector output and the `Decision`) — the rule's cost is
   unstable / occasionally blows up.
 - **The verdict deliberately does NOT use the robust SE.** Re-running the
   calibration harness with robust-SE-in-the-gate *raised* the false-positive rate

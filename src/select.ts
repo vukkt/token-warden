@@ -887,7 +887,7 @@ function main(args: SelectArgs): void {
 					`${decision.regression ? ", REGRESSION" : ""}` +
 					`${decision.toppedUp ? ", topped-up" : ""}` +
 					`${decision.uncertain ? ", LOW-CONFIDENCE" : ""}` +
-					`${decision.tailRisk ? ", ⚠ TAIL-RISK" : ""}): "${decision.rule.body}"`,
+					`${decision.tailRisk ? ", TAIL-RISK" : ""}): "${decision.rule.body}"`,
 			);
 		}
 		console.log(

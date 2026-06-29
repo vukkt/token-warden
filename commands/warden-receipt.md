@@ -26,8 +26,8 @@ Each receipt is the evidence behind a keep/evict decision: token savings vs.
 context rent (with variance), per-task pass/fail with vs. without the rule, the
 tool-call / file-reread activity profile, and the model + golden-suite hash it
 was measured under. After the report, add at most two sentences of
-interpretation: call out any active rule flagged "⚠ activity dropped sharply"
-(a possible false economy worth confirming) or any "⚠ REGRESSION".
+interpretation: call out any active rule flagged "activity dropped sharply"
+(a possible false economy worth confirming) or any "REGRESSION".
 
 If the command fails because the database does not exist yet, or shows no
 receipts, tell the user receipts are recorded when the selector measures rules —

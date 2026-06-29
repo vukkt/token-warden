@@ -21,8 +21,8 @@ When it finishes, relay:
 1. Whether a valid variant was proposed at all (it is rejected before
    measurement if it changes protected frontmatter or fails to parse).
 2. The per-task comparison table and the verdict.
-3. The outcome: either "✓ measurably cheaper — written to <path>, review and
-   apply by hand" or "✗ not a measurable improvement — discarded." A winning
+3. The outcome: either "OK: measurably cheaper — written to <path>, review and
+   apply by hand" or "NO: not a measurable improvement — discarded." A winning
    variant is **never auto-applied**; the user reviews the proposals file and
    edits `agents/<name>.md` themselves if they accept it.
 4. The meta-cost line.

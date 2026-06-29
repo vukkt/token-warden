@@ -516,7 +516,7 @@ export function runSuite(
 		const summary = summarizeTask(task.id, results);
 		console.log(
 			`  [${options.label}] ${task.id}: mean(completed)=${summary.meanCompletedTokens}` +
-				(summary.highVariance ? "  ⚠ runs differ by >25%" : ""),
+				(summary.highVariance ? "  runs differ by >25%" : ""),
 		);
 		summaries.push(summary);
 	}
@@ -632,7 +632,7 @@ function main(args: BenchArgs): void {
 		);
 		if (cost.warn) {
 			console.log(
-				"⚠ Benchmarking overhead exceeded 10% of the week's collected real-work tokens.",
+				"WARNING: Benchmarking overhead exceeded 10% of the week's collected real-work tokens.",
 			);
 		}
 	} finally {

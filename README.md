@@ -81,7 +81,7 @@ prices that into **dollars** (public Anthropic rates, every rate
 mix). `/warden-cost --project` then scales it over a horizon — default 13 weeks
 (~3 months) — and shows the cost **with vs. without** the plugin.
 
-> ⚠️ **These numbers are the [positive control](FINDINGS.md)** — one curated
+> **These numbers are the [positive control](FINDINGS.md)** — one curated
 > "grep before reading" rule on a *deliberately naive* agent, where headroom was
 > manufactured to validate the engine. On the already-optimized shipped agents the
 > same rule saves ~$0 (correctly evicted). This is *"what the engine captures when
@@ -417,12 +417,12 @@ candidate, one re-audit). Mean completed tokens per task:
 
 | configuration | sql-01 | sql-02 | sql-03 | delta |
 |---|---|---|---|---|
-| baseline (active set) | 39,572 | 70,762 ⚠ | 50,304 | — |
+| baseline (active set) | 39,572 | 70,762 (!) | 50,304 | — |
 | + rule #3 | 39,541 | 67,114 | 52,116 | **+622 saved/run** |
 | + rule #4 | 39,664 | 54,244 | 49,538 | **+5,731 saved/run** |
-| − rule #1 (re-audit) | 39,671 | 49,006 | 44,315 ⚠ | rule #1 worth **−9,215** |
+| − rule #1 (re-audit) | 39,671 | 49,006 | 44,315 (!) | rule #1 worth **−9,215** |
 
-⚠ = the two same-configuration runs differed by >25%.
+(!) = the two same-configuration runs differed by >25%.
 
 **Verdicts** (threshold: savings ≥ 2× rent):
 

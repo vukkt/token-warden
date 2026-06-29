@@ -20,10 +20,10 @@ When it finishes, report:
 
 1. Per task: the mean completed tokens, the comparison against the frozen
    `run1` baseline (the printed percentage) and the `best` figure.
-2. The meta-cost line at the end — and if the ⚠ overhead warning is present,
+2. The meta-cost line at the end — and if the overhead warning is present,
    surface it prominently: it means benchmarking spent more than 10% of the
    week's collected real-work tokens, and the user should bench less often.
-3. Any per-task `⚠ runs differ by >25%` variance warnings.
+3. Any per-task `runs differ by >25%` variance warnings.
 
 Never edit `run1` values or the database by hand; baselines are frozen by
 design.

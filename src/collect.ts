@@ -224,7 +224,7 @@ export async function main(): Promise<void> {
 			const multiple = detectAnomaly(priors, total);
 			if (multiple !== null) {
 				const msg =
-					`⚠ token-warden: this ${agent} session used ${total.toLocaleString("en-US")} tokens` +
+					`token-warden: this ${agent} session used ${total.toLocaleString("en-US")} tokens` +
 					` — ~${multiple.toFixed(1)}× your recent median` +
 					` (${parsed.toolCalls} tool calls, ${parsed.fileRereads} file re-reads).`;
 				console.log(JSON.stringify({ systemMessage: msg }));

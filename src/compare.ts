@@ -65,7 +65,7 @@ export interface Comparison {
 	baselineLabel: string;
 	candidateLabel: string;
 	perTask: TaskComparison[];
-	/** Overall processing-token savings (baseline − candidate); positive ⇒
+	/** Overall processing-token savings (baseline − candidate); positive ->
 	 * candidate cheaper. Null when no task completed in both. */
 	delta: number | null;
 	pct: string;
@@ -197,7 +197,7 @@ export function poolRuns(
 export function verdictLine(cmp: Comparison): string {
 	const { candidateLabel: c, baselineLabel: b, subject, dimension } = cmp;
 	if (cmp.regression) {
-		return `⚠ ${c} failed a task that ${b} completed — NOT a safe ${dimension} change for ${subject} regardless of tokens.`;
+		return `WARNING: ${c} failed a task that ${b} completed — NOT a safe ${dimension} change for ${subject} regardless of tokens.`;
 	}
 	if (cmp.comparableTasks < 2) {
 		return `Only ${cmp.comparableTasks} task(s) completed in both ${dimension}s — too few to judge confidence; treat ${cmp.pct} (${c} vs ${b}) as indicative only.`;
@@ -360,7 +360,7 @@ export function reportMetaCost(db: WardenDb, benchTokens: number): void {
 	);
 	if (cost.warn) {
 		console.log(
-			"⚠ Benchmarking overhead exceeded 10% of the week's collected real-work tokens.",
+			"WARNING: Benchmarking overhead exceeded 10% of the week's collected real-work tokens.",
 		);
 	}
 }

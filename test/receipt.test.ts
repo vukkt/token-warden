@@ -160,7 +160,7 @@ describe("renderReceipt", () => {
 	});
 
 	it("marks a regression", () => {
-		expect(renderReceipt(row({ regression: 1 }))).toContain("⚠ REGRESSION");
+		expect(renderReceipt(row({ regression: 1 }))).toContain("REGRESSION");
 	});
 
 	it("shows born-of provenance when present, omits it when null", () => {
@@ -181,7 +181,7 @@ describe("renderReceipt", () => {
 		// 18 vs 40 = -55%; surfaced as data, not as a verdict.
 		expect(text).toContain("40 → 18 (-55%)");
 		expect(text).not.toContain("skip");
-		expect(text).not.toContain("⚠ activity");
+		expect(text).not.toContain("dropped sharply");
 	});
 
 	it("sanitizes a hostile rule body", () => {

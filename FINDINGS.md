@@ -294,7 +294,7 @@ dangerous here — trimming a zero-effect rule's blow-ups leaves a low-variance
 remainder, so the shrunken SE looks *over*-confident and admits noise as signal.
 So the verdict **stays on the mean and the raw SE** (correctly calibrated), and
 robust aggregation ships as a **tail-risk *warning* only**: when trimming
-materially moves the saving, the decision is flagged `⚠ TAIL-RISK` (the rule's
+materially moves the saving, the decision is flagged `TAIL-RISK` (the rule's
 cost is unstable / occasionally blows up) without changing the keep/evict call.
 This is the calibration harness doing its job — it caught a regression in our own
 "improvement" before it shipped.

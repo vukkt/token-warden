@@ -60,7 +60,7 @@ export function renderReceipt(r: ReceiptRow): string {
 		`    ROI: saved ${saved}${se} vs rent ${fmt(r.context_cost)} (${roi(r.delta, r.context_cost)})` +
 			` · measured over ${r.runs} run(s)${model}${fixture}`,
 		`    quality: tasks passed ${r.tasks_passed_without}/${r.tasks_total} → ${r.tasks_passed_with}/${r.tasks_total}` +
-			`${r.regression ? "  ⚠ REGRESSION" : ""}`,
+			`${r.regression ? "  REGRESSION" : ""}`,
 		`    activity: tool calls ${fmt(r.without_tool_calls)} → ${fmt(r.with_tool_calls)}${pctDelta(r.with_tool_calls, r.without_tool_calls)}` +
 			` · file re-reads ${fmt(r.without_file_rereads)} → ${fmt(r.with_file_rereads)}${pctDelta(r.with_file_rereads, r.without_file_rereads)}`,
 		`    decided ${displayText(r.decided_at, 30)} (${displayText(r.kind, 16)}) — ${displayText(r.reason ?? "no reason recorded")}`,
