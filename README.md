@@ -589,8 +589,12 @@ falsification path is the next layer of work:
   expensive case is only measured if that case is in the suite. `/warden-sample-tasks`
   is a first step — it drafts candidate golden tasks from real session transcripts
   (deduplicated, `success_check` left for a human, never auto-frozen) to cut the
-  suite-building burden. Distribution weighting, plus **latency** and **per-category
-  regression** reporting (today the axes are tokens and completion), are still open.
+  suite-building burden. **Shipped — latency axis:** golden runs record wall-clock
+  `duration_ms` (from the claude result the bench already parses, so it is free),
+  and the A/B comparison reports it per task and overall as an *advisory* line —
+  never a keep/evict input, so a token-cheaper-but-slower change is visible without
+  distorting the verdict. Distribution weighting and **per-category regression**
+  reporting are still open.
 
 ## Contributing
 

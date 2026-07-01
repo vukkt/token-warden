@@ -113,6 +113,13 @@ describe("upsertRun", () => {
 		expect(count?.n).toBe(2);
 		expect(getRunBySession(db, "s2")?.agent).toBe("backend");
 	});
+
+	it("round-trips duration_ms and defaults it to null", () => {
+		upsertRun(db, makeRun({ sessionId: "s1" }));
+		expect(getRunBySession(db, "s1")?.duration_ms).toBeNull();
+		upsertRun(db, makeRun({ sessionId: "s2", durationMs: 42_000 }));
+		expect(getRunBySession(db, "s2")?.duration_ms).toBe(42_000);
+	});
 });
 
 describe("rule queue ordering", () => {

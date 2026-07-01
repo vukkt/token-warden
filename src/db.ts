@@ -138,6 +138,9 @@ const MIGRATIONS: readonly string[] = [
 	ALTER TABLE rules ADD COLUMN born_digest TEXT;
 	ALTER TABLE rules ADD COLUMN scope TEXT;
 	`,
+	`
+	ALTER TABLE runs ADD COLUMN duration_ms INTEGER;
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -195,6 +198,10 @@ export interface NewRun {
 	/** Model that produced the run; token counts are only comparable within a
 	 * model. Null when unknown (real-work collection does not record it). */
 	model?: string | null;
+	/** Wall-clock duration of the run in milliseconds, from the claude JSON
+	 * result. Golden runs record it; real-work collection leaves it null. An
+	 * advisory latency axis — never part of the keep/evict verdict. */
+	durationMs?: number | null;
 }
 
 /** Row shape as stored (snake_case, ints for booleans). */
@@ -215,6 +222,7 @@ export interface RunRow {
 	config: string;
 	project: string | null;
 	model: string | null;
+	duration_ms: number | null;
 }
 
 /**
@@ -228,8 +236,9 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 			`INSERT INTO runs (
 				agent, session_id, task_hash, input_tokens, output_tokens,
 				cache_creation, cache_read, tool_calls, file_rereads,
-				completed, ruleset_version, ts, config, project, model
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				completed, ruleset_version, ts, config, project, model,
+				duration_ms
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(session_id) DO UPDATE SET
 				agent = excluded.agent,
 				task_hash = excluded.task_hash,
@@ -244,7 +253,8 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 				ts = excluded.ts,
 				config = excluded.config,
 				project = excluded.project,
-				model = excluded.model
+				model = excluded.model,
+				duration_ms = excluded.duration_ms
 			RETURNING id`,
 		)
 		.get(
@@ -263,6 +273,7 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 			run.config ?? "active",
 			run.project ?? null,
 			run.model ?? null,
+			run.durationMs ?? null,
 		);
 	if (row === undefined) {
 		throw new Error("upsertRun: INSERT ... RETURNING produced no row");

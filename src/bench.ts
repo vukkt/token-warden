@@ -366,10 +366,17 @@ function runOnce(
 		);
 		if (claude.error) throw claude.error;
 		let sessionId: string;
+		let durationMs: number | null = null;
 		try {
-			const output = JSON.parse(claude.stdout) as { session_id?: string };
+			const output = JSON.parse(claude.stdout) as {
+				session_id?: string;
+				duration_ms?: number;
+			};
 			if (!output.session_id) throw new Error("no session_id in output");
 			sessionId = output.session_id;
+			// Advisory latency axis — reported, never a keep/evict gate input.
+			durationMs =
+				typeof output.duration_ms === "number" ? output.duration_ms : null;
 		} catch (err) {
 			throw new Error(
 				`claude exited ${claude.status}; unparseable output: ` +
@@ -407,6 +414,7 @@ function runOnce(
 			ts,
 			config: options.config,
 			model,
+			durationMs,
 		});
 
 		// Only the plain active-set configuration touches baselines: the

@@ -33,6 +33,10 @@ export interface RunDatum {
 	totalTokens: number;
 	cacheRead: number;
 	completed: boolean;
+	/** Wall-clock duration (ms) of the run; null for runs recorded before
+	 * latency capture, or when the claude output omitted it. Advisory axis —
+	 * reported alongside the verdict, never part of it. */
+	durationMs: number | null;
 }
 
 /** Per-task run data for one configuration. */
@@ -55,6 +59,10 @@ interface TaskComparison {
 	runs: number;
 	/** Processing-token change of candidate vs baseline, e.g. "-18.0%". */
 	pct: string;
+	/** Mean wall-clock ms over completed runs that recorded a duration; null
+	 * when none did. Advisory only. */
+	baselineDurationMean: number | null;
+	candidateDurationMean: number | null;
 }
 
 export interface Comparison {
@@ -77,6 +85,11 @@ export interface Comparison {
 	/** Tasks completed in BOTH configurations — confidence is meaningful
 	 * only when this is ≥ 2. */
 	comparableTasks: number;
+	/** Mean wall-clock ms per completed run, across tasks that recorded a
+	 * duration on both sides; null when latency was not captured. Advisory —
+	 * reported next to the verdict, never an input to it. */
+	baselineDurationMean: number | null;
+	candidateDurationMean: number | null;
 }
 
 const processingOf = (r: RunDatum): number => r.processingTokens;
@@ -91,6 +104,30 @@ function completedMean(
 	pick: (r: RunDatum) => number,
 ): number {
 	return mean(runs.filter((r) => r.completed).map(pick));
+}
+
+/** Mean duration over completed runs that recorded one; null when none did, so
+ * "no latency data" is never conflated with "0 ms". */
+function completedDurationMean(runs: RunDatum[]): number | null {
+	const ds = runs
+		.filter((r) => r.completed && r.durationMs != null)
+		.map((r) => r.durationMs as number);
+	return ds.length === 0
+		? null
+		: Math.round(ds.reduce((a, b) => a + b, 0) / ds.length);
+}
+
+/** Mean of the per-task duration means present on a side; null when none. */
+function overallDurationMean(
+	perTask: TaskComparison[],
+	side: "baseline" | "candidate",
+): number | null {
+	const key =
+		side === "baseline" ? "baselineDurationMean" : "candidateDurationMean";
+	const vals = perTask.map((t) => t[key]).filter((n): n is number => n != null);
+	return vals.length === 0
+		? null
+		: Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
 }
 
 /** TaskSummary shim carrying the processing-token mean so the existing
@@ -145,6 +182,8 @@ export function compareConfigs(
 			candidateCompleted: cand.runs.filter((r) => r.completed).length,
 			runs: base.runs.length,
 			pct: pctChange(candProc, baseProc),
+			baselineDurationMean: completedDurationMean(base.runs),
+			candidateDurationMean: completedDurationMean(cand.runs),
 		});
 		if (
 			base.runs.some((r) => r.completed) &&
@@ -179,6 +218,8 @@ export function compareConfigs(
 		regression: assessment.regression,
 		uncertain: assessment.uncertain,
 		comparableTasks,
+		baselineDurationMean: overallDurationMean(perTask, "baseline"),
+		candidateDurationMean: overallDurationMean(perTask, "candidate"),
 	};
 }
 
@@ -215,6 +256,11 @@ function fmt(n: number): string {
 	return n.toLocaleString("en-US");
 }
 
+/** Render a millisecond duration as seconds with one decimal, e.g. "12.3s". */
+function fmtDuration(ms: number): string {
+	return `${(ms / 1000).toFixed(1)}s`;
+}
+
 export function formatComparison(cmp: Comparison): string {
 	const lines: string[] = [];
 	lines.push(
@@ -229,13 +275,22 @@ export function formatComparison(cmp: Comparison): string {
 			t.baselineCacheReadMean > 0 || t.candidateCacheReadMean > 0
 				? `  [cache-read ${fmt(t.baselineCacheReadMean)} → ${fmt(t.candidateCacheReadMean)}]`
 				: "";
+		const latencyNote =
+			t.baselineDurationMean != null && t.candidateDurationMean != null
+				? `  [latency ${fmtDuration(t.baselineDurationMean)} → ${fmtDuration(t.candidateDurationMean)}]`
+				: "";
 		lines.push(
 			`  ${t.taskId}: ${fmt(t.baselineProcessingMean)} → ${fmt(t.candidateProcessingMean)} (${t.pct})` +
-				`  completed ${t.baselineCompleted}/${t.runs} → ${t.candidateCompleted}/${t.runs}${cacheNote}`,
+				`  completed ${t.baselineCompleted}/${t.runs} → ${t.candidateCompleted}/${t.runs}${cacheNote}${latencyNote}`,
 		);
 	}
 	lines.push("");
 	lines.push(`Verdict: ${verdictLine(cmp)}`);
+	if (cmp.baselineDurationMean != null && cmp.candidateDurationMean != null) {
+		lines.push(
+			`Latency (advisory, not in verdict): ${fmtDuration(cmp.baselineDurationMean)} → ${fmtDuration(cmp.candidateDurationMean)} mean wall-clock per completed run.`,
+		);
+	}
 	lines.push("");
 	lines.push(
 		"Note: verdict uses processing tokens; cache-read (cheap re-reads, ~10% price) is shown per task because it distorts raw cross-configuration totals.",
@@ -260,6 +315,7 @@ function gatherRuns(db: WardenDb, summaries: TaskSummary[]): VariantRuns[] {
 					totalTokens: 0,
 					cacheRead: 0,
 					completed: false,
+					durationMs: null,
 				};
 			}
 			return {
@@ -272,6 +328,7 @@ function gatherRuns(db: WardenDb, summaries: TaskSummary[]): VariantRuns[] {
 					row.cache_read,
 				cacheRead: row.cache_read,
 				completed: row.completed === 1,
+				durationMs: row.duration_ms,
 			};
 		}),
 	}));

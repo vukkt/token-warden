@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.31.0 — 2026-07-01
+
+Latency as an advisory measurement axis in A/B comparisons.
+
+- **Wall-clock latency capture** (`src/bench.ts`, `src/db.ts`). Golden runs now
+  record `duration_ms` — read from the claude JSON result the bench already
+  parses (only `session_id` was used before), so it costs nothing extra. Stored
+  in a new nullable `runs.duration_ms` column (migration #12); real-work
+  collection and pre-existing rows stay null.
+- **Reported in the comparison, never in the verdict** (`src/compare.ts`). The
+  model/prompt A/B report gains a per-task `[latency Xs → Ys]` note and an
+  overall "Latency (advisory, not in verdict)" line — so a change that saves
+  tokens but slows the agent is visible. Latency is *never* a keep/evict input;
+  the verdict stays on processing tokens, matching how cache-read and tail-risk
+  are surfaced.
+- Answers the roadmap's "richer metrics — latency" item. Per-category regression
+  reporting remains open.
+
 ## v0.30.0 — 2026-06-30
 
 Robust aggregation as a tail-risk warning — and the calibration harness catching

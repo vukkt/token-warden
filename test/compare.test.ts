@@ -15,19 +15,26 @@ import {
 } from "../src/compare.js";
 import { openDb, upsertRun, type WardenDb } from "../src/db.js";
 
-/** Build one task's runs from (processing, cacheRead, completed) triples. */
+/** Build one task's runs from (processing, cacheRead, completed, durationMs)
+ * tuples; the last two are optional (default completed=true, no duration). */
 function task(
 	taskId: string,
-	runs: [proc: number, cacheRead: number, completed?: boolean][],
+	runs: [
+		proc: number,
+		cacheRead: number,
+		completed?: boolean,
+		durationMs?: number,
+	][],
 ): VariantRuns {
 	return {
 		taskId,
 		runs: runs.map(
-			([proc, cacheRead, completed = true]): RunDatum => ({
+			([proc, cacheRead, completed = true, durationMs = null]): RunDatum => ({
 				processingTokens: proc,
 				cacheRead,
 				totalTokens: proc + cacheRead,
 				completed,
+				durationMs,
 			}),
 		),
 	};
@@ -245,5 +252,37 @@ describe("formatComparison", () => {
 		expect(report).toContain("cache-read 5,000 → 8,000");
 		expect(report).toContain("token count ≠ dollar cost");
 		expect(report).toContain("verdict uses processing tokens");
+	});
+
+	it("reports latency as an advisory axis when durations are recorded", () => {
+		// (proc, cacheRead, completed, durationMs)
+		const c = cmp(
+			[
+				task("t1", [[1000, 5000, true, 20_000]]),
+				task("t2", [[2000, 5000, true, 30_000]]),
+			],
+			[
+				task("t1", [[700, 8000, true, 24_000]]),
+				task("t2", [[1400, 8000, true, 36_000]]),
+			],
+		);
+		expect(c.baselineDurationMean).toBe(25_000);
+		expect(c.candidateDurationMean).toBe(30_000);
+		const report = formatComparison(c);
+		expect(report).toContain("[latency 20.0s → 24.0s]");
+		expect(report).toContain(
+			"Latency (advisory, not in verdict): 25.0s → 30.0s",
+		);
+		// Latency never flips the token verdict.
+		expect(c.regression).toBe(false);
+	});
+
+	it("omits latency lines when no run recorded a duration", () => {
+		const c = cmp(
+			[task("t1", [[1000, 5000]]), task("t2", [[2000, 5000]])],
+			[task("t1", [[700, 8000]]), task("t2", [[1400, 8000]])],
+		);
+		expect(c.baselineDurationMean).toBeNull();
+		expect(formatComparison(c)).not.toContain("latency");
 	});
 });
