@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	decideRule,
+	getRuleById,
 	getRunBySession,
 	insertRule,
 	listCandidates,
@@ -11,6 +12,8 @@ import {
 	type NewRun,
 	oldestDecidedActiveRule,
 	openDb,
+	recentEvictedRules,
+	setRuleProbation,
 	upsertRun,
 	type WardenDb,
 } from "../src/db.js";
@@ -150,5 +153,37 @@ describe("rule queue ordering", () => {
 		decideRule(db, first, "active", 100, "ok", "2026-06-02");
 		decideRule(db, second, "active", 100, "ok", "2026-06-01");
 		expect(oldestDecidedActiveRule(db, "sql")?.id).toBe(second);
+	});
+
+	it("setRuleProbation round-trips and defaults to 0", () => {
+		const id = seedRule("Rule body number one here.", "t");
+		expect(getRuleById(db, id)?.probation).toBe(0);
+		setRuleProbation(db, id, true);
+		expect(getRuleById(db, id)?.probation).toBe(1);
+		setRuleProbation(db, id, false);
+		expect(getRuleById(db, id)?.probation).toBe(0);
+	});
+
+	it("recentEvictedRules returns newest-decided first, capped, evicted-only", () => {
+		const a = seedRule("Rule body number one here.", "t");
+		const b = seedRule("Rule body number two here.", "t");
+		const c = seedRule("Rule body number three here.", "t");
+		const d = seedRule("Rule body number four here.", "t");
+		decideRule(db, a, "evicted", -50, "non-positive delta (-50)", "2026-06-01");
+		decideRule(db, b, "active", 900, "ok", "2026-06-02");
+		decideRule(db, c, "evicted", 5, "sub-threshold", "2026-06-03");
+		decideRule(db, d, "evicted", null, "no comparable runs", "2026-06-02");
+
+		const recent = recentEvictedRules(db, "sql", 2);
+		expect(recent.map((r) => r.body)).toEqual([
+			"Rule body number three here.",
+			"Rule body number four here.",
+		]);
+		expect(recent[0]).toMatchObject({
+			measured_delta: 5,
+			decided_reason: "sub-threshold",
+		});
+		// Other agents' evictions are invisible.
+		expect(recentEvictedRules(db, "backend", 5)).toHaveLength(0);
 	});
 });

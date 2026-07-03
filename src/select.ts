@@ -38,6 +38,7 @@ import {
 	openDb,
 	type RuleRow,
 	recordReceipt,
+	setRuleProbation,
 	type WardenDb,
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
@@ -155,14 +156,19 @@ interface TaskComparison {
 }
 
 /** Per-task comparisons for tasks completed in both configurations
- * (invariant #3), plus the regression flag. */
+ * (invariant #3), plus the regression flag and the completion-drop flag. */
 function perTaskComparisons(
 	without: TaskSummary[],
 	withRule: TaskSummary[],
-): { comparisons: TaskComparison[]; regression: boolean } {
+): {
+	comparisons: TaskComparison[];
+	regression: boolean;
+	completionDrop: boolean;
+} {
 	const withById = new Map(withRule.map((s) => [s.taskId, s]));
 	const comparisons: TaskComparison[] = [];
 	let regression = false;
+	let completionDrop = false;
 	for (const base of without) {
 		const withoutTokens = base.results
 			.filter((r) => r.completed)
@@ -176,13 +182,21 @@ function perTaskComparisons(
 			regression = true;
 			continue;
 		}
+		// Savings means use completed runs only, so a rule whose failed runs are
+		// excluded looks cheaper than it is (survivorship bias). A lower
+		// completion RATE on the with-rule side flags that the mean may be
+		// flattered by dropped failures. Rates, not counts: a variance top-up
+		// legitimately gives the measured side more runs.
+		const withoutRate = withoutTokens.length / base.results.length;
+		const withRate = withTokens.length / other.results.length;
+		if (withRate < withoutRate) completionDrop = true;
 		comparisons.push({
 			saving: base.meanCompletedTokens - other.meanCompletedTokens,
 			withoutTokens,
 			withTokens,
 		});
 	}
-	return { comparisons, regression };
+	return { comparisons, regression, completionDrop };
 }
 
 /** Unbiased sample variance; null when fewer than two observations. */
@@ -281,6 +295,11 @@ export interface DeltaAssessment extends DeltaResult {
 	 * cost) rather than the optimistic robust estimate, so a rule that occasionally
 	 * blows up cannot be promoted by trimming its worst runs away. */
 	tailRisk: boolean;
+	/** True when some task completed at a lower *rate* with the rule than without
+	 * it. Savings means use completed runs only, so dropped failures flatter the
+	 * mean (survivorship bias). Report-only — never a gate input; a full
+	 * per-task failure is already the regression eviction. */
+	completionDrop: boolean;
 }
 
 /**
@@ -302,7 +321,10 @@ export function assessDelta(
 	withRule: TaskSummary[],
 	contextCost: number,
 ): DeltaAssessment {
-	const { comparisons, regression } = perTaskComparisons(without, withRule);
+	const { comparisons, regression, completionDrop } = perTaskComparisons(
+		without,
+		withRule,
+	);
 	if (comparisons.length === 0) {
 		return {
 			delta: null,
@@ -312,6 +334,7 @@ export function assessDelta(
 			uncertain: false,
 			robustDelta: null,
 			tailRisk: false,
+			completionDrop,
 		};
 	}
 	const savings = comparisons.map((c) => c.saving);
@@ -371,6 +394,7 @@ export function assessDelta(
 		uncertain,
 		robustDelta,
 		tailRisk,
+		completionDrop,
 	};
 }
 
@@ -509,6 +533,14 @@ interface Decision {
 	/** True when the rule's measured cost was tail-heavy (outlier runs materially
 	 * moved the saving) — surfaced so a human can see the savings are unstable. */
 	tailRisk: boolean;
+	/** True when some task completed at a lower rate with the rule than without —
+	 * the completed-runs-only savings mean may be flattered by dropped failures.
+	 * Report-only. */
+	completionDrop: boolean;
+	/** True when this decision put the rule on probation instead of evicting it:
+	 * a re-audit measured sub-threshold (first strike), the rule is retained, and
+	 * a second consecutive sub-threshold re-audit will evict. */
+	probation: boolean;
 }
 
 export interface SelectionReport {
@@ -633,8 +665,9 @@ export function selectForAgent(
 				params.rule.context_cost,
 				params.invert,
 			);
-			const { delta, regression, uncertain, tailRisk } = assessment;
-			const { status, reason } = finalizeVerdict(
+			const { delta, regression, uncertain, tailRisk, completionDrop } =
+				assessment;
+			let { status, reason } = finalizeVerdict(
 				delta,
 				params.rule.context_cost,
 				regression,
@@ -642,6 +675,28 @@ export function selectForAgent(
 				toppedUp,
 				params.evictWhenUncertain,
 			);
+			// Two-strike probation for re-audits. Admission demanded delta ≥ bar +
+			// z·SE, but a point-estimate re-audit retention test churns real earners
+			// by regression to the mean (a rule earning exactly the bar fails ~half
+			// its re-audits; even a strong earner fails whenever the draw lands a
+			// couple of SE low). Keep-when-uncertain is no fix — rent << SE, so a
+			// dead rule is always "uncertain" and would never leave. Instead: the
+			// first sub-threshold re-audit puts the rule on probation (kept,
+			// flagged); a second consecutive one evicts; a passing re-audit clears
+			// the strike. A regression still evicts immediately (safety invariant).
+			let probation = false;
+			if (params.kind === "re-audit" && !regression) {
+				if (status === "evicted" && params.rule.probation === 0) {
+					status = "active";
+					reason = `probation (strike 1 of 2): ${reason} — retained; a second consecutive sub-threshold re-audit evicts`;
+					setRuleProbation(db, params.rule.id, true);
+					probation = true;
+				} else if (status === "evicted") {
+					reason = `second consecutive sub-threshold re-audit: ${reason}`;
+				} else if (params.rule.probation !== 0) {
+					setRuleProbation(db, params.rule.id, false);
+				}
+			}
 			const fullReason = params.reasonPrefix + reason;
 			const decidedAt = new Date().toISOString();
 			decideRule(db, params.rule.id, status, delta, fullReason, decidedAt);
@@ -689,6 +744,8 @@ export function selectForAgent(
 				uncertain,
 				toppedUp,
 				tailRisk,
+				completionDrop,
+				probation,
 			});
 		};
 
@@ -887,7 +944,9 @@ function main(args: SelectArgs): void {
 					`${decision.regression ? ", REGRESSION" : ""}` +
 					`${decision.toppedUp ? ", topped-up" : ""}` +
 					`${decision.uncertain ? ", LOW-CONFIDENCE" : ""}` +
-					`${decision.tailRisk ? ", TAIL-RISK" : ""}): "${decision.rule.body}"`,
+					`${decision.tailRisk ? ", TAIL-RISK" : ""}` +
+					`${decision.completionDrop ? ", COMPLETION-DROP" : ""}` +
+					`${decision.probation ? ", PROBATION (strike 1 of 2)" : ""}): "${decision.rule.body}"`,
 			);
 		}
 		console.log(

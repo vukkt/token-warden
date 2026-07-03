@@ -31,6 +31,7 @@ function rule(over: Partial<RuleRow>): RuleRow {
 		protected: 0,
 		born_digest: null,
 		scope: null,
+		probation: 0,
 		...over,
 	};
 }

@@ -95,6 +95,58 @@ describe("assessDelta (delta math)", () => {
 			assessDelta([summary("t1", 0, false)], [summary("t1", 500)], 10),
 		).toMatchObject({ delta: null, regression: false });
 	});
+
+	it("flags a completion-rate drop on the with-rule side (survivorship bias)", () => {
+		// Without: 2/2 completed. With: 1/2 completed — the surviving run looks
+		// cheap, but the mean excludes the failure.
+		const without: TaskSummary = {
+			taskId: "t1",
+			results: [
+				{ sessionId: "a", tokens: 1000, completed: true },
+				{ sessionId: "b", tokens: 1200, completed: true },
+			],
+			meanCompletedTokens: 1100,
+			highVariance: false,
+		};
+		const withRule: TaskSummary = {
+			taskId: "t1",
+			results: [
+				{ sessionId: "c", tokens: 400, completed: true },
+				{ sessionId: "d", tokens: 0, completed: false },
+			],
+			meanCompletedTokens: 400,
+			highVariance: false,
+		};
+		expect(assessDelta([without], [withRule], 10).completionDrop).toBe(true);
+	});
+
+	it("does not flag completion drop when rates match despite extra runs on one side", () => {
+		// A Neyman top-up legitimately gives the measured side more runs; equal
+		// completion RATES must not trip the flag.
+		const without: TaskSummary = {
+			taskId: "t1",
+			results: [
+				{ sessionId: "a", tokens: 1000, completed: true },
+				{ sessionId: "b", tokens: 1200, completed: true },
+			],
+			meanCompletedTokens: 1100,
+			highVariance: false,
+		};
+		const withRule: TaskSummary = {
+			taskId: "t1",
+			results: [
+				{ sessionId: "c", tokens: 800, completed: true },
+				{ sessionId: "d", tokens: 900, completed: true },
+				{ sessionId: "e", tokens: 850, completed: true },
+				{ sessionId: "f", tokens: 870, completed: true },
+			],
+			meanCompletedTokens: 855,
+			highVariance: false,
+		};
+		const assessment = assessDelta([without], [withRule], 10);
+		expect(assessment.completionDrop).toBe(false);
+		expect(assessment.regression).toBe(false);
+	});
 });
 
 describe("parseSelectArgs", () => {
@@ -215,26 +267,99 @@ describe("selectForAgent", () => {
 		expect(getRuleById(db, badId)?.status).toBe("evicted");
 	});
 
-	it("re-audits the oldest active rule and evicts it when it stops earning", () => {
+	it("re-audits the oldest active rule and evicts it on the second consecutive sub-threshold measure (two-strike)", () => {
 		const goodId = seedCandidate(
 			"Use Grep to locate symbols before reading any file.",
 		);
 		selectForAgent(db, agent, fakeRunner(goodId, -1));
 		expect(getRuleById(db, goodId)?.status).toBe("active");
 
-		// Second invocation: the rule no longer changes suite cost.
+		// Second invocation: the rule no longer changes suite cost. First
+		// sub-threshold re-audit is a strike, not an eviction — one noisy
+		// re-measure must not churn out an established earner.
 		const flatRunner: SuiteRunner = () => [
 			summary("sql-01", 10_000),
 			summary("sql-02", 10_000),
 		];
-		const report = selectForAgent(db, agent, flatRunner);
+		const first = selectForAgent(db, agent, flatRunner);
 
-		expect(getRuleById(db, goodId)?.status).toBe("evicted");
-		expect(report.decisions.some((d) => d.kind === "re-audit")).toBe(true);
+		const struck = getRuleById(db, goodId);
+		expect(struck?.status).toBe("active");
+		expect(struck?.probation).toBe(1);
+		expect(struck?.decided_reason).toContain("probation (strike 1 of 2)");
+		const strike = first.decisions.find((d) => d.kind === "re-audit");
+		expect(strike?.probation).toBe(true);
+		expect(strike?.status).toBe("active");
+		// Still on probation, the rule stays compiled into memory.
+		expect(readFileSync(memoryFilePath(agent), "utf8")).toContain("Use Grep");
+
+		// Third invocation: second consecutive sub-threshold re-audit evicts.
+		const second = selectForAgent(db, agent, flatRunner);
+
+		const evicted = getRuleById(db, goodId);
+		expect(evicted?.status).toBe("evicted");
+		expect(evicted?.decided_reason).toContain(
+			"second consecutive sub-threshold re-audit",
+		);
+		expect(second.decisions.some((d) => d.kind === "re-audit")).toBe(true);
 		expect(readFileSync(memoryFilePath(agent), "utf8")).not.toContain(
 			"Use Grep",
 		);
-		expect(getRulesetVersion(db, agent)).toBe(2);
+		expect(getRulesetVersion(db, agent)).toBe(3);
+	});
+
+	it("clears a probation strike when the rule passes its next re-audit", () => {
+		const goodId = seedCandidate(
+			"Use Grep to locate symbols before reading any file.",
+		);
+		selectForAgent(db, agent, fakeRunner(goodId, -1));
+
+		// Strike 1: a flat re-audit.
+		const flatRunner: SuiteRunner = () => [
+			summary("sql-01", 10_000),
+			summary("sql-02", 10_000),
+		];
+		selectForAgent(db, agent, flatRunner);
+		expect(getRuleById(db, goodId)?.probation).toBe(1);
+
+		// Passing re-audit: the rule earns again; the strike is cleared.
+		selectForAgent(db, agent, fakeRunner(goodId, -1));
+		const cleared = getRuleById(db, goodId);
+		expect(cleared?.status).toBe("active");
+		expect(cleared?.probation).toBe(0);
+
+		// A later flat re-audit is strike 1 again, not an eviction.
+		selectForAgent(db, agent, flatRunner);
+		expect(getRuleById(db, goodId)?.status).toBe("active");
+		expect(getRuleById(db, goodId)?.probation).toBe(1);
+	});
+
+	it("evicts immediately on a re-audit regression even during probation", () => {
+		const goodId = seedCandidate(
+			"Use Grep to locate symbols before reading any file.",
+		);
+		selectForAgent(db, agent, fakeRunner(goodId, -1));
+
+		// Strike 1.
+		const flatRunner: SuiteRunner = () => [
+			summary("sql-01", 10_000),
+			summary("sql-02", 10_000),
+		];
+		selectForAgent(db, agent, flatRunner);
+		expect(getRuleById(db, goodId)?.probation).toBe(1);
+
+		// Re-audit measures the *without* configuration; the baseline (with the
+		// rule) fails a task the without-side passes → regression → immediate
+		// eviction, probation notwithstanding (safety invariant).
+		const regressingRunner: SuiteRunner = (rules) =>
+			rules.some((r) => r.id === goodId)
+				? [summary("sql-01", 10_000), summary("sql-02", 0, false)]
+				: [summary("sql-01", 10_000), summary("sql-02", 10_000)];
+		selectForAgent(db, agent, regressingRunner);
+
+		const evicted = getRuleById(db, goodId);
+		expect(evicted?.status).toBe("evicted");
+		expect(evicted?.decided_reason).toContain("regression");
 	});
 
 	it("does nothing when there are no candidates and no active rules", () => {

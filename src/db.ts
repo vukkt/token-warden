@@ -141,6 +141,9 @@ const MIGRATIONS: readonly string[] = [
 	`
 	ALTER TABLE runs ADD COLUMN duration_ms INTEGER;
 	`,
+	`
+	ALTER TABLE rules ADD COLUMN probation INTEGER NOT NULL DEFAULT 0;
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -312,6 +315,12 @@ export interface RuleRow {
 	 * set, the rule is compiled into memory with a "(when <scope>)" prefix so the
 	 * agent applies it conditionally; null = always-on. */
 	scope: string | null;
+	/** 1 = the rule's last re-audit measured sub-threshold (first strike). It
+	 * stays active — one noisy re-measure must not churn out a rule that entered
+	 * at >= bar + z*SE confidence — but a SECOND consecutive sub-threshold
+	 * re-audit evicts. A passing re-audit clears the strike. Regressions ignore
+	 * probation and evict immediately (safety invariant). */
+	probation: number;
 }
 
 export function getRuleById(db: WardenDb, id: number): RuleRow | undefined {
@@ -389,6 +398,39 @@ export function setRuleScope(
 	scope: string | null,
 ): void {
 	db.prepare("UPDATE rules SET scope = ? WHERE id = ?").run(scope, id);
+}
+
+/** Set or clear a rule's re-audit probation strike. */
+export function setRuleProbation(
+	db: WardenDb,
+	id: number,
+	probation: boolean,
+): void {
+	db.prepare("UPDATE rules SET probation = ? WHERE id = ?").run(
+		probation ? 1 : 0,
+		id,
+	);
+}
+
+/** The most recently decided evicted rules for an agent — the distiller's
+ * negative feedback set. Each carries the measured delta and the eviction
+ * reason so the proposer can learn what failed and why (a proposal that was
+ * measured and rejected must not be re-proposed as a minor variant). */
+export function recentEvictedRules(
+	db: WardenDb,
+	agent: string,
+	limit: number,
+): Pick<RuleRow, "body" | "measured_delta" | "decided_reason">[] {
+	return db
+		.prepare<
+			unknown[],
+			Pick<RuleRow, "body" | "measured_delta" | "decided_reason">
+		>(
+			`SELECT body, measured_delta, decided_reason FROM rules
+			 WHERE agent = ? AND status = 'evicted'
+			 ORDER BY decided_at DESC, id DESC LIMIT ?`,
+		)
+		.all(agent, limit);
 }
 
 /** Insert a human-authored, protected rule directly as active. The author

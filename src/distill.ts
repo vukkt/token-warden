@@ -24,6 +24,7 @@ import {
 	openDb,
 	RUN_TOTAL_TOKENS_SQL,
 	type RunRow,
+	recentEvictedRules,
 	recentQuestionsFrom,
 	type WardenDb,
 } from "./db.js";
@@ -34,6 +35,10 @@ const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const SIMILARITY_THRESHOLD = 0.85;
 const MIN_PRIOR_RUNS = 5;
+/** Most recent evicted rules fed back into the distiller prompt as measured
+ * negative examples. Bounded so the feedback block cannot grow without limit
+ * as the negative dataset accumulates. */
+const MAX_EVICTED_FEEDBACK = 8;
 /** Rolling window of most recent runs used for the p75. */
 const ROLLING_WINDOW = 50;
 const MAX_DIGEST_CHARS = 8000;
@@ -172,11 +177,19 @@ export function contextCost(body: string): number {
 	return Math.ceil(body.length / 4);
 }
 
+/** An evicted rule reduced to what the distiller needs to learn from it. */
+export interface EvictedFeedback {
+	body: string;
+	measured_delta: number | null;
+	decided_reason: string | null;
+}
+
 export function buildPrompt(
 	run: RunRow,
 	digest: string,
 	recentQuestions: string[] = [],
 	activeRules: string[] = [],
+	evictedRules: EvictedFeedback[] = [],
 ): string {
 	const total =
 		run.input_tokens + run.output_tokens + run.cache_creation + run.cache_read;
@@ -199,6 +212,24 @@ export function buildPrompt(
 					"",
 				]
 			: [];
+	// Verdict-grounded feedback: the measured failures. Feeding the proposer the
+	// outcome of its past proposals (what was tried, what it measured, why it was
+	// rejected) is the closed-loop signal that lets it stop repeating failure
+	// modes — "within noise" means the effect was too small to matter, a
+	// regression means the rule traded correctness for tokens.
+	const evictedSection =
+		evictedRules.length > 0
+			? [
+					"These rules were ALREADY proposed, MEASURED on the benchmark, and REJECTED. Do not re-propose them or minor variants. Learn from why each failed: a sub-threshold or within-noise delta means the targeted behavior was too small a waste source — aim at a bigger one; a regression means the rule made the agent fail tasks — never trade thoroughness for tokens:",
+					...evictedRules
+						.slice(0, MAX_EVICTED_FEEDBACK)
+						.map(
+							(r) =>
+								`- "${r.body}" -> rejected: ${r.decided_reason ?? "unknown"}${r.measured_delta !== null ? ` (measured ${r.measured_delta} tokens/run)` : ""}`,
+						),
+					"",
+				]
+			: [];
 	return [
 		`An AI coding agent ("${run.agent}") just finished a session that used an unusually high number of tokens compared to its history.`,
 		"",
@@ -210,6 +241,7 @@ export function buildPrompt(
 		"",
 		...questionSection,
 		...provenSection,
+		...evictedSection,
 		"Action trace (truncated):",
 		digest,
 		"",
@@ -298,6 +330,7 @@ export function distill(args: DistillArgs): void {
 			digest,
 			recentQuestionsFrom(db, run.agent, 5),
 			getActiveRules(db, run.agent).map((r) => r.body),
+			recentEvictedRules(db, run.agent, MAX_EVICTED_FEEDBACK),
 		);
 
 		const claude = spawnSync(

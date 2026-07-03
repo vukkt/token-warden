@@ -63,12 +63,16 @@ flowchart TD
 2. **Distill** — only runs above the agent's rolling p75 cost (≥ 5 prior runs) are analyzed.
    One detached model call (Sonnet by default) returns ≤ 2 one-sentence rules as strict
    JSON; invalid output is dropped, and near-duplicates of *any* past rule (even evicted
-   ones) are rejected — a falsified rule can't sneak back in.
+   ones) are rejected — a falsified rule can't sneak back in. The prompt also carries the
+   measured verdicts of recently evicted rules, so the proposer learns from its failures
+   instead of re-deriving them in new words.
 3. **Bench** — candidates run the golden suite on a frozen fixture repo, with vs. without
    the rule, in throwaway copies (see [The benchmark system](#the-benchmark-system)).
 4. **Select** — a rule goes active only if it saves **≥ 2× its context rent** and breaks no
    task (failing a previously-passing task is instant eviction). Every run also re-audits
-   the oldest active rule. Survivors compile into `MEMORY.md`, which Claude Code injects
+   the oldest active rule; retention is two-strike — one noisy sub-threshold re-audit puts
+   an earner on probation, only a second consecutive one evicts (a regression still evicts
+   immediately). Survivors compile into `MEMORY.md`, which Claude Code injects
    into the agent's prompt next session.
 
 ---
@@ -390,13 +394,17 @@ blocking team messaging.
 2. **`MEMORY.md` is a build artifact** — compiled from the rule ledger, overwritten
    wholesale, never hand-edited or agent-appended.
 3. **Fitness = tokens per completed task.** Incomplete runs are excluded from savings
-   math.
+   math (decisions where a task's completion rate dropped with the rule are flagged
+   `COMPLETION-DROP` so the exclusion can't silently flatter a mean).
 4. **Golden tasks run against the frozen fixture**, never a live codebase.
 5. **First-run baselines are frozen forever.** `run1_tokens` is the permanent
    denominator of every improvement claim.
 6. **The optimizer never re-does past work** — all learning is feed-forward.
 7. **Eviction is mandatory.** Rules must earn at least 2× their context rent, and active
-   rules are re-audited round-robin.
+   rules are re-audited round-robin. Retention is two-strike: a single sub-threshold
+   re-audit (a coin flip for any rule, since the bar is tiny next to the measurement
+   noise) puts the rule on probation; a second consecutive one evicts; a regression
+   evicts on the spot.
 
 ---
 
@@ -433,7 +441,10 @@ candidate, one re-audit). Mean completed tokens per task:
   new rules present, removing it made the suite cheaper. This is mandatory eviction
   working as designed — and an honest illustration that run-to-run variance dominates at
   small effect sizes. Evicted rules are retained as the negative dataset, and trigram
-  dedupe prevents a falsified rule from being re-proposed.
+  dedupe prevents a falsified rule from being re-proposed. (This single-draw eviction is
+  exactly the churn that motivated v0.32.0's two-strike retention: today the same
+  measurement would put rule #1 on probation instead, and only a second consecutive
+  sub-threshold re-audit would evict it.)
 
 **The compiled memory** (`~/.claude/agent-memory/sql/MEMORY.md`, ruleset v2):
 

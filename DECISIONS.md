@@ -557,6 +557,35 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.32.0 — two-strike re-audit retention, verdict-grounded distillation
+
+- **Retention was statistically inconsistent with admission — fixed with probation, not a
+  softer bar.** Admission requires `delta >= bar + z*SE`; retention tested only the point
+  estimate against the bar. With bar (~2x rent, tens of tokens) << SE (thousands), regression
+  to the mean made every re-audit of a true earner a ~5-30% eviction lottery (the live DB's
+  Grep rule was churned by one -9,215 draw). Two-strike: first non-regression sub-threshold
+  re-audit -> probation (kept, flagged, `rules.probation` = 1, migration #13); second
+  consecutive -> evicted; a passing re-audit clears the strike. Regressions bypass probation
+  and evict immediately — correctness is never given a second chance.
+- **Keep-when-uncertain was considered and rejected for re-audits.** Because rent << SE, a
+  rule with TRUE effect zero is *permanently* "uncertain" relative to the bar — it would
+  never be evicted and the ledger would silt up with dead rules. Probation keeps the exit
+  path open (a dead rule fails two consecutive coin flips within ~6 cycles) while making a
+  single noisy draw non-fatal. Validated in `validation/calibration.ts` (churn tables):
+  dead-rule lifetime 2.0 -> 5.9 cycles; 6,000-tok/run earner 7.3 -> 61.0 cycles.
+- **Completion-drop is a report-only flag, not a gate input.** Savings means exclude
+  incomplete runs (invariant #3), so partially-failing rules look cheaper than they are.
+  We flag when any task's completion RATE drops on the with-rule side (rates, not counts —
+  Neyman top-ups legitimately add runs to one side). It does not evict: one flaky run would
+  otherwise veto a rule, and the calibration harness has no completion model yet to
+  calibrate a fair threshold. Full task failure remains the regression eviction.
+- **The distiller now sees its measured failures.** `buildPrompt` receives up to 8 recent
+  evicted rules with measured deltas and eviction reasons. Rationale: trigram dedupe only
+  blocks near-verbatim re-proposals; the model could re-derive a falsified *idea* in fresh
+  words indefinitely. Feeding verdicts back is the closed-loop signal the compiler-pass-
+  ordering literature (arXiv 2511.00592) credits with 23-40% of total gains. Bounded at 8
+  so prompt rent stays flat as the negative dataset grows.
+
 ## v0.30.0 — robust aggregation as a flag, not a gate input
 
 - **The calibration harness vetoed our own feature.** Robust aggregation (trim derailment

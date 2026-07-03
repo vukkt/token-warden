@@ -71,6 +71,52 @@ describe("buildPrompt", () => {
 			/ALREADY follows these proven/,
 		);
 	});
+
+	it("feeds evicted rules back with their measured verdicts", () => {
+		const prompt = buildPrompt(
+			run,
+			"TOOL Read {}",
+			[],
+			[],
+			[
+				{
+					body: "Cache table schemas in memory.",
+					measured_delta: 12,
+					decided_reason:
+						"sub-threshold: savings 12 < 2× cache-aware rent (18)",
+				},
+				{
+					body: "Skip re-running tests after trivial edits.",
+					measured_delta: null,
+					decided_reason: "regression: a previously passing golden task failed",
+				},
+			],
+		);
+		expect(prompt).toMatch(/MEASURED on the benchmark, and REJECTED/);
+		expect(prompt).toContain(
+			'- "Cache table schemas in memory." -> rejected: sub-threshold: savings 12 < 2× cache-aware rent (18) (measured 12 tokens/run)',
+		);
+		// Null delta omits the measured suffix instead of printing "null".
+		expect(prompt).toContain(
+			'- "Skip re-running tests after trivial edits." -> rejected: regression: a previously passing golden task failed',
+		);
+		expect(prompt).not.toContain("measured null");
+	});
+
+	it("bounds evicted feedback to 8 entries and omits the section when empty", () => {
+		const many = Array.from({ length: 12 }, (_, i) => ({
+			body: `Evicted rule number ${i}.`,
+			measured_delta: i,
+			decided_reason: "sub-threshold",
+		}));
+		const prompt = buildPrompt(run, "TOOL Read {}", [], [], many);
+		expect(prompt).toContain("Evicted rule number 7.");
+		expect(prompt).not.toContain("Evicted rule number 8.");
+
+		expect(buildPrompt(run, "TOOL Read {}", [], [], [])).not.toMatch(
+			/REJECTED/,
+		);
+	});
 });
 
 describe("trigramSimilarity", () => {

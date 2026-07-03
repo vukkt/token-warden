@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.32.0 — 2026-07-04
+
+Closing the measurement loop: two-strike re-audit retention, verdict-grounded
+distiller feedback, and a survivorship-bias flag. Zero-token improvements out
+of a full repository audit ([docs/audit-2026-07.md](docs/audit-2026-07.md)).
+
+- **Two-strike probation for re-audits** (`src/select.ts`, migration #13
+  `rules.probation`). Admission demands savings ≥ bar + z·SE, but retention
+  tested only the point estimate — and because the bar (~2× rent) is tiny next
+  to the SE, regression to the mean churned real earners (a rule truly saving
+  6,000 tok/run was expected to survive only ~7 re-audit cycles; the live DB's
+  Grep rule was lost to exactly one such draw). Now the first non-regression
+  sub-threshold re-audit puts the rule on probation (kept, flagged
+  `PROBATION (strike 1 of 2)`); a second *consecutive* one evicts; a passing
+  re-audit clears the strike. A regression still evicts immediately. The
+  calibration harness validates the change: a dead rule still exits in ~6
+  cycles, while a 6,000-tok/run earner's expected lifetime grows from ~7 to
+  ~61 cycles.
+- **Verdict-grounded distiller feedback** (`src/distill.ts`, `src/db.ts`).
+  The distill prompt now includes the agent's recent evicted rules (≤ 8) with
+  their measured deltas and eviction reasons — so the proposer learns from
+  measured failures instead of re-deriving falsified ideas in new words
+  (trigram dedupe only catches near-verbatim repeats). The closed-loop signal
+  the compiler-pass-ordering literature credits with 23–40% of total gains.
+- **Completion-drop flag** (`src/select.ts`). Savings means use completed
+  runs only, so a rule whose failed runs are dropped looks cheaper than it is.
+  Decisions where any task completed at a lower *rate* with the rule are
+  flagged `COMPLETION-DROP` (rates, not counts — a Neyman top-up legitimately
+  adds runs to one side). Report-only; a full task failure remains the
+  regression eviction.
+- **Calibration: re-audit churn tables** (`validation/calibration.ts`).
+  One-strike vs two-strike expected lifetimes by true effect size, under both
+  noise models — the zero-token proof for the retention change.
+
 ## v0.31.0 — 2026-07-01
 
 Latency as an advisory measurement axis in A/B comparisons.

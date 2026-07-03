@@ -155,6 +155,82 @@ function report(model: NoiseModel, z: number): void {
 	);
 }
 
+/** One simulated re-audit of an ACTIVE rule with known true effect: measures
+ * the without-configuration against the with-rule baseline (the real re-audit
+ * frame) and returns whether the point estimate lands below the bar — the
+ * event that costs a strike (two-strike policy) or the rule (old one-strike
+ * policy). Uncertainty is irrelevant here: re-audits are a point-estimate
+ * test by design. */
+function reAuditSubThreshold(
+	rng: () => number,
+	trueDelta: number,
+	sd: number,
+	runs: number,
+	model: NoiseModel,
+): boolean {
+	const withRule = side(rng, BASELINE - trueDelta, sd, runs, model);
+	const without = side(rng, BASELINE, sd, runs, model);
+	const a = assessDelta(without, withRule, RENT);
+	if (a.regression || a.delta === null) return true;
+	return verdict({ measuredDelta: a.delta, contextCost: RENT }) === "evicted";
+}
+
+/**
+ * RE-AUDIT CHURN — why retention is two-strike, not one-strike.
+ *
+ * Admission demands delta ≥ bar + z·SE, but retention only tests the point
+ * estimate against the bar. Because bar (~2×rent, tens of tokens) is tiny
+ * next to the SE (thousands), every re-audit of a genuine earner is a coin
+ * with a small — but compounding — chance of landing below the bar
+ * (regression to the mean). Under the old one-strike policy that chance IS
+ * the per-cycle eviction rate; under two-strike (evict only on the second
+ * CONSECUTIVE sub-threshold re-audit, a pass clears the strike) it is
+ * squared. Re-audit draws are independent across cycles, so expected
+ * lifetimes follow exactly: one-strike 1/p, two-strike (1+p)/p².
+ *
+ * The flip side to check: a DEAD rule (effect 0) must still leave quickly.
+ * With p ≈ 0.5 for a dead rule, two-strike stretches its stay from ~2 to ~6
+ * cycles — a few extra sessions of ~rent tokens, trivial against losing a
+ * multi-thousand-token earner to one noisy draw.
+ */
+function churnReport(model: NoiseModel): void {
+	const sd = BASELINE * SIGMA_FRAC;
+	const runs = 3;
+	console.log(
+		`\n=== re-audit churn: one-strike vs two-strike · noise model: ${model} · runs=${runs} ===`,
+	);
+	console.log(
+		[
+			"effect".padStart(10),
+			"P(sub)/cycle".padStart(13),
+			"1-strike life".padStart(14),
+			"2-strike life".padStart(14),
+		].join("  "),
+	);
+	for (const frac of [0, 0.05, 0.1, 0.2]) {
+		const delta = Math.round(BASELINE * frac);
+		const rng = mulberry32(0x51ed270b ^ Math.round(frac * 1000));
+		let sub = 0;
+		for (let i = 0; i < TRIALS; i++) {
+			if (reAuditSubThreshold(rng, delta, sd, runs, model)) sub++;
+		}
+		const p = sub / TRIALS;
+		const oneStrike = p === 0 ? Number.POSITIVE_INFINITY : 1 / p;
+		const twoStrike = p === 0 ? Number.POSITIVE_INFINITY : (1 + p) / p ** 2;
+		const life = (x: number): string =>
+			Number.isFinite(x) ? `${x.toFixed(1)} cyc` : "never";
+		const tag = frac === 0 ? "0 (dead)" : `${pct(frac)} (${delta})`;
+		console.log(
+			[
+				tag.padStart(10),
+				pct(p).padStart(13),
+				life(oneStrike).padStart(14),
+				life(twoStrike).padStart(14),
+			].join("  "),
+		);
+	}
+}
+
 function main(): number {
 	console.log(
 		"=== token-warden engine calibration (synthetic, zero tokens) ===",
@@ -167,8 +243,13 @@ function main(): number {
 		report("derailment", z);
 	}
 	delete process.env.WARDEN_CONFIDENCE_Z;
+	churnReport("gaussian");
+	churnReport("derailment");
 	console.log(
 		"\nRead: each cell is the keep-rate. The '0 (FP)' row is the false-positive rate (keeping a zero-effect rule); it must stay low. z=1 was the old default (~16% FP); z=2 is the new default (~2-3% FP) — at the cost of needing a bigger effect or more runs for power. The derailment model shows the cost of heavy-tailed outliers.",
+	);
+	console.log(
+		"The churn tables show expected active lifetime (in re-audit cycles) of a rule with a given TRUE effect: one-strike churns real earners at the per-cycle sub-threshold rate; two-strike squares it while a dead rule still exits within a few cycles.",
 	);
 	return 0;
 }
