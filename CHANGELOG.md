@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.33.0 — 2026-07-04
+
+Hardening release: the CLI orchestration layer brought under the unit suite,
+the coverage ratchet raised to match, hot-path indexes and a pinned
+`synchronous` pragma in the store, and the forward plan consolidated into
+[ROADMAP.md](ROADMAP.md).
+
+- **Bench/select CLI orchestration under test** (`src/bench.ts`,
+  `src/select.ts`, `test/bench-main.test.ts`, `test/select-main.test.ts`).
+  `bench.ts` now exports `main`/`benchAgent` with an injectable suite runner
+  (the same seam `select.ts` already used), and `select.ts` exports `main` —
+  so task/rule resolution, baseline notes, meta-cost reporting, top-up
+  allocation, and decision printing are exercised in-process with the spawn
+  boundary stubbed. The real `claude`-spawning path (`runOnce`/`runSuite`)
+  remains the intentional integration seam, covered by the e2e smoke. Guard
+  branches across the scope/protect/select parsers and the previously
+  uncalled `candidateCounts`/`recentQuestionsFrom` helpers are covered too:
+  500 → 524 tests.
+- **Coverage ratchet raised** (`vitest.config.ts`): lines 89 → 94, statements
+  88 → 93, functions 92 → 96, branches 77 → 83, from measured
+  95.0/93.9/97.2/84.3 — CI now fails any regression below the new floor.
+- **Hot-path indexes** (`src/db.ts`, migration #14): `runs(agent, task_hash)`
+  and `rules(agent, status)` — the two filter shapes behind learning curves,
+  anomaly windows, active-memory compilation, and candidate listing, which
+  previously full-scanned.
+- **`synchronous = NORMAL` pinned** (`src/db.ts`). better-sqlite3's bundled
+  SQLite already runs WAL at NORMAL via a compile-time default; the Stop
+  hook's 2s budget now depends on an explicit pragma instead of that flag.
+- **ROADMAP.md** — the deferred experiments, engine improvements, and
+  trigger-gated guardrails that lived across the audit doc, FINDINGS,
+  DECISIONS, and the README are consolidated into one plan with success
+  metrics and triggers; the README roadmap section now summarizes and links.
+- **Stale validation driver removed** (`validation/burn-overnight.sh`) — a
+  machine-specific one-off burn harness referenced by nothing.
+- Plugin/marketplace descriptions now state the measured, CI-enforced
+  coverage instead of a hard-coded figure.
+
 ## v0.32.0 — 2026-07-04
 
 Closing the measurement loop: two-strike re-audit retention, verdict-grounded

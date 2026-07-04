@@ -568,8 +568,14 @@ export function realWorkTokensLast7Days(db: WardenDb): number {
 	return row?.total ?? 0;
 }
 
-/** Benchmark one agent; returns tokens spent benchmarking. */
-function benchAgent(db: WardenDb, agent: string, args: BenchArgs): number {
+/** Benchmark one agent; returns tokens spent benchmarking. `suite` exists so
+ * tests can stub the spawn boundary while the orchestration runs for real. */
+export function benchAgent(
+	db: WardenDb,
+	agent: string,
+	args: BenchArgs,
+	suite: typeof runSuite = runSuite,
+): number {
 	let tasks = loadGoldenTasks(agent);
 	if (args.task !== null) {
 		tasks = tasks.filter((t) => t.id === args.task);
@@ -593,7 +599,7 @@ function benchAgent(db: WardenDb, agent: string, args: BenchArgs): number {
 			` rules=${rules.length}${args.rule !== null ? ` (candidate ${args.rule})` : ""}`,
 	);
 
-	const summaries = runSuite(db, agent, tasks, {
+	const summaries = suite(db, agent, tasks, {
 		rules,
 		runs: args.runs,
 		recordBaselines: args.rule === null,
@@ -621,13 +627,13 @@ function pctOfRun1(current: number, run1: number): string {
 	return `${change > 0 ? "+" : ""}${change.toFixed(1)}% vs run1`;
 }
 
-function main(args: BenchArgs): void {
+export function main(args: BenchArgs, suite: typeof runSuite = runSuite): void {
 	const db = openDb();
 	try {
 		const agents = args.agent === "all" ? [...DOMAIN_AGENTS] : [args.agent];
 		let benchTokens = 0;
 		for (const agent of agents) {
-			benchTokens += benchAgent(db, agent, args);
+			benchTokens += benchAgent(db, agent, args, suite);
 		}
 
 		const cost = metaCost(benchTokens, realWorkTokensLast7Days(db));

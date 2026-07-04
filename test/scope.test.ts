@@ -1,7 +1,15 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	type MockInstance,
+	vi,
+} from "vitest";
 import { compileMemoryMd } from "../src/bench.js";
 import {
 	getRuleById,
@@ -10,7 +18,7 @@ import {
 	setRuleScope,
 	type WardenDb,
 } from "../src/db.js";
-import { parseScopeArgs, runScope } from "../src/scope.js";
+import { main, parseScopeArgs, runScope } from "../src/scope.js";
 
 describe("compileMemoryMd scope rendering", () => {
 	it("prefixes a scoped rule with (when <scope>), leaves global rules plain", () => {
@@ -35,6 +43,12 @@ describe("parseScopeArgs", () => {
 		expect(parseScopeArgs(["--agent", "sql", "--list"]).list).toBe(true);
 		expect(() => parseScopeArgs(["--agent", "nope", "--list"])).toThrow(
 			/--agent/,
+		);
+	});
+
+	it("rejects an unknown flag", () => {
+		expect(() => parseScopeArgs(["--agent", "sql", "--bogus"])).toThrow(
+			/unknown flag: --bogus/,
 		);
 	});
 
@@ -127,5 +141,59 @@ describe("runScope", () => {
 				list: false,
 			}),
 		).toThrow(/no rule/);
+	});
+});
+
+describe("main (in-process CLI)", () => {
+	let dir: string;
+	let logSpy: MockInstance;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-scope-main-"));
+		process.env.TOKEN_WARDEN_DB = join(dir, "warden.db");
+		process.env.TOKEN_WARDEN_MEMORY_DIR = join(dir, "agent-memory");
+		logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+	});
+	afterEach(() => {
+		logSpy.mockRestore();
+		delete process.env.TOKEN_WARDEN_DB;
+		delete process.env.TOKEN_WARDEN_MEMORY_DIR;
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("scopes a rule end-to-end and reports the new ruleset version", () => {
+		const db = openDb();
+		let id: number;
+		try {
+			id = insertRule(db, {
+				agent: "sql",
+				body: "Only for migrations.",
+				contextCost: 5,
+				sourceRun: null,
+				createdAt: "t",
+			});
+		} finally {
+			db.close();
+		}
+
+		expect(
+			main([
+				"--agent",
+				"sql",
+				"--rule",
+				String(id),
+				"--scope",
+				"migration tasks",
+			]),
+		).toBe(0);
+
+		const out = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(out).toContain(`Rule ${id} now applies only when: migration tasks`);
+		const reopened = openDb();
+		try {
+			expect(getRuleById(reopened, id)?.scope).toBe("migration tasks");
+		} finally {
+			reopened.close();
+		}
 	});
 });

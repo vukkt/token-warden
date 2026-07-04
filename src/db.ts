@@ -144,6 +144,13 @@ const MIGRATIONS: readonly string[] = [
 	`
 	ALTER TABLE rules ADD COLUMN probation INTEGER NOT NULL DEFAULT 0;
 	`,
+	// The two filter shapes every hot read query uses: real-work/golden splits
+	// over runs (learning curves, anomaly windows, project usage) and per-agent
+	// rule lookups by status (active memory, candidate lists, evicted feedback).
+	`
+	CREATE INDEX IF NOT EXISTS idx_runs_agent_task ON runs(agent, task_hash);
+	CREATE INDEX IF NOT EXISTS idx_rules_agent_status ON rules(agent, status);
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -165,6 +172,10 @@ export function openDb(path: string = defaultDbPath()): WardenDb {
 	mkdirSync(dirname(path), { recursive: true });
 	const db = new Database(path);
 	db.pragma("journal_mode = WAL");
+	// Explicit rather than inherited: better-sqlite3's bundled build already
+	// runs WAL at NORMAL (SQLITE_DEFAULT_WAL_SYNCHRONOUS=1), but the Stop hook's
+	// 2s budget depends on it, so pin it instead of trusting a compile flag.
+	db.pragma("synchronous = NORMAL");
 	db.pragma("busy_timeout = 2000");
 	migrate(db);
 	return db;
