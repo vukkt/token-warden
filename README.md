@@ -464,8 +464,9 @@ candidate, one re-audit). Mean completed tokens per task:
 npm run typecheck && npm run lint && npm run test
 ```
 
-The unit suite — ~360 tests across every module, shown passing by the CI badge above
-(an exact count is left out of prose because it rots between releases) — covers the lot.
+The unit suite — over 500 tests across every module, shown passing by the CI badge above
+(an exact count is left out of prose because it rots between releases) — covers the lot,
+held above a ratcheted coverage floor (`vitest.config.ts`) that CI fails on regression.
 The transcript parser carries the densest coverage
 (usage dedup, completion heuristics, malformed-line tolerance, a 5 MB / 2 s performance
 budget) against committed anonymized fixtures. The hook entrypoints (`collect.ts`,
@@ -511,55 +512,27 @@ messaging.
 
 ## Roadmap
 
-Shipped through v0.19.0 — see [CHANGELOG.md](CHANGELOG.md) for the full
+Shipped through v0.33.0 — see [CHANGELOG.md](CHANGELOG.md) for the full
 history: the original spec's collect/benchmark/distill/select loop, subagent collection,
 variance-aware verdicts, cross-project learning curves, model-migration and prompt A/B
 benchmarking, automated prompt evolution, real-time cost-anomaly alerting, team-shared
-rule ledgers, tool/skill/MCP cost attribution, per-rule verdict receipts, a staged
-CI/CD pipeline (90% coverage), and a thesis-validation harness (`validation/`).
+rule ledgers, tool/skill/MCP cost attribution, per-rule verdict receipts, dollar
+accounting, self-calibration, two-strike re-audit retention, a staged CI/CD pipeline
+with a ratcheted coverage floor, and a thesis-validation harness (`validation/`).
 
 **Validated on real tokens** (see [`validation/`](validation/) and
 [`FINDINGS.md`](FINDINGS.md)): the measurement engine, the safety gate (it correctly
 evicted a rule that saved 38k tokens by *breaking the task* — a false economy), and the
 real-work learning pipeline all work. The open problem is the one the validation burn
-located precisely — **benchmark variance + candidate quality**. v0.18.0–v0.19.0 attack
-both: the default run count is now **3** (from 2) for a tighter standard error, the
-distiller forbids "false economy" rules (ones that trade thoroughness/completion for
-tokens), and the suite gained low-variance anchor tasks to tighten the selector's error
-bars (the selector's standard error is `sqrt(variance / n_tasks)`).
+located precisely — **benchmark variance + candidate quality**.
 
-Near-term (where the next *surviving* rule comes from):
-
-- **Cut benchmark variance further** — real golden-suite runs varied **>25%**, burying
-  modest savings under noise. The noisiest tasks (`testing-02` ≈ 150k tokens/run,
-  `sql-02`) deserve splitting/quieting (baselines stay frozen; growth means *adding* task
-  files, never editing them).
-- **Better candidate quality** — beyond the false-economy guard, further distiller
-  prompt/model tuning so it proposes rules that can clear 2× rent.
-- **Fully scheduled selection** — auto-running the selector on a cron/routine once
-  variance handling has earned trust; today it deliberately stays a user decision.
-- **Shipped — Transcript provenance.** Each distilled rule stores a digest of the session
-  it was born from; `/warden-receipt` shows it as a "born of:" line, so you can see exactly
-  the wasteful behavior that motivated each rule (memory review becomes code review).
-
-Bigger directions — the reusable asset is the *frozen-benchmark + measured-verdict*
-discipline, which generalizes well beyond efficiency rules:
-
-- **Shipped — Team-shared rule ledgers.** `/warden-share` exports an agent's measured rules to a
-  committed, reviewable artifact; `/warden-adopt` imports a shared ledger as local
-  candidates that are **re-measured** on the importer's own suite (the foreign delta is
-  never trusted); and `npx tsx src/verify-ledger.ts` is a deterministic, offline CI gate
-  that fails a PR which corrupts or hand-edits a committed ledger. Memory review becomes
-  code review. (A deeper gate that re-benchmarks each rule's delta in CI is possible but
-  needs a model-token budget — a deployment choice, not shipped by default.)
-- **Shipped — Skill / MCP cost attribution.** `/warden-attribute` breaks real-work tokens down
-  per tool, per skill, and per MCP server ("your browser-automation MCP costs 40% of every
-  frontend session"), cross-session or for a single transcript. The one direction the A/B
-  comparison engine does not serve — it is decomposition, not a keep/reject verdict — so it
-  is fully orthogonal to the selector/benchmark path.
-- **Rule marketplaces** — measured rules are portable artifacts with provenance and
-  deltas; a community repo of rules-with-receipts that others re-measure locally before
-  adopting (the dedupe and verdict machinery already handle imports).
+The full forward plan lives in [ROADMAP.md](ROADMAP.md): the production dogfood
+window that answers the central headroom question, the bounded token-spending
+experiments (best-of-K distillation, rule-body compression, out-of-fixture
+confirmation), engine improvements (variance cuts, distribution-weighted
+suites, per-category regression reporting, dollar-weighted rent), collaboration
+(ledger auto-apply, rule marketplaces), and the trigger-gated statistical
+guardrails that deliberately stay unbuilt until their trigger fires.
 
 ### Rule governance and falsification
 
@@ -585,27 +558,17 @@ falsification path is the next layer of work:
   measurable form of "un-revalidated for too long". Flags and recommends a re-audit,
   never auto-evicts; protected rules exempt; `--gate` for CI. (A single regression already
   evicts on re-audit, so an "N regressions" threshold would be redundant.)
-- **Out-of-fixture re-audit.** Re-audit currently reuses the same frozen fixture,
-  so it cannot detect a rule that the fixture happens to reward but that is harmful
-  elsewhere. The real-work production signal (token cost per ruleset version) is
-  already tracked but only reported; wiring it — and **friction reports** (an agent
-  finding a rule false or contradicted in this repo) — into eviction makes the
-  benchmark falsifiable by production reality, not just by itself.
 - **Shipped — Per-rule scope.** `/warden-scope` gives a rule an "allowed where" predicate
   (a language, a service, a task type); it compiles into memory as `(when <where>) <rule>`
   so the agent applies it only there instead of globally. Advisory — the agent self-applies
   it; it does not change the measurement.
-- **Representative suites and richer metrics.** The golden suite is hand-curated,
-  not sampled to a production task distribution, so a rule protecting a rare,
-  expensive case is only measured if that case is in the suite. `/warden-sample-tasks`
-  is a first step — it drafts candidate golden tasks from real session transcripts
-  (deduplicated, `success_check` left for a human, never auto-frozen) to cut the
-  suite-building burden. **Shipped — latency axis:** golden runs record wall-clock
-  `duration_ms` (from the claude result the bench already parses, so it is free),
-  and the A/B comparison reports it per task and overall as an *advisory* line —
-  never a keep/evict input, so a token-cheaper-but-slower change is visible without
-  distorting the verdict. Distribution weighting and **per-category regression**
-  reporting are still open.
+- **Shipped — latency axis.** Golden runs record wall-clock `duration_ms` (from the
+  claude result the bench already parses, so it is free), and the A/B comparison
+  reports it per task and overall as an *advisory* line — never a keep/evict input,
+  so a token-cheaper-but-slower change is visible without distorting the verdict.
+- **Open — out-of-fixture re-audit, distribution-weighted suites, per-category
+  regression reporting.** The remaining falsification layers; each is specified,
+  with its trigger and success metric, in [ROADMAP.md](ROADMAP.md).
 
 ## Contributing
 

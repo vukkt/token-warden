@@ -14,12 +14,13 @@ export default defineConfig({
 			// can't count them; the pure logic they wrap is unit-tested directly.
 			exclude: ["src/**/*.d.ts"],
 			// Ratchet floor — CI fails if coverage regresses below this. Raised
-			// as tests are added; the goal is ~90% on the pure (non-CLI) logic.
+			// as tests are added; measured 95.0/93.9/97.2/84.3 at v0.33.0, floored
+			// just beneath so a refactor has headroom but a regression fails.
 			thresholds: {
-				lines: 89,
-				statements: 88,
-				functions: 92,
-				branches: 77,
+				lines: 94,
+				statements: 93,
+				functions: 96,
+				branches: 83,
 			},
 		},
 	},

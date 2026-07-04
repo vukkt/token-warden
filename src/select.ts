@@ -885,7 +885,7 @@ function finalizeVerdict(
 	};
 }
 
-function main(args: SelectArgs): void {
+export function main(args: SelectArgs): void {
 	const db = openDb();
 	try {
 		const tasks: GoldenTask[] = loadGoldenTasks(args.agent);

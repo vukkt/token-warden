@@ -1,8 +1,8 @@
 {
 	"name": "token-warden",
 	"displayName": "Token Warden",
-	"version": "0.32.0",
-	"description": "Makes Claude Code subagents measurably cheaper over time: records token cost per session, distills candidate efficiency rules from expensive runs, benchmarks them on a frozen golden suite, and keeps only rules that save at least 2x their context rent. Also: per-tool/skill/MCP cost attribution, per-rule verdict receipts, model and prompt A/B benchmarking, cost-anomaly alerts, and team-shareable rule ledgers. 90% test coverage, CI-gated.",
+	"version": "0.33.0",
+	"description": "Makes Claude Code subagents measurably cheaper over time: records token cost per session, distills candidate efficiency rules from expensive runs, benchmarks them on a frozen golden suite, and keeps only rules that save at least 2x their context rent. Also: per-tool/skill/MCP cost attribution, per-rule verdict receipts, model and prompt A/B benchmarking, cost-anomaly alerts, and team-shareable rule ledgers. 93% test coverage behind a CI-ratcheted floor.",
 	"author": {
 		"name": "Vuk Topalovic",
 		"email": "vuk.topalovic@gmail.com"

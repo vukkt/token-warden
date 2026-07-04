@@ -1,6 +1,7 @@
 {
 	"$schema": "https://unpkg.com/knip@6/schema.json",
 	"entry": [
+		"src/select.ts",
 		"src/collect.ts",
 		"src/gate.ts",
 		"src/notify.ts",

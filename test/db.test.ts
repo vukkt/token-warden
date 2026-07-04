@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	candidateCounts,
 	decideRule,
 	getRuleById,
 	getRunBySession,
+	insertQuestion,
 	insertRule,
 	listCandidates,
 	MIGRATION_COUNT,
@@ -13,6 +15,7 @@ import {
 	oldestDecidedActiveRule,
 	openDb,
 	recentEvictedRules,
+	recentQuestionsFrom,
 	setRuleProbation,
 	upsertRun,
 	type WardenDb,
@@ -74,6 +77,24 @@ describe("openDb / migrations", () => {
 		db = openDb(join(dir, "warden.db"));
 		expect(db.pragma("user_version", { simple: true })).toBe(MIGRATION_COUNT);
 		expect(getRunBySession(db, "s1")).toBeDefined();
+	});
+
+	it("creates the hot-path indexes for runs and rules lookups", () => {
+		const indexes = db
+			.prepare<[], { name: string }>(
+				"SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name",
+			)
+			.all()
+			.map((row) => row.name);
+		expect(indexes).toEqual(
+			expect.arrayContaining(["idx_runs_agent_task", "idx_rules_agent_status"]),
+		);
+	});
+
+	it("pins WAL + synchronous=NORMAL so hook writes stay within budget", () => {
+		expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
+		// 1 = NORMAL.
+		expect(db.pragma("synchronous", { simple: true })).toBe(1);
 	});
 });
 
@@ -185,5 +206,41 @@ describe("rule queue ordering", () => {
 		});
 		// Other agents' evictions are invisible.
 		expect(recentEvictedRules(db, "backend", 5)).toHaveLength(0);
+	});
+
+	it("candidateCounts groups pending candidates per agent, largest first", () => {
+		seedRule("Rule body number one here.", "t");
+		seedRule("Rule body number two here.", "t");
+		const decided = seedRule("Rule body number three here.", "t");
+		decideRule(db, decided, "active", 100, "ok", "2026-06-01");
+		insertRule(db, {
+			agent: "backend",
+			body: "A backend candidate rule body.",
+			contextCost: 8,
+			sourceRun: null,
+			createdAt: "t",
+		});
+
+		expect(candidateCounts(db)).toEqual([
+			{ agent: "sql", pending: 2 },
+			{ agent: "backend", pending: 1 },
+		]);
+	});
+});
+
+describe("questions", () => {
+	it("recentQuestionsFrom returns newest question bodies first, capped", () => {
+		insertQuestion(db, "frontend", "backend", "How is auth refreshed?", "t1");
+		insertQuestion(db, "frontend", "sql", "Which index covers orders?", "t2");
+		insertQuestion(db, "backend", "sql", "Not from frontend.", "t3");
+
+		expect(recentQuestionsFrom(db, "frontend", 1)).toEqual([
+			"Which index covers orders?",
+		]);
+		expect(recentQuestionsFrom(db, "frontend", 5)).toEqual([
+			"Which index covers orders?",
+			"How is auth refreshed?",
+		]);
+		expect(recentQuestionsFrom(db, "sql", 5)).toEqual([]);
 	});
 });

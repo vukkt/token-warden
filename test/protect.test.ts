@@ -31,6 +31,15 @@ describe("parseProtectArgs", () => {
 		).toThrow(/integer/);
 	});
 
+	it("rejects an unknown flag and a blank rule body", () => {
+		expect(() => parseProtectArgs(["--agent", "sql", "--bogus"])).toThrow(
+			/unknown flag: --bogus/,
+		);
+		expect(() => parseProtectArgs(["--agent", "sql", "--add", "   "])).toThrow(
+			/non-empty rule body/,
+		);
+	});
+
 	it("parses a valid add", () => {
 		const args = parseProtectArgs(["--agent", "sql", "--add", "Be careful."]);
 		expect(args).toMatchObject({ agent: "sql", add: "Be careful." });
@@ -148,6 +157,39 @@ describe("runProtect", () => {
 			list: true,
 		});
 		expect(out).toContain("[PROTECTED]");
+	});
+
+	it("protects and unprotects a rule through the CLI action", () => {
+		const id = insertRule(db, {
+			agent: "sql",
+			body: "A distilled rule worth pinning.",
+			contextCost: 10,
+			sourceRun: null,
+			createdAt: "t",
+		});
+
+		const protectedOut = runProtect(db, {
+			agent: "sql",
+			add: null,
+			protect: id,
+			unprotect: null,
+			list: false,
+		});
+		expect(protectedOut).toContain(`Rule ${id} is now PROTECTED`);
+		expect(getRuleById(db, id)).toMatchObject({
+			protected: 1,
+			status: "active",
+		});
+
+		const unprotectedOut = runProtect(db, {
+			agent: "sql",
+			add: null,
+			protect: null,
+			unprotect: id,
+			list: false,
+		});
+		expect(unprotectedOut).toContain(`Rule ${id} is no longer protected`);
+		expect(getRuleById(db, id)?.protected).toBe(0);
 	});
 
 	it("rejects protecting a rule that belongs to another agent", () => {
