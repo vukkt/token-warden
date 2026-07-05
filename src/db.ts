@@ -151,6 +151,13 @@ const MIGRATIONS: readonly string[] = [
 	CREATE INDEX IF NOT EXISTS idx_runs_agent_task ON runs(agent, task_hash);
 	CREATE INDEX IF NOT EXISTS idx_rules_agent_status ON rules(agent, status);
 	`,
+	// Swap provenance for compression A/B: the rule id this candidate proposes
+	// to REPLACE. The selector measures such a candidate against the active set
+	// minus the replaced rule (a swap, not an addition) — measuring it on top of
+	// the semantically identical original would pin its marginal delta at ~0.
+	`
+	ALTER TABLE rules ADD COLUMN replaces INTEGER;
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -332,6 +339,9 @@ export interface RuleRow {
 	 * re-audit evicts. A passing re-audit clears the strike. Regressions ignore
 	 * probation and evict immediately (safety invariant). */
 	probation: number;
+	/** Rule id this candidate proposes to replace (compression A/B swap);
+	 * null for ordinary candidates. */
+	replaces: number | null;
 }
 
 export function getRuleById(db: WardenDb, id: number): RuleRow | undefined {
@@ -380,6 +390,8 @@ export interface NewRule {
 	createdAt: string;
 	/** Provenance digest of the session this rule was distilled from. */
 	bornDigest?: string | null;
+	/** Rule id this candidate proposes to replace (compression A/B swap). */
+	replaces?: number | null;
 }
 
 /** Insert a candidate rule. Candidates live only in SQLite until measured
@@ -387,8 +399,8 @@ export interface NewRule {
 export function insertRule(db: WardenDb, rule: NewRule): number {
 	const row = db
 		.prepare<unknown[], { id: number }>(
-			`INSERT INTO rules (agent, body, status, context_cost, source_run, created_at, born_digest)
-			 VALUES (?, ?, 'candidate', ?, ?, ?, ?) RETURNING id`,
+			`INSERT INTO rules (agent, body, status, context_cost, source_run, created_at, born_digest, replaces)
+			 VALUES (?, ?, 'candidate', ?, ?, ?, ?, ?) RETURNING id`,
 		)
 		.get(
 			rule.agent,
@@ -397,6 +409,7 @@ export function insertRule(db: WardenDb, rule: NewRule): number {
 			rule.sourceRun,
 			rule.createdAt,
 			rule.bornDigest ?? null,
+			rule.replaces ?? null,
 		);
 	if (row === undefined) throw new Error("insertRule produced no row");
 	return row.id;
@@ -761,13 +774,16 @@ export function realWorkTotalsByVersion(
 		.all(...params);
 }
 
-/** Timestamp of the most recent selector measurement run (candidate or audit
- * config) — the cooldown signal for opt-in scheduled selection. Null when the
- * selector has never measured anything. */
+/** Timestamp of the most recent benchmark run of any kind — the cooldown
+ * signal for opt-in scheduled selection. Includes config='active' (the shared
+ * baseline pass) deliberately: the selector spends the baseline FIRST, so a
+ * crash after it must still start the cooldown — otherwise every session
+ * start would re-spawn the selector and re-burn the baseline in a loop. Null
+ * when nothing has ever been benchmarked. */
 export function lastMeasurementTs(db: WardenDb): string | null {
 	const row = db
 		.prepare<[], { ts: string | null }>(
-			"SELECT MAX(ts) AS ts FROM runs WHERE config IN ('candidate', 'audit')",
+			"SELECT MAX(ts) AS ts FROM runs WHERE config IN ('active', 'candidate', 'audit')",
 		)
 		.get();
 	return row?.ts ?? null;

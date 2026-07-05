@@ -145,7 +145,7 @@ describe("sessionStart (temp db)", () => {
 		expect(out).not.toContain("auto-select started");
 	});
 
-	it("lastMeasurementTs reads only candidate/audit runs", () => {
+	it("lastMeasurementTs reads benchmark runs (active/candidate/audit), not real work", () => {
 		expect(lastMeasurementTs(db)).toBeNull();
 		upsertRun(db, {
 			agent: "sql",
@@ -165,5 +165,32 @@ describe("sessionStart (temp db)", () => {
 		expect(lastMeasurementTs(db)).toBeNull();
 		seedMeasurement("2026-06-28T00:00:00.000Z");
 		expect(lastMeasurementTs(db)).toBe("2026-06-28T00:00:00.000Z");
+	});
+
+	it("counts the baseline (config=active) toward the cooldown so a crashed selector cannot re-spawn in a loop", () => {
+		// The selector spends the expensive shared baseline FIRST. If it dies
+		// after that pass, the cooldown must still have started — otherwise every
+		// session start would re-spawn the selector and re-burn the baseline.
+		upsertRun(db, {
+			agent: "sql",
+			sessionId: "baseline-1",
+			taskHash: "sql-01",
+			inputTokens: 50_000,
+			outputTokens: 0,
+			cacheCreation: 0,
+			cacheRead: 0,
+			toolCalls: 1,
+			fileRereads: 0,
+			completed: true,
+			rulesetVersion: 0,
+			ts: new Date(NOW - 3600_000).toISOString(),
+			config: "active",
+		});
+		expect(lastMeasurementTs(db)).toBe(new Date(NOW - 3600_000).toISOString());
+
+		seedCandidate();
+		const spawner = vi.fn();
+		sessionStart(db, { TOKEN_WARDEN_AUTO_SELECT: "1" }, NOW, spawner);
+		expect(spawner).not.toHaveBeenCalled();
 	});
 });

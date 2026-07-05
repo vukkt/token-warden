@@ -385,8 +385,29 @@ export function distill(args: DistillArgs): void {
 					maxBuffer: 16 * 1024 * 1024,
 				},
 			);
-			if (claude.error) throw claude.error;
-			const output = JSON.parse(claude.stdout) as { result?: string };
+			// A failed sample must not abort the batch: proposals already pooled
+			// from earlier samples are paid for, so log and move on — the same
+			// treatment the invalid-JSON case gets. Exit code, not output, is the
+			// failure signal.
+			if (claude.error || claude.status !== 0) {
+				logLine(
+					`run ${run.id}: sample ${sample}/${k} failed (${
+						claude.error
+							? String(claude.error)
+							: `exit ${claude.status}: ${(claude.stderr ?? "").slice(0, 200)}`
+					}); dropping sample (never retried).`,
+				);
+				continue;
+			}
+			let output: { result?: string };
+			try {
+				output = JSON.parse(claude.stdout) as { result?: string };
+			} catch {
+				logLine(
+					`run ${run.id}: sample ${sample}/${k} stdout was not JSON; dropping sample. head: ${claude.stdout.slice(0, 200)}`,
+				);
+				continue;
+			}
 			const rules = parseRulesJson(output.result ?? "");
 			if (rules === null) {
 				logLine(

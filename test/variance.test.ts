@@ -358,9 +358,11 @@ describe("selectForAgent variance top-up", () => {
 
 		const report = selectForAgent(db, agent, runner, { topUpBudget: 1 });
 
+		// Baseline is lazy (memoized on first reference), so the candidate's
+		// measured pass logs before it; the set of passes is what matters.
 		expect(labels).toEqual([
-			"active-set",
 			`candidate-${id}`,
+			"active-set",
 			`candidate-${id}-topup`,
 		]);
 		const decision = report.decisions[0];
