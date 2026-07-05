@@ -310,6 +310,40 @@ the agent's already-banked rules back in ("you already follow these — propose 
 *new* practice that targets waste they don't cover"), so each proven rule shapes
 the next proposal instead of re-treading covered ground.
 
+## Re-audit churn (2026-07): the harness validates a feature this time
+
+The July 2026 repository audit ([docs/audit-2026-07.md](docs/audit-2026-07.md))
+found the retention policy statistically inconsistent with the admission policy.
+A candidate must clear the bar by `z·SE` to be admitted, but an active rule was
+evicted whenever a single re-audit *point estimate* landed below the bar — and
+since the bar (~2× rent, tens of tokens) is tiny next to the SE (thousands),
+regression to the mean made every re-audit of a genuine earner a lottery ticket
+against it. This is not hypothetical: the live database's Grep rule, admitted at
++3,673, was evicted by one −9,215 re-audit draw (recorded in the README's
+demonstration section as an honest variance illustration — it was actually a
+policy bug).
+
+The same Monte-Carlo harness that vetoed robust aggregation (above) was extended
+with a churn model, and this time the result was positive. Per-cycle
+sub-threshold probability, measured through the real `assessDelta` + `verdict`
+path, with expected active lifetimes (gaussian noise, runs=3):
+
+| true effect | P(sub-threshold)/cycle | one-strike lifetime | two-strike lifetime |
+|---|---|---|---|
+| 0 (dead rule) | 50.7% | 2.0 cycles | 5.9 cycles |
+| 3,000 tok/run | 29.9% | 3.3 cycles | 14.5 cycles |
+| 6,000 tok/run | 13.7% | 7.3 cycles | 61.0 cycles |
+| 12,000 tok/run | 1.6% | 63.5 cycles | 4,094.7 cycles |
+
+So retention is now **two-strike**: the first non-regression sub-threshold
+re-audit puts the rule on probation (kept, flagged); a second *consecutive* one
+evicts; a passing re-audit clears the strike. A regression still evicts
+immediately. Keep-when-uncertain was considered and rejected — because rent <<
+SE, a dead rule is *permanently* "uncertain" relative to the bar and would never
+leave. The asymmetry above is the finding: a dead rule pays ~25 tokens/session
+for ~4 extra cycles, while a real earner stops being churned out by single noisy
+draws.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can
@@ -324,9 +358,12 @@ behavioral rules are never token-evicted), a cache-aware rent (the 2× bar now
 prices in the one-time cache re-prefill on a ruleset change), a zero-token
 CLAUDE.md-contradiction check, and production-sampled task drafts. Secondary
 work: reduce golden-suite variance further (add quieter task files; baselines
-stay frozen), and extend the cache-aware rent to a full read ~0.1x / write
-~1.25x / output ~5x weighting on *both* sides of the verdict so "tokens saved"
-becomes "dollars saved."
+stay frozen). Dollar translation shipped in v0.26.0 as a reporting lens
+(`/warden-cost`, savings priced at the agent's real token mix) with the
+keep/evict gate deliberately kept in tokens (see DECISIONS.md); the remaining
+token-spending experiments — best-of-K distillation, rule-body compression,
+out-of-fixture confirmation — are catalogued in
+[docs/audit-2026-07.md](docs/audit-2026-07.md).
 
 Re-run any time: `npx tsx validation/naive-headroom-experiment.ts` (positive
 control; `--yes` to spend tokens), `./validation/run.sh sql` (controlled on the
