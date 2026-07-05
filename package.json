@@ -31,7 +31,7 @@
 		"zod": "^4.1.12"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.5.0",
+		"@biomejs/biome": "2.5.2",
 		"@types/better-sqlite3": "^7.6.13",
 		"@types/node": "^25.9.3",
 		"@vitest/coverage-v8": "^4.1.9",
