@@ -15,12 +15,18 @@ spends tokens without an explicit user action or opt-in.
   the batch is capped at 3 — the selector measures at most 3 candidates per
   invocation, so proposing more would only queue unmeasured rules. Default
   K=1 (no behavior change).
-- **`/warden-compress`** (new `src/compress.ts`). Rewrites a measured rule's
-  body at no more than half the characters (one headless model call, strict
-  JSON, validated shorter + not a near-duplicate) and queues the rewrite as a
-  candidate with "compressed variant of rule N" provenance. Rent is length/4,
-  so a variant that holds the delta clears the bar at half the rent. The
-  original is never auto-removed (invariant #1); `--dry-run` previews.
+- **`/warden-compress`** (new `src/compress.ts`, migration #15
+  `rules.replaces`). Rewrites a measured rule's body at no more than half the
+  characters (one headless model call, strict JSON, validated shorter + not a
+  near-duplicate) and queues the rewrite as a **swap candidate** carrying
+  `replaces = <original id>`. The selector measures a swap against the active
+  set *minus* the original — measuring it on top of the semantically identical
+  original would pin its marginal delta at ~0 and make the A/B unwinnable by
+  construction. The variant faces the same 2x-rent bar standalone; rent is
+  length/4, so a variant that holds the delta clears it at half the rent. The
+  original is never auto-removed (invariant #1): once the variant is active,
+  the original is redundant and exits through its own two-strike re-audits.
+  `--dry-run` previews.
 - **`/warden-confirm`** (new `src/confirm.ts`). Out-of-fixture confirmation:
   joins each agent's fixture verdicts (latest receipts of active rules) with
   its production cohort verdict. CORROBORATED / CONTRADICTED (recommends a
@@ -51,8 +57,18 @@ spends tokens without an explicit user action or opt-in.
   `sessionStart`, `src/db.ts` `lastMeasurementTs`).
   `TOKEN_WARDEN_AUTO_SELECT=1` lets the SessionStart hook spawn the selector
   detached for the agent with the most pending candidates — at most once per
-  24h (any candidate/audit run in the window suppresses it). Off by default;
-  selection stays a user decision otherwise.
+  24h. The cooldown counts ANY benchmark run (active/candidate/audit): the
+  selector spends the shared baseline first, so a crash after that pass must
+  still start the cooldown — otherwise every session start would re-spawn the
+  selector and re-burn the baseline in a loop. Off by default; selection
+  stays a user decision otherwise.
+- **Distiller resilience** (`src/distill.ts`, `src/compress.ts`). A failed
+  best-of-K sample (spawn error, timeout, or non-zero exit) is logged and
+  skipped like the invalid-JSON case instead of aborting the batch — earlier
+  samples' paid-for proposals survive. Both model-call boundaries now check
+  the exit code before parsing stdout (the error-ledger rule), so a CLI
+  failure surfaces as "claude exited N: <stderr>" rather than a JSON parse
+  error.
 - Explicitly not built, per the roadmap's own trigger-gating: Bonferroni
   z-adjustment, bootstrap CIs, robust-SE gate, dollar-weighted gate, rule
   marketplace. 524 → 578 tests.

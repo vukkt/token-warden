@@ -42,6 +42,7 @@ function existingRule(id: number, body: string, status: string): RuleRow {
 		born_digest: null,
 		scope: null,
 		probation: 0,
+		replaces: null,
 	};
 }
 

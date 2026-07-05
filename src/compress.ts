@@ -6,10 +6,13 @@
  * Rent is length/4, so halving a rule's characters halves its rent — if the
  * measured savings hold, marginal rules clear the 2x bar. One headless model
  * call rewrites the body at <= half the length preserving the exact behavioral
- * meaning; the rewrite is inserted as a NEW candidate (never replacing the
- * original) and must survive the benchmark like any other rule (invariant #1).
- * If the compressed variant wins, evict or unprotect the original by hand —
- * this command never removes a measured rule.
+ * meaning; the rewrite is inserted as a NEW candidate carrying
+ * `replaces = <original id>`, and the selector measures it as a SWAP — the
+ * active set with the variant instead of the original — because benching it
+ * on top of the semantically identical original would pin its delta at ~0.
+ * It must clear 2x its own rent like any rule (invariant #1). The original is
+ * never auto-removed: once the variant is active, the original is redundant
+ * and exits through its own re-audits (two-strike).
  */
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -128,6 +131,13 @@ export function requestRewrite(prompt: string): string {
 		},
 	);
 	if (claude.error) throw claude.error;
+	// Exit code, not output, is the failure signal (error-ledger rule): a
+	// non-zero exit with empty stdout must not surface as a JSON parse error.
+	if (claude.status !== 0) {
+		throw new Error(
+			`claude exited ${claude.status}: ${(claude.stderr ?? "").slice(0, 200)}`,
+		);
+	}
 	const output = JSON.parse(claude.stdout) as { result?: string };
 	return output.result ?? "";
 }
@@ -186,12 +196,19 @@ export function runCompress(
 		sourceRun: rule.source_run,
 		createdAt: new Date().toISOString(),
 		bornDigest: `compressed variant of rule ${rule.id} (rent ${oldRent} -> ${newRent}): "${rule.body}"`,
+		// Swap provenance: the selector measures this candidate against the
+		// active set MINUS the original — benching it on top of the semantically
+		// identical original would pin its marginal delta at ~0 and guarantee
+		// eviction (the A/B would be unwinnable by construction).
+		replaces: rule.id,
 	});
 	return [
 		`Queued candidate ${id}: compressed variant of rule ${rule.id} (rent ${oldRent} -> ${newRent}).`,
 		`  "${parsed.body}"`,
-		`Run /warden-select ${args.agent} to measure it. If it survives with the delta intact,`,
-		`evict the original by re-audit or retire it by hand — this command never removes a measured rule.`,
+		`Run /warden-select ${args.agent} to measure it: the variant is benched as a SWAP`,
+		`(active set with it instead of rule ${rule.id}) and must clear 2x its own rent.`,
+		`If it survives, the redundant original will fail its next re-audits and exit via`,
+		`the normal two-strike path — this command never removes a measured rule itself.`,
 	].join("\n");
 }
 

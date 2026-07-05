@@ -371,4 +371,76 @@ describe("selectForAgent", () => {
 		expect(report.rulesetVersion).toBeNull();
 		expect(existsSync(memoryFilePath(agent))).toBe(false);
 	});
+
+	it("measures a compression variant as a SWAP against the set minus the original", () => {
+		// Original active rule saves 2000. The compressed variant carries the
+		// same advice: redundant on top of the original (no extra saving), but
+		// earns 1900 standalone. Only the swap measurement can see that.
+		const originalId = seedCandidate(
+			"Use Grep to locate the exact symbol before reading any whole file in the repository.",
+		);
+		const variantBody = "Grep the symbol before reading any file.";
+		const labels: string[] = [];
+		const runner: SuiteRunner = (rules, label) => {
+			labels.push(label);
+			const hasOriginal = rules.some((r) => r.id === originalId);
+			const hasVariant = rules.some((r) => r.body === variantBody);
+			// Semantically identical advice: the second copy adds nothing.
+			const cost = hasOriginal ? 8000 : hasVariant ? 8100 : 10_000;
+			return [summary("sql-01", cost), summary("sql-02", cost)];
+		};
+
+		selectForAgent(db, agent, runner);
+		expect(getRuleById(db, originalId)?.status).toBe("active");
+
+		const variantId = insertRule(db, {
+			agent,
+			body: variantBody,
+			contextCost: Math.ceil(variantBody.length / 4),
+			sourceRun: null,
+			createdAt: new Date().toISOString(),
+			replaces: originalId,
+		});
+
+		labels.length = 0;
+		selectForAgent(db, agent, runner);
+
+		const variant = getRuleById(db, variantId);
+		// On top of the original the variant's delta would be 0 (evicted); the
+		// swap measures it standalone: 10000 - 8100 = 1900 >= 2x rent.
+		expect(variant?.status).toBe("active");
+		expect(variant?.measured_delta).toBe(1900);
+		expect(variant?.decided_reason).toContain(`swap for rule ${originalId}:`);
+		expect(labels).toContain(`swap-base-${variantId}`);
+		// The original is untouched by the swap itself (it exits later through
+		// its own re-audits once the variant makes it redundant).
+		expect(getRuleById(db, originalId)?.status).toBe("active");
+		expect(readFileSync(memoryFilePath(agent), "utf8")).toContain(variantBody);
+	});
+
+	it("falls back to the ordinary on-top measurement when the replaced rule is no longer active", () => {
+		const variantBody = "Grep the symbol before reading any file.";
+		const labels: string[] = [];
+		const runner: SuiteRunner = (rules, label) => {
+			labels.push(label);
+			const cost = rules.some((r) => r.body === variantBody) ? 8100 : 10_000;
+			return [summary("sql-01", cost), summary("sql-02", cost)];
+		};
+		// replaces points at a rule id that is not in the active set.
+		const variantId = insertRule(db, {
+			agent,
+			body: variantBody,
+			contextCost: Math.ceil(variantBody.length / 4),
+			sourceRun: null,
+			createdAt: new Date().toISOString(),
+			replaces: 9999,
+		});
+
+		selectForAgent(db, agent, runner);
+
+		const variant = getRuleById(db, variantId);
+		expect(variant?.status).toBe("active");
+		expect(variant?.decided_reason).not.toContain("swap for rule");
+		expect(labels).not.toContain(`swap-base-${variantId}`);
+	});
 });

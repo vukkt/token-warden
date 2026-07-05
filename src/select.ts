@@ -655,25 +655,37 @@ export function selectForAgent(
 	const decisions: Decision[] = [];
 	if (candidates.length > 0 || auditTarget !== undefined) {
 		const activeSet = getActiveRules(db, agent);
-		const baseline = runner(activeSet, "active-set", true);
+		// Lazy + memoized: an invocation whose only candidates are compression
+		// swaps (which measure against their own reduced reference) never pays
+		// for an unused baseline pass.
+		let baselineCache: TaskSummary[] | undefined;
+		const baseline = (): TaskSummary[] => {
+			baselineCache ??= runner(activeSet, "active-set", true);
+			return baselineCache;
+		};
 
 		/**
-		 * Measure one rule against the active-set baseline, decide its fate,
+		 * Measure one rule against a reference configuration, decide its fate,
 		 * persist the verdict, and record the decision. The only differences
 		 * between candidate promotion and re-audit are these parameters:
-		 * which configuration is measured, whether the delta is inverted, and
-		 * whether an uncertain verdict evicts (candidates) or keeps (re-audits).
+		 * which configuration is measured against which reference, whether the
+		 * delta is inverted, and whether an uncertain verdict evicts
+		 * (candidates) or keeps (re-audits).
 		 */
 		const decide = (params: {
 			rule: RuleRow;
 			kind: Decision["kind"];
+			/** The without-side configuration (memoized by the caller). The
+			 * active-set baseline for ordinary candidates and re-audits; the
+			 * reduced set for a compression swap. */
+			reference: () => TaskSummary[];
 			measure: (suffix: string, allocation?: RunAllocation) => TaskSummary[];
 			invert: boolean;
 			evictWhenUncertain: boolean;
 			reasonPrefix: string;
 		}): void => {
 			const { assessment, toppedUp, measured } = assessWithTopUp(
-				() => baseline,
+				params.reference,
 				params.measure,
 				params.rule.context_cost,
 				params.invert,
@@ -718,8 +730,9 @@ export function selectForAgent(
 			// `measured` is the with-rule side for a candidate (rule added) and
 			// the without-rule side for a re-audit (rule removed), so map both
 			// onto a stable with/without frame for the quality axis.
-			const withSide = aggregateSide(params.invert ? baseline : measured);
-			const withoutSide = aggregateSide(params.invert ? measured : baseline);
+			const reference = params.reference();
+			const withSide = aggregateSide(params.invert ? reference : measured);
+			const withoutSide = aggregateSide(params.invert ? measured : reference);
 			recordReceipt(db, {
 				ruleId: params.rule.id,
 				agent,
@@ -743,7 +756,7 @@ export function selectForAgent(
 				withoutToolCalls: withoutSide.toolCalls,
 				withFileRereads: withSide.fileRereads,
 				withoutFileRereads: withoutSide.fileRereads,
-				tasksTotal: baseline.length,
+				tasksTotal: reference.length,
 				tasksPassedWith: withSide.tasksPassed,
 				tasksPassedWithout: withoutSide.tasksPassed,
 			});
@@ -763,12 +776,49 @@ export function selectForAgent(
 		};
 
 		for (const candidate of candidates) {
+			// Compression swap: a candidate carrying `replaces` proposes to stand
+			// in for an active rule that says the same thing in more characters.
+			// Measuring it ON TOP of that original would pin its marginal delta
+			// at ~0 (the agent already follows the advice) and make the A/B
+			// unwinnable by construction, so the swap is measured against the
+			// active set MINUS the original: same 2x-rent bar, standalone. The
+			// original is untouched this pass — once the variant is active, the
+			// original is redundant and exits via its own re-audits (two-strike).
+			const replaced =
+				candidate.replaces === null
+					? undefined
+					: activeSet.find((rule) => rule.id === candidate.replaces);
+			if (replaced !== undefined) {
+				const reduced = activeSet.filter((rule) => rule.id !== replaced.id);
+				let swapRefCache: TaskSummary[] | undefined;
+				const swapReference = (): TaskSummary[] => {
+					swapRefCache ??= runner(reduced, `swap-base-${candidate.id}`, false);
+					return swapRefCache;
+				};
+				decide({
+					rule: candidate,
+					kind: "candidate",
+					reference: swapReference,
+					measure: (suffix, allocation) =>
+						runner(
+							[...reduced, candidate],
+							`candidate-${candidate.id}${suffix}`,
+							false,
+							allocation,
+						),
+					invert: false,
+					evictWhenUncertain: true,
+					reasonPrefix: `swap for rule ${replaced.id}: `,
+				});
+				continue;
+			}
 			// Candidate promotion requires confidence: an uncertain verdict
 			// after top-up evicts rather than activates (don't pay rent on a
 			// rule we can't show clears 2× rent).
 			decide({
 				rule: candidate,
 				kind: "candidate",
+				reference: baseline,
 				measure: (suffix, allocation) =>
 					runner(
 						[...activeSet, candidate],
@@ -793,6 +843,7 @@ export function selectForAgent(
 			decide({
 				rule: auditTarget,
 				kind: "re-audit",
+				reference: baseline,
 				measure: (suffix, allocation) =>
 					runner(
 						withoutIt,

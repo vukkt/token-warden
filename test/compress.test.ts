@@ -118,6 +118,10 @@ describe("runCompress", () => {
 		const variant = rules.find((r) => r.id !== id);
 		expect(variant?.status).toBe("candidate");
 		expect(variant?.born_digest).toContain(`compressed variant of rule ${id}`);
+		// Swap provenance: the selector must measure the variant AGAINST the
+		// active set minus the original, not on top of it.
+		expect(variant?.replaces).toBe(id);
+		expect(out).toContain("benched as a SWAP");
 		// The original is untouched.
 		expect(getRuleById(db, id)?.status).toBe("active");
 	});

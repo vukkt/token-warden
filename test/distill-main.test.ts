@@ -166,7 +166,7 @@ describe("distill() orchestration", () => {
 		expect(listRulesByAgent(db, "sql")).toHaveLength(1);
 	});
 
-	it("handles a spawnSync error gracefully (throws, caught by CLI shim)", () => {
+	it("drops a failed sample (spawn error) without throwing or inserting", () => {
 		const runId = seedExpensiveRun();
 		mockSpawn.mockReturnValue({
 			status: null,
@@ -178,9 +178,45 @@ describe("distill() orchestration", () => {
 			output: [],
 		});
 
-		// distill rethrows claude.error; no rule is inserted before that.
-		expect(() => distill({ runId, transcriptPath })).toThrow(/ENOENT/);
+		// A failed sample is logged and skipped — same treatment as invalid
+		// JSON — so the detached distiller never dies mid-batch.
+		expect(() => distill({ runId, transcriptPath })).not.toThrow();
 		expect(listRulesByAgent(db, "sql")).toHaveLength(0);
+	});
+
+	it("keeps earlier samples' proposals when a later sample fails (exit code or timeout)", () => {
+		const runId = seedExpensiveRun();
+		mockSpawn
+			.mockReturnValueOnce(
+				spawnOk('[{"body":"Batch related file reads into a single pass."}]'),
+			)
+			.mockReturnValueOnce({
+				// Non-zero exit with diagnostic stderr: the failure signal is the
+				// exit code, and it must not abort the pooled batch.
+				status: 1,
+				stdout: "",
+				stderr: "credit quota exhausted",
+				error: undefined,
+				signal: null,
+				pid: 1,
+				output: [],
+			})
+			.mockReturnValueOnce({
+				status: null,
+				stdout: "",
+				stderr: "",
+				error: new Error("spawnSync claude ETIMEDOUT"),
+				signal: "SIGTERM",
+				pid: 1,
+				output: [],
+			});
+
+		distill({ runId, transcriptPath, k: 3 });
+
+		// Sample 1's paid-for proposal survives samples 2 and 3 failing.
+		const rules = listRulesByAgent(db, "sql");
+		expect(rules).toHaveLength(1);
+		expect(rules[0]?.body).toBe("Batch related file reads into a single pass.");
 	});
 
 	it("skips a run that does not exist without spawning", () => {
