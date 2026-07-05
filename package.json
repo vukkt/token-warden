@@ -27,7 +27,7 @@
 		"format": "biome check --write ."
 	},
 	"dependencies": {
-		"better-sqlite3": "^12.4.1",
+		"better-sqlite3": "^12.11.1",
 		"zod": "^4.1.12"
 	},
 	"devDependencies": {
