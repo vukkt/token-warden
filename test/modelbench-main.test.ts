@@ -278,4 +278,58 @@ describe("modelbench main() orchestration", () => {
 		).toThrow(/no task with id sql-99/);
 		expect(runSuiteMock).not.toHaveBeenCalled();
 	});
+
+	it("sweeps every suite with --agent all and rolls regressions up by category", () => {
+		// haiku is cheaper on every task but fails testing-02.
+		runSuiteMock.mockImplementation(
+			(
+				_db: unknown,
+				_agent: unknown,
+				tasks: Array<{ id: string }>,
+				options: { model: string },
+			): TaskSummary[] => {
+				const isCandidate = options.model === "haiku";
+				return tasks.map((t) =>
+					summaryFor(
+						t.id,
+						isCandidate ? 600 : 1000,
+						!(isCandidate && t.id === "testing-02"),
+					),
+				);
+			},
+		);
+
+		main({
+			agent: "all",
+			model: "haiku",
+			baseline: null,
+			runs: 2,
+			topUp: 0,
+			task: null,
+		});
+
+		const out = output();
+		expect(out).toContain("Regression by category:");
+		expect(out).toContain("testing: REGRESSED — testing-02");
+		expect(out).toContain("backend: none");
+		expect(out).toContain("frontend: none");
+		expect(out).toContain("sql: none");
+		expect(out).toContain("NOT a safe change for the regressed categories");
+		// One combined meta-cost line for the sweep, not one per agent.
+		expect(out.match(/Meta-cost:/g)).toHaveLength(1);
+	});
+
+	it("--agent all throws when every baseline already matches the candidate", () => {
+		expect(() =>
+			main({
+				agent: "all",
+				model: "sonnet",
+				baseline: null,
+				runs: 2,
+				topUp: 0,
+				task: null,
+			}),
+		).toThrow(/nothing to compare/);
+		expect(runSuiteMock).not.toHaveBeenCalled();
+	});
 });

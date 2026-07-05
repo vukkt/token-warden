@@ -761,6 +761,45 @@ export function realWorkTotalsByVersion(
 		.all(...params);
 }
 
+/** Timestamp of the most recent selector measurement run (candidate or audit
+ * config) — the cooldown signal for opt-in scheduled selection. Null when the
+ * selector has never measured anything. */
+export function lastMeasurementTs(db: WardenDb): string | null {
+	const row = db
+		.prepare<[], { ts: string | null }>(
+			"SELECT MAX(ts) AS ts FROM runs WHERE config IN ('candidate', 'audit')",
+		)
+		.get();
+	return row?.ts ?? null;
+}
+
+export interface GoldenTaskTotal {
+	taskHash: string;
+	total: number;
+	ts: string;
+}
+
+/**
+ * Per-run totals of completed plain active-set golden runs, newest first
+ * within each task — the raw material for the per-task variance ranking in
+ * /warden-health. Only config='active' runs count: candidate/audit passes
+ * carry a different rule set and would inflate a task's apparent noise.
+ */
+export function goldenTaskTotals(
+	db: WardenDb,
+	agent: string,
+): GoldenTaskTotal[] {
+	return db
+		.prepare<unknown[], GoldenTaskTotal>(
+			`SELECT task_hash AS taskHash, ${RUN_TOTAL_TOKENS_SQL} AS total, ts
+			 FROM runs
+			 WHERE agent = ? AND task_hash IS NOT NULL AND completed = 1
+				AND config = 'active'
+			 ORDER BY task_hash ASC, ts DESC`,
+		)
+		.all(agent);
+}
+
 /** Totals of the agent's most recent completed real-work sessions
  * (excluding one run id), newest first — the baseline for anomaly alerting. */
 export function recentRealWorkTotals(

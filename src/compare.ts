@@ -301,6 +301,42 @@ export function formatComparison(cmp: Comparison): string {
 	return lines.join("\n");
 }
 
+/** Task ids the candidate failed but the baseline completed — the per-task
+ * face of `Comparison.regression`. */
+export function regressedTaskIds(cmp: Comparison): string[] {
+	return cmp.perTask
+		.filter((t) => t.baselineCompleted > 0 && t.candidateCompleted === 0)
+		.map((t) => t.taskId);
+}
+
+/**
+ * Regression roll-up across categories (one Comparison per domain agent's
+ * suite): which categories a change is safe for, and which tasks broke where.
+ * Completion is the axis — a category with any regressed task is unsafe for
+ * that change regardless of tokens.
+ */
+export function formatCategoryRegressions(comparisons: Comparison[]): string {
+	const lines = ["Regression by category:"];
+	for (const cmp of comparisons) {
+		const regressed = regressedTaskIds(cmp);
+		if (regressed.length > 0) {
+			lines.push(`  ${cmp.subject}: REGRESSED — ${regressed.join(", ")}`);
+		} else if (cmp.regression) {
+			// Defensive: the flag can only be set by a regressed task, but never
+			// report "none" when the verdict says otherwise.
+			lines.push(`  ${cmp.subject}: REGRESSED`);
+		} else {
+			lines.push(`  ${cmp.subject}: none`);
+		}
+	}
+	lines.push(
+		comparisons.some((c) => c.regression)
+			? "NOT a safe change for the regressed categories, regardless of tokens."
+			: "No category regressed — the change is completion-safe across all suites.",
+	);
+	return lines.join("\n");
+}
+
 /** Reduce the runs a suite pass just wrote (by session id) to comparison
  * data. The run-error sentinel (no row written) becomes a failed zero-token
  * run. */

@@ -41,6 +41,22 @@ describe("parseModelbenchArgs", () => {
 		});
 	});
 
+	it("accepts --agent all for the category sweep, but not with --task", () => {
+		expect(
+			parseModelbenchArgs(["--agent", "all", "--model", "haiku"]).agent,
+		).toBe("all");
+		expect(() =>
+			parseModelbenchArgs([
+				"--agent",
+				"all",
+				"--model",
+				"haiku",
+				"--task",
+				"sql-01",
+			]),
+		).toThrow(/--task requires a specific --agent/);
+	});
+
 	it("rejects bad input", () => {
 		expect(() =>
 			parseModelbenchArgs(["--agent", "main", "--model", "x"]),

@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.34.0 — 2026-07-04
+
+The roadmap's CLI-shaped features, in one release: the tooling for all three
+falsification experiments, per-category regression reporting, advisory dollar
+accounting on decisions, suite-noise ranking, and opt-in scheduled selection.
+Every measurement invariant is preserved — nothing new gates, evicts, or
+spends tokens without an explicit user action or opt-in.
+
+- **Best-of-K distillation** (`src/distill.ts`, `--k 1-3` /
+  `TOKEN_WARDEN_DISTILL_K`). The distiller can sample K times per expensive
+  run, pooling distinct proposals: samples are deduped against each other
+  (trigram, same 0.85 threshold) before the against-past-rules dedupe, and
+  the batch is capped at 3 — the selector measures at most 3 candidates per
+  invocation, so proposing more would only queue unmeasured rules. Default
+  K=1 (no behavior change).
+- **`/warden-compress`** (new `src/compress.ts`). Rewrites a measured rule's
+  body at no more than half the characters (one headless model call, strict
+  JSON, validated shorter + not a near-duplicate) and queues the rewrite as a
+  candidate with "compressed variant of rule N" provenance. Rent is length/4,
+  so a variant that holds the delta clears the bar at half the rent. The
+  original is never auto-removed (invariant #1); `--dry-run` previews.
+- **`/warden-confirm`** (new `src/confirm.ts`). Out-of-fixture confirmation:
+  joins each agent's fixture verdicts (latest receipts of active rules) with
+  its production cohort verdict. CORROBORATED / CONTRADICTED (recommends a
+  fixture re-audit, never auto-evicts) / UNCONFIRMED / NOTHING-TO-CONFIRM;
+  `--gate` exits non-zero on a contradiction. Zero tokens, read-only.
+- **Per-category regression reporting** (`src/modelbench.ts`,
+  `src/compare.ts` `regressedTaskIds`/`formatCategoryRegressions`).
+  `/warden-modelbench --agent all` sweeps every domain suite and closes with
+  a "Regression by category" roll-up naming exactly which tasks broke in
+  which category, plus one combined meta-cost line. Prompt variants are
+  per-agent by nature, so promptbench keeps its single-agent shape.
+- **`/warden-select --uniform-top-up`** (`src/select.ts`). Forces the top-up
+  to one full uniform suite pass instead of the Neyman variance-proportional
+  allocation — same budget, spent evenly: the control arm for the allocation
+  benchmark deferred from v0.24.0.
+- **Advisory dollars on decisions and receipts** (`src/select.ts`,
+  `src/receipt.ts`). Each decision line and receipt card now carries
+  `≈$X/run` (the agent's real-work token mix priced at the measured model —
+  the `/warden-cost` machinery), and the selector prints a weekly projection
+  for the rules it kept. Advisory only: the keep/evict gate stays on raw
+  tokens; a dollar gate needs its own calibration proof first.
+- **Golden-task variance ranking** (`src/health.ts` `rankTaskVariance`,
+  `src/db.ts` `goldenTaskTotals`). `/warden-health` ranks each agent's golden
+  tasks by coefficient of variation over recent active-set runs and names
+  those above the shared 25% warning level as splitting candidates (add task
+  files, never edit frozen ones). Informational; never affects `--gate`.
+- **Opt-in scheduled selection** (`src/notify.ts` `planAutoSelect`/
+  `sessionStart`, `src/db.ts` `lastMeasurementTs`).
+  `TOKEN_WARDEN_AUTO_SELECT=1` lets the SessionStart hook spawn the selector
+  detached for the agent with the most pending candidates — at most once per
+  24h (any candidate/audit run in the window suppresses it). Off by default;
+  selection stays a user decision otherwise.
+- Explicitly not built, per the roadmap's own trigger-gating: Bonferroni
+  z-adjustment, bootstrap CIs, robust-SE gate, dollar-weighted gate, rule
+  marketplace. 524 → 578 tests.
+
 ## v0.33.0 — 2026-07-04
 
 Hardening release: the CLI orchestration layer brought under the unit suite,

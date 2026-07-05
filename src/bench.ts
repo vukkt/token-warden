@@ -50,8 +50,9 @@ const CLAUDE_TIMEOUT_MS = 15 * 60 * 1000;
 const CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_TURNS = 60;
 /** Two same-config runs differing by more than this fraction of their mean
- * get a variance warning in the output (LLM variance is real). */
-const VARIANCE_WARN_RATIO = 0.25;
+ * get a variance warning in the output (LLM variance is real). Shared with
+ * /warden-health's per-task variance ranking so "noisy" means one thing. */
+export const VARIANCE_WARN_RATIO = 0.25;
 
 export interface BenchArgs {
 	agent: string;

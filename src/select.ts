@@ -29,6 +29,7 @@ import {
 	type TaskSummary,
 } from "./bench.js";
 import {
+	agentTokenMix,
 	bumpRulesetVersion,
 	decideRule,
 	getActiveRules,
@@ -41,6 +42,7 @@ import {
 	setRuleProbation,
 	type WardenDb,
 } from "./db.js";
+import { blendedDollarsPerToken, priceFor } from "./pricing.js";
 import { DOMAIN_AGENTS } from "./types.js";
 
 const MAX_CANDIDATES_PER_INVOCATION = 3;
@@ -555,6 +557,11 @@ export interface SelectOptions {
 	 * within one standard error of flipping. Bounded cost: each top-up is
 	 * one more suite invocation of the measured configuration. */
 	topUpBudget?: number;
+	/** Force the top-up to re-run the FULL suite uniformly instead of the
+	 * Neyman variance-proportional allocation. Same token budget, spent
+	 * evenly — the control arm for benchmarking the allocation strategy
+	 * (deferred from v0.24.0; see DECISIONS.md). */
+	uniformTopUp?: boolean;
 	/** Recorded into each rule receipt for provenance: the model the suite ran
 	 * under and a hash of the golden suite it was measured against. */
 	measuredModel?: string | null;
@@ -596,6 +603,7 @@ export function selectForAgent(
 	options: SelectOptions = {},
 ): SelectionReport {
 	const topUpBudget = options.topUpBudget ?? 1;
+	const uniformTopUp = options.uniformTopUp ?? false;
 	const candidates = listCandidates(db, agent, MAX_CANDIDATES_PER_INVOCATION);
 	// Captured before any decision so a rule activated this invocation is
 	// not immediately re-audited.
@@ -628,7 +636,12 @@ export function selectForAgent(
 			// every task. `measured` is always the side being topped up (the
 			// candidate's with-rule side, or the re-audit's without side).
 			const budget = measured.reduce((sum, s) => sum + s.results.length, 0);
-			const allocation = allocateTopUpRuns(reference(), measured, budget);
+			// --uniform-top-up: spend the same budget as one full uniform suite
+			// pass instead of pouring it into high-variance tasks (the control
+			// arm when benchmarking the allocation strategy itself).
+			const allocation = uniformTopUp
+				? null
+				: allocateTopUpRuns(reference(), measured, budget);
 			const extra = allocation
 				? measure("-topup", allocation)
 				: measure("-topup"); // runs=1: no variance signal — uniform fallback
@@ -812,13 +825,19 @@ interface SelectArgs {
 	agent: string;
 	runs: number;
 	topUp: number;
+	uniformTopUp: boolean;
 }
 
 export function parseSelectArgs(argv: string[]): SelectArgs {
 	// Default 3 (not 2): tighter standard error against the >25% golden-suite
 	// variance seen in real burns, so the selector can distinguish a genuine
 	// small saving from noise instead of evicting it as uncertain.
-	const args: SelectArgs = { agent: "", runs: 3, topUp: 1 };
+	const args: SelectArgs = {
+		agent: "",
+		runs: 3,
+		topUp: 1,
+		uniformTopUp: false,
+	};
 	for (let i = 0; i < argv.length; i++) {
 		if (argv[i] === "--agent") {
 			args.agent = argv[i + 1] ?? "";
@@ -829,6 +848,8 @@ export function parseSelectArgs(argv: string[]): SelectArgs {
 		} else if (argv[i] === "--top-up") {
 			args.topUp = Number(argv[i + 1]);
 			i++;
+		} else if (argv[i] === "--uniform-top-up") {
+			args.uniformTopUp = true;
 		} else {
 			throw new Error(`unknown flag: ${argv[i]}`);
 		}
@@ -929,6 +950,7 @@ export function main(args: SelectArgs): void {
 		);
 		const report = selectForAgent(db, args.agent, runner, {
 			topUpBudget: args.topUp,
+			uniformTopUp: args.uniformTopUp,
 			measuredModel: loadAgentDefinition(args.agent).model,
 			fixtureHash: goldenSuiteHash(args.agent),
 		});
@@ -937,16 +959,38 @@ export function main(args: SelectArgs): void {
 			console.log("No candidates and no active rules to audit; nothing to do.");
 			return;
 		}
+		// Advisory dollar mapping: the agent's real-work token mix priced at the
+		// measured model's rates. Reporting only — the keep/evict gate stays on
+		// raw tokens (a dollar gate needs its own calibration proof first).
+		const perToken = blendedDollarsPerToken(
+			agentTokenMix(db, args.agent),
+			priceFor(loadAgentDefinition(args.agent).model),
+		);
 		for (const decision of report.decisions) {
+			const dollars =
+				decision.delta !== null
+					? `, ≈$${(decision.delta * perToken).toFixed(4)}/run advisory`
+					: "";
 			console.log(
 				`  [${decision.kind}] rule ${decision.rule.id} → ${decision.status.toUpperCase()}` +
-					` (delta=${decision.delta ?? "n/a"}, rent=${decision.rule.context_cost}` +
+					` (delta=${decision.delta ?? "n/a"}, rent=${decision.rule.context_cost}${dollars}` +
 					`${decision.regression ? ", REGRESSION" : ""}` +
 					`${decision.toppedUp ? ", topped-up" : ""}` +
 					`${decision.uncertain ? ", LOW-CONFIDENCE" : ""}` +
 					`${decision.tailRisk ? ", TAIL-RISK" : ""}` +
 					`${decision.completionDrop ? ", COMPLETION-DROP" : ""}` +
 					`${decision.probation ? ", PROBATION (strike 1 of 2)" : ""}): "${decision.rule.body}"`,
+			);
+		}
+		const weeklyDollars =
+			report.decisions
+				.filter((d) => d.status === "active" && (d.delta ?? 0) > 0)
+				.reduce((sum, d) => sum + (d.delta as number), 0) *
+			perToken *
+			sessionsPerWeek();
+		if (weeklyDollars > 0) {
+			console.log(
+				`Advisory dollars (never a gate input): the rules kept this pass earn ≈$${weeklyDollars.toFixed(2)}/week at ${sessionsPerWeek()} sessions/week.`,
 			);
 		}
 		console.log(

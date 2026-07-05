@@ -250,3 +250,88 @@ describe("distill() orchestration", () => {
 		expect(listRulesByAgent(db, "sql")).toHaveLength(1);
 	});
 });
+
+describe("best-of-K sampling", () => {
+	it("samples K times and pools the distinct proposals", () => {
+		const runId = seedExpensiveRun();
+		mockSpawn
+			.mockReturnValueOnce(
+				spawnOk(
+					'[{"body":"Use Grep to locate symbols before opening files."}]',
+				),
+			)
+			.mockReturnValueOnce(
+				spawnOk('[{"body":"State a one-line plan before the first edit."}]'),
+			)
+			.mockReturnValueOnce(
+				spawnOk('[{"body":"Never re-read a file already read this session."}]'),
+			);
+
+		distill({ runId, transcriptPath, k: 3 });
+
+		expect(mockSpawn).toHaveBeenCalledTimes(3);
+		const bodies = listRulesByAgent(db, "sql").map((r) => r.body);
+		expect(bodies).toHaveLength(3);
+		expect(bodies).toContain("State a one-line plan before the first edit.");
+	});
+
+	it("collapses near-identical samples across the batch before inserting", () => {
+		const runId = seedExpensiveRun();
+		// Samples 2 and 3 re-derive sample 1's rule in trivially different words.
+		mockSpawn
+			.mockReturnValueOnce(
+				spawnOk(
+					'[{"body":"Use Grep to locate symbols before opening files."}]',
+				),
+			)
+			.mockReturnValueOnce(
+				spawnOk(
+					'[{"body":"Use Grep to locate symbols before opening the files."}]',
+				),
+			)
+			.mockReturnValueOnce(
+				spawnOk(
+					'[{"body":"Use Grep to locate symbols before opening files!"}]',
+				),
+			);
+
+		distill({ runId, transcriptPath, k: 3 });
+
+		expect(mockSpawn).toHaveBeenCalledTimes(3);
+		expect(listRulesByAgent(db, "sql")).toHaveLength(1);
+	});
+
+	it("caps the inserted batch at 3 even when K samples propose more", () => {
+		const runId = seedExpensiveRun();
+		mockSpawn
+			.mockReturnValueOnce(
+				spawnOk(
+					'[{"body":"Use Grep to locate symbols before opening files."},{"body":"State a one-line plan before the first edit."}]',
+				),
+			)
+			.mockReturnValueOnce(
+				spawnOk(
+					'[{"body":"Never re-read a file already read this session."},{"body":"Prefer Glob over listing directories recursively."}]',
+				),
+			)
+			.mockReturnValueOnce(
+				spawnOk('[{"body":"Batch related edits into a single tool call."}]'),
+			);
+
+		distill({ runId, transcriptPath, k: 3 });
+
+		expect(listRulesByAgent(db, "sql")).toHaveLength(3);
+	});
+
+	it("survives one invalid sample and keeps the others", () => {
+		const runId = seedExpensiveRun();
+		mockSpawn
+			.mockReturnValueOnce(spawnOk("not json at all"))
+			.mockReturnValueOnce(
+				spawnOk('[{"body":"State a one-line plan before the first edit."}]'),
+			);
+
+		expect(() => distill({ runId, transcriptPath, k: 2 })).not.toThrow();
+		expect(listRulesByAgent(db, "sql")).toHaveLength(1);
+	});
+});

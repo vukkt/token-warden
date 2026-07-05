@@ -19,6 +19,8 @@ cd "${CLAUDE_SKILL_DIR}/.." && npx tsx src/share.ts --agent <agent> <extra flags
 
 Then tell the user the file path and that committing it shares measured memory
 with their team (the artifact carries each rule's measured saving, so a PR
-adding a rule arrives with its proof). Note that importing and re-verifying a
-shared ledger against the team's own golden suite is a later increment — the
-file is currently an export for review, not yet auto-applied on import.
+adding a rule arrives with its proof). A teammate imports it with
+`/warden-adopt <file>`, which queues the rules as local candidates — foreign
+deltas are evidence, never authority, so they are re-measured on the
+importer's own suite before entering memory. With `TOKEN_WARDEN_AUTO_SELECT=1`
+the next session start kicks off that measurement automatically.

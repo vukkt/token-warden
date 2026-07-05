@@ -294,11 +294,43 @@ describe("parseDistillArgs", () => {
 	it("requires --run and --transcript", () => {
 		expect(
 			parseDistillArgs(["--run", "7", "--transcript", "/t.jsonl"]),
-		).toEqual({ runId: 7, transcriptPath: "/t.jsonl" });
+		).toEqual({ runId: 7, transcriptPath: "/t.jsonl", k: 1 });
 		expect(() => parseDistillArgs(["--run", "7"])).toThrow(/--transcript/);
 		expect(() => parseDistillArgs(["--transcript", "/t.jsonl"])).toThrow(
 			/--run/,
 		);
+	});
+
+	it("parses --k within 1-3 and rejects out-of-range values", () => {
+		expect(
+			parseDistillArgs(["--run", "7", "--transcript", "/t.jsonl", "--k", "3"])
+				.k,
+		).toBe(3);
+		expect(() =>
+			parseDistillArgs(["--run", "7", "--transcript", "/t.jsonl", "--k", "0"]),
+		).toThrow(/--k/);
+		expect(() =>
+			parseDistillArgs(["--run", "7", "--transcript", "/t.jsonl", "--k", "4"]),
+		).toThrow(/--k/);
+	});
+
+	it("takes the default K from TOKEN_WARDEN_DISTILL_K, ignoring junk", () => {
+		process.env.TOKEN_WARDEN_DISTILL_K = "2";
+		try {
+			expect(
+				parseDistillArgs(["--run", "7", "--transcript", "/t.jsonl"]).k,
+			).toBe(2);
+			process.env.TOKEN_WARDEN_DISTILL_K = "banana";
+			expect(
+				parseDistillArgs(["--run", "7", "--transcript", "/t.jsonl"]).k,
+			).toBe(1);
+			process.env.TOKEN_WARDEN_DISTILL_K = "9";
+			expect(
+				parseDistillArgs(["--run", "7", "--transcript", "/t.jsonl"]).k,
+			).toBe(1);
+		} finally {
+			delete process.env.TOKEN_WARDEN_DISTILL_K;
+		}
 	});
 });
 
