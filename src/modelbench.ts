@@ -3,7 +3,7 @@
  * agent's golden suite?" — answered with the same measured rigor the rule
  * selector uses.
  *
- * CLI: npx tsx src/modelbench.ts --agent <name> --model <candidate>
+ * CLI: npx tsx src/modelbench.ts --agent <name|all> --model <candidate>
  *      [--baseline <id>] [--runs <n>] [--top-up <n>] [--task <id>]
  *
  * Holds the agent's active rules constant and varies only the model. The
@@ -12,6 +12,11 @@
  * passes are recorded with config='modelbench' (isolated from baselines,
  * learning curves, p75, and golden-run counts) and never touch the frozen
  * run1 baselines.
+ *
+ * --agent all runs every domain suite and closes with a per-category
+ * regression roll-up (backend vs frontend vs sql vs testing) — a model
+ * migration is a global change, so its safety must be judged per category,
+ * not just on one agent's suite.
  */
 import { pathToFileURL } from "node:url";
 import {
@@ -22,12 +27,19 @@ import {
 	runSuite,
 	type TaskSummary,
 } from "./bench.js";
-import { formatComparison, reportMetaCost, runComparison } from "./compare.js";
+import {
+	type Comparison,
+	formatCategoryRegressions,
+	formatComparison,
+	reportMetaCost,
+	runComparison,
+} from "./compare.js";
 import {
 	getActiveRules,
 	getRulesetVersion,
 	openDb,
 	type RuleRow,
+	type WardenDb,
 } from "./db.js";
 import { DOMAIN_AGENTS } from "./types.js";
 
@@ -80,9 +92,17 @@ export function parseModelbenchArgs(argv: string[]): ModelbenchArgs {
 				throw new Error(`unknown flag: ${argv[i]}`);
 		}
 	}
-	if (!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)) {
+	if (
+		args.agent !== "all" &&
+		!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)
+	) {
 		throw new Error(
-			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${args.agent}")`,
+			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")}, all (got "${args.agent}")`,
+		);
+	}
+	if (args.agent === "all" && args.task !== null) {
+		throw new Error(
+			"--task requires a specific --agent (task ids are per-agent)",
 		);
 	}
 	if (args.model.trim() === "") {
@@ -97,53 +117,90 @@ export function parseModelbenchArgs(argv: string[]): ModelbenchArgs {
 	return args;
 }
 
+/** Bench one agent's suite: candidate model vs its baseline. Throws when the
+ * two models are identical (single-agent mode surfaces that to the user; the
+ * --agent all loop skips such agents instead of aborting the sweep). */
+function benchOne(
+	db: WardenDb,
+	agent: string,
+	args: ModelbenchArgs,
+): { comparison: Comparison; benchTokens: number } {
+	const baselineModel = args.baseline ?? loadAgentDefinition(agent).model;
+	if (args.model === baselineModel) {
+		throw new Error(
+			`--model and baseline are both "${baselineModel}" — nothing to compare`,
+		);
+	}
+
+	let tasks: GoldenTask[] = loadGoldenTasks(agent);
+	if (args.task !== null) {
+		tasks = tasks.filter((t) => t.id === args.task);
+		if (tasks.length === 0) throw new Error(`no task with id ${args.task}`);
+	}
+	const rules: RuleRow[] = getActiveRules(db, agent);
+
+	const runModel = (model: string, label: string): TaskSummary[] =>
+		runSuite(db, agent, tasks, {
+			rules,
+			runs: args.runs,
+			recordBaselines: false,
+			rulesetVersion: getRulesetVersion(db, agent),
+			label,
+			config: "modelbench",
+			model,
+		});
+
+	console.log(
+		`Model-bench agent=${agent}: ${args.model} vs ${baselineModel}` +
+			` (runs=${args.runs} per model, top-up ${args.topUp})`,
+	);
+
+	return runComparison(db, {
+		subject: agent,
+		dimension: "model",
+		baselineLabel: baselineModel,
+		candidateLabel: args.model,
+		topUp: args.topUp,
+		runBaseline: (label) => runModel(baselineModel, label),
+		runCandidate: (label) => runModel(args.model, label),
+	});
+}
+
 export function main(args: ModelbenchArgs): void {
 	const db = openDb();
 	try {
-		const baselineModel =
-			args.baseline ?? loadAgentDefinition(args.agent).model;
-		if (args.model === baselineModel) {
+		if (args.agent !== "all") {
+			const { comparison, benchTokens } = benchOne(db, args.agent, args);
+			console.log("");
+			console.log(formatComparison(comparison));
+			reportMetaCost(db, benchTokens);
+			return;
+		}
+
+		// Category sweep: one comparison per domain suite, then the roll-up.
+		const comparisons: Comparison[] = [];
+		let totalBenchTokens = 0;
+		for (const agent of DOMAIN_AGENTS) {
+			if (args.model === (args.baseline ?? loadAgentDefinition(agent).model)) {
+				console.log(
+					`Model-bench agent=${agent}: baseline already "${args.model}" — skipping (nothing to compare)`,
+				);
+				continue;
+			}
+			const { comparison, benchTokens } = benchOne(db, agent, args);
+			comparisons.push(comparison);
+			totalBenchTokens += benchTokens;
+			console.log("");
+			console.log(formatComparison(comparison));
+			console.log("");
+		}
+		if (comparisons.length === 0) {
 			throw new Error(
-				`--model and baseline are both "${baselineModel}" — nothing to compare`,
+				`every agent's baseline is already "${args.model}" — nothing to compare`,
 			);
 		}
-
-		let tasks: GoldenTask[] = loadGoldenTasks(args.agent);
-		if (args.task !== null) {
-			tasks = tasks.filter((t) => t.id === args.task);
-			if (tasks.length === 0) throw new Error(`no task with id ${args.task}`);
-		}
-		const rules: RuleRow[] = getActiveRules(db, args.agent);
-
-		const runModel = (model: string, label: string): TaskSummary[] =>
-			runSuite(db, args.agent, tasks, {
-				rules,
-				runs: args.runs,
-				recordBaselines: false,
-				rulesetVersion: getRulesetVersion(db, args.agent),
-				label,
-				config: "modelbench",
-				model,
-			});
-
-		console.log(
-			`Model-bench agent=${args.agent}: ${args.model} vs ${baselineModel}` +
-				` (runs=${args.runs} per model, top-up ${args.topUp})`,
-		);
-
-		const { comparison, benchTokens } = runComparison(db, {
-			subject: args.agent,
-			dimension: "model",
-			baselineLabel: baselineModel,
-			candidateLabel: args.model,
-			topUp: args.topUp,
-			runBaseline: (label) => runModel(baselineModel, label),
-			runCandidate: (label) => runModel(args.model, label),
-		});
-
-		console.log("");
-		console.log(formatComparison(comparison));
-		reportMetaCost(db, benchTokens);
+		console.log(formatCategoryRegressions(comparisons));
+		reportMetaCost(db, totalBenchTokens);
 	} finally {
 		db.close();
 	}

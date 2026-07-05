@@ -1,6 +1,6 @@
 ---
 description: Benchmark a candidate model against an agent's current model on its golden suite, and report which uses fewer tokens for that workload.
-argument-hint: <frontend|backend|sql|testing> --model <id> [--baseline <id>] [--runs N]
+argument-hint: <frontend|backend|sql|testing|all> --model <id> [--baseline <id>] [--runs N]
 disable-model-invocation: true
 allowed-tools: Bash(cd:*), Bash(npx tsx:*)
 ---
@@ -29,6 +29,12 @@ When it finishes, relay:
    not dollar cost — models are priced differently per token, so the user
    must apply their own per-token rates.
 4. The meta-cost line.
+
+`--agent all` sweeps every domain suite (multiplying the token cost by the
+number of agents) and closes with a **"Regression by category"** roll-up —
+which of backend/frontend/sql/testing the model change is completion-safe
+for, and exactly which tasks broke where. Relay that block verbatim; it is
+the per-category safety verdict for a global model migration.
 
 Never present this as a dollar-cost verdict; it is a token-count comparison
 on a fixed workload.

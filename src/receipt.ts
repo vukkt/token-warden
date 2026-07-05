@@ -16,11 +16,13 @@
  */
 import { pathToFileURL } from "node:url";
 import {
+	agentTokenMix,
 	latestReceipts,
 	openDb,
 	type ReceiptRow,
 	type WardenDb,
 } from "./db.js";
+import { blendedDollarsPerToken, priceFor } from "./pricing.js";
 import { displayText } from "./sanitize.js";
 import { DOMAIN_AGENTS } from "./types.js";
 
@@ -47,9 +49,18 @@ function pctDelta(withV: number, withoutV: number): string {
 	return ` (${change > 0 ? "+" : ""}${change}%)`;
 }
 
-/** Render one receipt as a multi-line card. */
-export function renderReceipt(r: ReceiptRow): string {
+/** Render one receipt as a multi-line card. `dollarsPerToken` (the agent's
+ * blended real-work rate at the receipt's model) adds an advisory dollar
+ * translation of the saved tokens — reporting only, never a verdict input. */
+export function renderReceipt(
+	r: ReceiptRow,
+	dollarsPerToken: number | null = null,
+): string {
 	const saved = r.delta === null ? "n/a" : `${fmt(r.delta)} tok`;
+	const dollars =
+		r.delta !== null && dollarsPerToken !== null
+			? ` (≈$${(r.delta * dollarsPerToken).toFixed(4)}/run advisory)`
+			: "";
 	const se = r.standard_error === null ? "" : ` ±${fmt(r.standard_error)}`;
 	const model = r.model ? ` · model=${displayText(r.model, 40)}` : "";
 	const fixture = r.fixture_hash
@@ -57,7 +68,7 @@ export function renderReceipt(r: ReceiptRow): string {
 		: "";
 	return [
 		`  rule #${r.rule_id} [${r.status}]  "${displayText(r.body)}"`,
-		`    ROI: saved ${saved}${se} vs rent ${fmt(r.context_cost)} (${roi(r.delta, r.context_cost)})` +
+		`    ROI: saved ${saved}${se}${dollars} vs rent ${fmt(r.context_cost)} (${roi(r.delta, r.context_cost)})` +
 			` · measured over ${r.runs} run(s)${model}${fixture}`,
 		`    quality: tasks passed ${r.tasks_passed_without}/${r.tasks_total} → ${r.tasks_passed_with}/${r.tasks_total}` +
 			`${r.regression ? "  REGRESSION" : ""}`,
@@ -78,7 +89,19 @@ export function renderReceipts(db: WardenDb, agent: string): string {
 		lines.push("  no receipts yet (run /warden-select to measure rules)");
 		return lines.join("\n");
 	}
-	lines.push(rows.map(renderReceipt).join("\n\n"));
+	// Advisory dollar rate per receipt: the agent's real-work token mix priced
+	// at the model each rule was measured under.
+	const mix = agentTokenMix(db, agent);
+	lines.push(
+		rows
+			.map((r) =>
+				renderReceipt(
+					r,
+					blendedDollarsPerToken(mix, priceFor(r.model ?? undefined)),
+				),
+			)
+			.join("\n\n"),
+	);
 	return lines.join("\n");
 }
 

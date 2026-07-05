@@ -153,7 +153,7 @@ describe("parseSelectArgs", () => {
 	it("parses agent, runs, and top-up budget", () => {
 		expect(
 			parseSelectArgs(["--agent", "sql", "--runs", "3", "--top-up", "2"]),
-		).toEqual({ agent: "sql", runs: 3, topUp: 2 });
+		).toEqual({ agent: "sql", runs: 3, topUp: 2, uniformTopUp: false });
 		expect(parseSelectArgs(["--agent", "sql"]).topUp).toBe(1);
 	});
 

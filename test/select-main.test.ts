@@ -38,6 +38,13 @@ describe("parseSelectArgs validation", () => {
 			/--top-up must be a non-negative integer/,
 		);
 	});
+
+	it("parses --uniform-top-up, defaulting to Neyman allocation", () => {
+		expect(parseSelectArgs(["--agent", "sql"]).uniformTopUp).toBe(false);
+		expect(
+			parseSelectArgs(["--agent", "sql", "--uniform-top-up"]).uniformTopUp,
+		).toBe(true);
+	});
 });
 
 describe("select main() orchestration", () => {
@@ -122,7 +129,7 @@ describe("select main() orchestration", () => {
 	}
 
 	it("does nothing when there are no candidates and nothing to audit", () => {
-		main({ agent: "sql", runs: 2, topUp: 1 });
+		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
 
 		expect(output()).toContain(
 			"No candidates and no active rules to audit; nothing to do.",
@@ -136,11 +143,14 @@ describe("select main() orchestration", () => {
 		// the bar (2× rent of cost 10 ≈ 22) at full confidence.
 		wireRunSuite({ baseline: [1000, 1000], measured: [500, 500] });
 
-		main({ agent: "sql", runs: 2, topUp: 1 });
+		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
 
 		const out = output();
 		expect(out).toContain(`[candidate] rule ${id} → ACTIVE`);
 		expect(out).toContain("delta=500");
+		// The advisory dollar mapping is reported but never gates.
+		expect(out).toMatch(/≈\$\d+\.\d{4}\/run advisory/);
+		expect(out).toContain("Advisory dollars (never a gate input)");
 		expect(out).toContain("Compiled 1 active rule(s)");
 		expect(out).toContain("(ruleset v1)");
 		const db = openDb();
@@ -163,7 +173,7 @@ describe("select main() orchestration", () => {
 			topUp: [1030, 1010],
 		});
 
-		main({ agent: "sql", runs: 2, topUp: 1 });
+		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
 
 		const out = output();
 		// The top-up pass ran against allocated tasks (label suffix "-topup").
@@ -182,6 +192,25 @@ describe("select main() orchestration", () => {
 		}
 	});
 
+	it("--uniform-top-up re-runs the full suite instead of a per-task allocation", () => {
+		insertCandidate("A marginal micro-optimization.");
+		wireRunSuite({
+			baseline: [1000, 1100],
+			measured: [1000, 1040],
+			topUp: [1030, 1010],
+		});
+
+		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: true });
+
+		const topUpCalls = runSuiteMock.mock.calls.filter((c) =>
+			(c[3] as { label: string }).label.endsWith("-topup"),
+		);
+		// One uniform pass over the whole 5-task sql suite — not N single-task
+		// allocation calls.
+		expect(topUpCalls).toHaveLength(1);
+		expect((topUpCalls[0]?.[2] as Array<unknown>).length).toBe(5);
+	});
+
 	it("puts an active rule on probation at its first sub-threshold re-audit", () => {
 		const id = insertCandidate("An old rule that stopped earning.");
 		const db = openDb();
@@ -193,7 +222,7 @@ describe("select main() orchestration", () => {
 		// Suite costs the same with and without the rule: worth 0 now.
 		wireRunSuite({ baseline: [1000, 1000], measured: [1000, 1000] });
 
-		main({ agent: "sql", runs: 2, topUp: 0 });
+		main({ agent: "sql", runs: 2, topUp: 0, uniformTopUp: false });
 
 		const out = output();
 		expect(out).toContain(`[re-audit] rule ${id} → ACTIVE`);

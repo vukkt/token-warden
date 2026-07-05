@@ -235,8 +235,8 @@ Active rules land in the agent's memory; the next session starts cheaper.
 |---|---|
 | `/warden-status` | Read-only report: per-agent run/rule counts, suite total vs. frozen baseline (absolute + %), learning curve over time, active rules with measured deltas and provenance, recent evictions with reasons, real-work tokens by project, cross-agent question volume |
 | `/warden-bench <agent\|all> [--runs N] [--task id]` | Runs the golden suite, compares against `run1` and `best`, and reports benchmarking meta-cost (warns above 10% of the week's real-work tokens) |
-| `/warden-select <agent> [--runs N] [--top-up N]` | Measures pending candidates, evicts or activates them, re-audits the oldest active rule, and recompiles the agent's memory |
-| `/warden-modelbench <agent> --model <id> [--baseline <id>] [--runs N]` | Runs the agent's golden suite under two models (candidate vs. the agent's current model, rules held constant) and reports which uses fewer tokens for that workload |
+| `/warden-select <agent> [--runs N] [--top-up N] [--uniform-top-up]` | Measures pending candidates, evicts or activates them, re-audits the oldest active rule, and recompiles the agent's memory. Decisions carry an advisory `≈$/run` translation (never a gate input); `--uniform-top-up` swaps the Neyman top-up for a full uniform pass (the allocation-strategy control arm) |
+| `/warden-modelbench <agent\|all> --model <id> [--baseline <id>] [--runs N]` | Runs the agent's golden suite under two models (candidate vs. the agent's current model, rules held constant) and reports which uses fewer tokens for that workload. `--agent all` sweeps every domain suite and closes with a per-category regression roll-up — which of backend/frontend/sql/testing the migration is completion-safe for |
 | `/warden-promptbench <agent> --variant <file.md> [--runs N]` | Runs the agent's golden suite under two prompts (a variant agent definition vs. the shipped one, rules and model held constant) and reports which uses fewer tokens |
 | `/warden-evolve <agent> [--runs N]` | Proposes a token-cheaper rewrite of the agent's prompt (model call), benchmarks it, and recommends it only if it provably wins — never auto-applied |
 | `/warden-share <agent> [--out path]` | Exports the agent's active rules (with measured deltas + provenance) to a committed, reviewable file so a team can version and review agent memory like code |
@@ -249,11 +249,15 @@ Active rules land in the agent's memory; the next session starts cheaper.
 | `/warden-sample-tasks --agent a --from <dir\|file> [--out path]` | Drafts candidate golden tasks from real session transcripts (opening prompt, de-duplicated, `success_check` left as TODO) to cut suite-building burden. Never auto-freezes a task; a human writes the check and moves it into the suite |
 | `/warden-cost [--agent a] [--project] [--months n] [--json]` | Dollar accounting: translates each rule's token savings into money (price table, env-overridable; savings priced at your agent's real token-type mix). `--project` scales it over a horizon (default ~3 months) with a cost **with vs. without** the plugin. Read-only; the gate stays in tokens |
 | `/warden-scope --agent a (--rule <id> --scope "<where>" \| --clear \| --list)` | Scope a rule to a context (a language, a service, a task type) — it compiles into memory as `(when <where>) <rule>` so the agent applies it only there. Advisory; doesn't change the measurement |
-| `/warden-health [--agent a] [--stale-after <days>] [--gate]` | Flags active rules not re-audited within N days (default 30) so their savings can be re-validated. Recommends a re-audit, **never auto-evicts**; protected rules exempt; `--gate` exits non-zero in CI |
+| `/warden-health [--agent a] [--stale-after <days>] [--gate]` | Flags active rules not re-audited within N days (default 30) so their savings can be re-validated, and ranks golden tasks by run-to-run variance (a task above 25% CV buries real savings — split it by adding quieter task files). Recommends, **never auto-evicts**; protected rules exempt; `--gate` exits non-zero in CI |
+| `/warden-compress --agent a --rule <id> [--dry-run]` | Proposes a compressed rewrite of a measured rule (one model call; rent is length/4, so half the characters is half the rent) and queues it as a **candidate** to be re-measured. The original is never auto-removed — if the variant holds the delta at lower rent, you retire the original by hand |
+| `/warden-confirm [--agent a] [--min-n N] [--gate] [--json]` | Out-of-fixture confirmation: joins each agent's fixture verdicts (rule receipts) with its production cohort verdict — does fixture survival predict real-work savings? Verdicts: corroborated / contradicted (recommends re-audit, never auto-evicts) / unconfirmed / nothing-to-confirm. Zero tokens; `--gate` exits non-zero on a contradiction |
 
 When candidate rules are waiting, a lightweight `SessionStart` hook injects a one-line
-nudge into new sessions — selection itself always stays a user decision, because it
-spends real benchmark tokens.
+nudge into new sessions — selection itself stays a user decision by default, because it
+spends real benchmark tokens. Setting `TOKEN_WARDEN_AUTO_SELECT=1` opts in to scheduled
+selection: the hook spawns the selector in the background for the agent with the most
+pending candidates, at most once per 24 hours.
 
 When a session ends unusually expensive for its agent (≥ 2× the agent's recent median,
 given ≥ 5 prior sessions), the `Stop` hook surfaces a one-line cost-anomaly heads-up to
@@ -512,13 +516,16 @@ messaging.
 
 ## Roadmap
 
-Shipped through v0.33.0 — see [CHANGELOG.md](CHANGELOG.md) for the full
+Shipped through v0.34.0 — see [CHANGELOG.md](CHANGELOG.md) for the full
 history: the original spec's collect/benchmark/distill/select loop, subagent collection,
 variance-aware verdicts, cross-project learning curves, model-migration and prompt A/B
-benchmarking, automated prompt evolution, real-time cost-anomaly alerting, team-shared
-rule ledgers, tool/skill/MCP cost attribution, per-rule verdict receipts, dollar
-accounting, self-calibration, two-strike re-audit retention, a staged CI/CD pipeline
-with a ratcheted coverage floor, and a thesis-validation harness (`validation/`).
+benchmarking (with per-category regression roll-ups), automated prompt evolution,
+real-time cost-anomaly alerting, team-shared rule ledgers, tool/skill/MCP cost
+attribution, per-rule verdict receipts, dollar accounting (advisory dollars on every
+decision), self-calibration, two-strike re-audit retention, best-of-K distillation,
+rule compression A/B, out-of-fixture confirmation, suite-noise ranking, opt-in
+scheduled selection, a staged CI/CD pipeline with a ratcheted coverage floor, and a
+thesis-validation harness (`validation/`).
 
 **Validated on real tokens** (see [`validation/`](validation/) and
 [`FINDINGS.md`](FINDINGS.md)): the measurement engine, the safety gate (it correctly

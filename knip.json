@@ -16,6 +16,8 @@
 		"src/attribute.ts",
 		"src/cohort.ts",
 		"src/protect.ts",
+		"src/compress.ts",
+		"src/confirm.ts",
 		"src/contradict.ts",
 		"src/sample-tasks.ts",
 		"src/cost.ts",

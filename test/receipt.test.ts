@@ -163,6 +163,17 @@ describe("renderReceipt", () => {
 		expect(renderReceipt(row({ regression: 1 }))).toContain("REGRESSION");
 	});
 
+	it("adds an advisory dollar line only when a blended rate is supplied", () => {
+		// 2,000 tokens at $3/Mtok blended = $0.006/run.
+		const withRate = renderReceipt(row(), 3 / 1_000_000);
+		expect(withRate).toContain("(≈$0.0060/run advisory)");
+		expect(renderReceipt(row())).not.toContain("advisory");
+		// No delta -> no dollar translation even with a rate.
+		expect(renderReceipt(row({ delta: null }), 3 / 1_000_000)).not.toContain(
+			"advisory",
+		);
+	});
+
 	it("shows born-of provenance when present, omits it when null", () => {
 		expect(
 			renderReceipt(

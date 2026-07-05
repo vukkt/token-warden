@@ -21,4 +21,6 @@ Then tell the user how many rules were adopted as candidates vs skipped, and —
 this is the important part — that adopted rules are **unverified here** and
 must be measured with the selector (`/warden-select <agent>`) before any of
 them earns a place in the agent's memory. A shared rule is a hypothesis, not a
-fact, until it reproduces its saving on the team member's own suite.
+fact, until it reproduces its saving on the team member's own suite. With
+`TOKEN_WARDEN_AUTO_SELECT=1` set, the next session start queues that
+measurement automatically (once per 24h).

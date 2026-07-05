@@ -1,7 +1,7 @@
 /**
  * Distiller: turn one unusually expensive run into 0–2 candidate rules.
  *
- * CLI: npx tsx src/distill.ts --run <runs.id> --transcript <path>
+ * CLI: npx tsx src/distill.ts --run <runs.id> --transcript <path> [--k <1-3>]
  *
  * Spawned detached by collect.ts when a run's total tokens exceed the
  * agent's rolling p75 (minimum 5 prior runs). One headless model call
@@ -10,6 +10,11 @@
  * never retried (spec §3.1). Candidates land in SQLite with
  * context_cost = ceil(len/4); near-duplicates (>0.85 trigram similarity to
  * any existing rule for the agent) are skipped.
+ *
+ * Best-of-K (--k, or TOKEN_WARDEN_DISTILL_K): sample the distiller K times
+ * and pool the distinct proposals, exploiting proposal stochasticity. K is
+ * capped at 3 because every distinct candidate costs a full benchmark to
+ * measure; near-identical samples are collapsed before any insert.
  */
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
@@ -50,6 +55,18 @@ const DISTILL_TIMEOUT_MS = 2 * 60 * 1000;
  * Override with TOKEN_WARDEN_DISTILL_MODEL=haiku to economize.
  */
 const DISTILL_MODEL = process.env.TOKEN_WARDEN_DISTILL_MODEL ?? "sonnet";
+/** Hard ceiling on samples per distillation and on candidates inserted per
+ * batch — the selector measures at most 3 candidates per invocation, so
+ * proposing more than 3 would only queue unmeasured rules. */
+const MAX_K = 3;
+const MAX_CANDIDATES_PER_BATCH = 3;
+
+/** Default sample count. TOKEN_WARDEN_DISTILL_K raises it for hook-spawned
+ * distills (collect.ts passes no --k); anything out of range falls back to 1. */
+function defaultK(): number {
+	const raw = Number(process.env.TOKEN_WARDEN_DISTILL_K ?? 1);
+	return Number.isInteger(raw) && raw >= 1 && raw <= MAX_K ? raw : 1;
+}
 
 function logLine(message: string): void {
 	try {
@@ -264,17 +281,23 @@ export function buildPrompt(
 interface DistillArgs {
 	runId: number;
 	transcriptPath: string;
+	/** Best-of-K sample count, 1–3; defaults to defaultK() when omitted. */
+	k?: number;
 }
 
 export function parseDistillArgs(argv: string[]): DistillArgs {
 	let runId: number | null = null;
 	let transcriptPath: string | null = null;
+	let k = defaultK();
 	for (let i = 0; i < argv.length; i++) {
 		if (argv[i] === "--run") {
 			runId = Number(argv[i + 1]);
 			i++;
 		} else if (argv[i] === "--transcript") {
 			transcriptPath = argv[i + 1] ?? null;
+			i++;
+		} else if (argv[i] === "--k") {
+			k = Number(argv[i + 1]);
 			i++;
 		} else {
 			throw new Error(`unknown flag: ${argv[i]}`);
@@ -286,7 +309,10 @@ export function parseDistillArgs(argv: string[]): DistillArgs {
 	if (!transcriptPath) {
 		throw new Error("--transcript <path> is required");
 	}
-	return { runId, transcriptPath };
+	if (!Number.isInteger(k) || k < 1 || k > MAX_K) {
+		throw new Error(`--k must be an integer between 1 and ${MAX_K}`);
+	}
+	return { runId, transcriptPath, k };
 }
 
 export function distill(args: DistillArgs): void {
@@ -333,38 +359,66 @@ export function distill(args: DistillArgs): void {
 			recentEvictedRules(db, run.agent, MAX_EVICTED_FEEDBACK),
 		);
 
-		const claude = spawnSync(
-			"claude",
-			[
-				"-p",
-				prompt,
-				"--model",
-				DISTILL_MODEL,
-				"--max-turns",
-				"1",
-				"--output-format",
-				"json",
-			],
-			{
-				cwd: pluginRoot,
-				encoding: "utf8",
-				timeout: DISTILL_TIMEOUT_MS,
-				maxBuffer: 16 * 1024 * 1024,
-			},
-		);
-		if (claude.error) throw claude.error;
-		const output = JSON.parse(claude.stdout) as { result?: string };
-		const rules = parseRulesJson(output.result ?? "");
-		if (rules === null) {
-			logLine(
-				`run ${run.id}: model returned invalid rules JSON; dropping (never retried). head: ${(output.result ?? "").slice(0, 200)}`,
+		// Best-of-K: pool proposals across K samples, collapsing near-identical
+		// ones first — repeated sampling explores the proposal space, but each
+		// distinct survivor still costs a full benchmark, so duplicates must
+		// never reach the insert step.
+		const k = args.k ?? defaultK();
+		const proposals: { body: string }[] = [];
+		for (let sample = 1; sample <= k; sample++) {
+			const claude = spawnSync(
+				"claude",
+				[
+					"-p",
+					prompt,
+					"--model",
+					DISTILL_MODEL,
+					"--max-turns",
+					"1",
+					"--output-format",
+					"json",
+				],
+				{
+					cwd: pluginRoot,
+					encoding: "utf8",
+					timeout: DISTILL_TIMEOUT_MS,
+					maxBuffer: 16 * 1024 * 1024,
+				},
 			);
-			return;
+			if (claude.error) throw claude.error;
+			const output = JSON.parse(claude.stdout) as { result?: string };
+			const rules = parseRulesJson(output.result ?? "");
+			if (rules === null) {
+				logLine(
+					`run ${run.id}: sample ${sample}/${k} returned invalid rules JSON; dropping (never retried). head: ${(output.result ?? "").slice(0, 200)}`,
+				);
+				continue;
+			}
+			for (const rule of rules) {
+				const dupInBatch = proposals.some(
+					(other) =>
+						trigramSimilarity(rule.body, other.body) > SIMILARITY_THRESHOLD,
+				);
+				if (dupInBatch) {
+					logLine(
+						`run ${run.id}: sample ${sample}/${k}: near-duplicate within batch; skipping: "${rule.body}"`,
+					);
+					continue;
+				}
+				proposals.push(rule);
+			}
 		}
 
 		const existing = listRulesByAgent(db, run.agent);
 		const ts = new Date().toISOString();
-		for (const rule of rules) {
+		let inserted = 0;
+		for (const rule of proposals) {
+			if (inserted >= MAX_CANDIDATES_PER_BATCH) {
+				logLine(
+					`run ${run.id}: batch cap of ${MAX_CANDIDATES_PER_BATCH} reached; dropping: "${rule.body}"`,
+				);
+				continue;
+			}
 			const nearDuplicate = existing.find(
 				(other) =>
 					trigramSimilarity(rule.body, other.body) > SIMILARITY_THRESHOLD,
@@ -385,6 +439,7 @@ export function distill(args: DistillArgs): void {
 				// rule so its receipt can show what waste motivated it.
 				bornDigest: digest.slice(0, 1200),
 			});
+			inserted++;
 			logLine(
 				`run ${run.id}: new candidate ${id} for ${run.agent}: "${rule.body}"`,
 			);

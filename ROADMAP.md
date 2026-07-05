@@ -27,57 +27,69 @@ come from deliberately naive positive controls.
 ## 2. Measured experiments (token-spending, run when a budget exists)
 
 From the falsification list in the audit; each is bounded and has a success
-metric decided in advance.
+metric decided in advance. **The tooling for all three shipped in v0.34.0** —
+what remains is running the experiments and recording their results:
 
-- **Best-of-K distillation** (paper RQ1 analogue). Sample the distiller K=3
-  times at temperature, dedupe near-identical proposals, bench the survivors.
-  The distill call is cheap but every distinct candidate costs a full bench
-  (~50–100k tokens), so K stays small. Success metric: surviving-rule
-  tokens/run per bench token spent, K=3 vs K=1.
-- **Rule-body compression A/B.** Rewrite a surviving rule to half its
-  character count (rent is length/4) and re-bench. If the delta holds, rent
-  drops and marginal rules clear the bar. Cheap and bounded.
-- **Out-of-fixture confirmation.** The production half of the central open
-  question above: after the next dogfood window, run `/warden-cohort` and
-  compare its verdict to the fixture verdict for the same rules.
+- **Best-of-K distillation** (paper RQ1 analogue). Shipped: `--k 1-3` /
+  `TOKEN_WARDEN_DISTILL_K` samples the distiller K times and pools the
+  distinct proposals (cross-sample trigram dedupe, batch cap 3). Open: the
+  measured comparison itself — success metric: surviving-rule tokens/run per
+  bench token spent, K=3 vs K=1 (batches share a `source_run`, so survival
+  by batch is queryable from receipts).
+- **Rule-body compression A/B.** Shipped: `/warden-compress` rewrites a
+  measured rule at half the characters and queues it as a candidate. Open:
+  run it on the surviving rules and record whether deltas hold at the lower
+  rent.
+- **Out-of-fixture confirmation.** Shipped: `/warden-confirm` joins fixture
+  receipts with the production cohort verdict per agent (corroborated /
+  contradicted / unconfirmed), `--gate` for CI. Open: the dogfood window that
+  gives it data (section 1).
 
 ## 3. Engine improvements
 
 - **Cut golden-suite variance further.** Real runs varied >25%, burying modest
-  savings under noise. The noisiest tasks (`testing-02` at ~150k tokens/run,
-  `sql-02`) deserve splitting or quieting — by *adding* task files, never
-  editing frozen ones (invariant #4).
+  savings under noise. Shipped in v0.34.0: `/warden-health` now ranks golden
+  tasks by run-to-run variance so the noisiest are named with evidence. Open:
+  actually splitting them (`testing-02` at ~150k tokens/run, `sql-02`) — by
+  *adding* task files, never editing frozen ones (invariant #4).
 - **Distribution-weighted / production-sampled suites.**
   `/warden-sample-tasks` drafts candidate tasks from real transcripts; the
   open half is weighting the suite to the production task distribution so a
   rule protecting a rare, expensive case gets measured proportionally.
-- **Per-category regression reporting.** The latency axis shipped in v0.31.0
-  as advisory-only; regression reporting per task category (backend vs sql vs
-  testing) is still open.
-- **Full-suite uniform top-up.** A variance refinement deferred from the
-  Neyman top-up work (DECISIONS.md): when no per-task variance signal exists,
-  a uniform whole-suite top-up pass is the fallback — currently only the
-  degenerate runs=1 case takes it.
-- **Dollar-weighted rent on both sides.** Cache-aware rent shipped for the
-  carry cost; the full weighting (cache read ≈ 0.1×, cache write ≈ 1.25×,
-  output ≈ 5× input price) applied to *savings* as well would turn
-  "tokens saved" into "dollars saved" end to end.
-- **Fully scheduled selection.** Auto-running the selector on a routine once
-  variance handling has earned trust; today it deliberately stays a user
-  decision.
-- **Better candidate quality.** Beyond the false-economy guard and the
-  verdict-grounded eviction feedback (v0.32.0), further distiller prompt and
-  model tuning so proposals clear 2× rent more often.
+- **Per-category regression reporting.** Shipped in v0.34.0:
+  `/warden-modelbench --agent all` sweeps every domain suite and closes with
+  a per-category (backend vs frontend vs sql vs testing) regression roll-up.
+  (Prompt variants are inherently per-agent, so promptbench keeps its
+  single-agent shape.)
+- **Full-suite uniform top-up.** Shipped in v0.34.0 as
+  `/warden-select --uniform-top-up` — the control arm for benchmarking the
+  Neyman allocation. Open: the real benchmark run comparing the two arms
+  (deferred from v0.24.0 because it changes token-spend behavior).
+- **Dollar-weighted savings.** Shipped in v0.34.0 as advisory reporting:
+  selector decisions and receipts carry `≈$/run` (the agent's real token mix
+  priced at the measured model) plus a weekly projection. Deliberately NOT a
+  gate input — a dollar-weighted keep/evict inequality needs its own
+  calibration-harness proof first.
+- **Fully scheduled selection.** Shipped in v0.34.0 as an explicit opt-in:
+  `TOKEN_WARDEN_AUTO_SELECT=1` lets the SessionStart hook spawn the selector
+  detached (busiest agent first, 24h cooldown). Stays off by default until
+  variance handling earns enough trust to flip it.
+- **Better candidate quality.** Beyond the false-economy guard, the
+  verdict-grounded eviction feedback (v0.32.0), and best-of-K sampling
+  (v0.34.0), further distiller prompt and model tuning so proposals clear
+  2× rent more often.
 
 ## 4. Collaboration
 
-- **Ledger import auto-apply.** `/warden-share` exports and `/warden-adopt`
-  re-measures, but a shared ledger is currently an export for review — a
-  one-command "adopt and queue for measurement" flow is the missing half.
+- **Ledger import auto-apply.** Shipped in v0.34.0: `/warden-adopt` queues a
+  shared ledger as candidates (it always re-measures locally), and
+  `TOKEN_WARDEN_AUTO_SELECT=1` closes the loop by queueing the measurement at
+  the next session start.
 - **Rule marketplaces.** Measured rules are portable artifacts with provenance
   and deltas; a community repository of rules-with-receipts that others
   re-measure locally before adopting. The dedupe and verdict machinery already
-  handle imports.
+  handle imports. An ecosystem effort, not a CLI feature — deliberately out of
+  scope here.
 
 ## 5. Statistical guardrails (trigger-gated — do not build early)
 

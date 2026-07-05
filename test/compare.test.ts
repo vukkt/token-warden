@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { TaskSummary } from "../src/bench.js";
 import {
 	compareConfigs,
+	formatCategoryRegressions,
 	formatComparison,
 	poolRuns,
 	type RunDatum,
+	regressedTaskIds,
 	runComparison,
 	totalBenchTokens,
 	type VariantRuns,
@@ -71,6 +73,37 @@ describe("compareConfigs", () => {
 		);
 		expect(c.regression).toBe(true);
 		expect(verdictLine(c)).toContain("NOT a safe model change");
+	});
+
+	it("rolls regressions up by category, naming the broken tasks", () => {
+		const forAgent = (subject: string, failTask: string | null) =>
+			compareConfigs(
+				subject,
+				"model",
+				"sonnet",
+				"haiku",
+				[
+					task(`${subject}-01`, [[1000, 0]]),
+					task(`${subject}-02`, [[1000, 0]]),
+				],
+				[
+					task(`${subject}-01`, [[600, 0]]),
+					task(`${subject}-02`, [[600, 0, failTask !== `${subject}-02`]]),
+				],
+			);
+
+		const clean = forAgent("backend", null);
+		const broken = forAgent("testing", "testing-02");
+		expect(regressedTaskIds(clean)).toEqual([]);
+		expect(regressedTaskIds(broken)).toEqual(["testing-02"]);
+
+		const unsafe = formatCategoryRegressions([clean, broken]);
+		expect(unsafe).toContain("backend: none");
+		expect(unsafe).toContain("testing: REGRESSED — testing-02");
+		expect(unsafe).toContain("NOT a safe change for the regressed categories");
+
+		const safe = formatCategoryRegressions([clean, forAgent("sql", null)]);
+		expect(safe).toContain("completion-safe across all suites");
 	});
 
 	it("caveats a single-task comparison as indicative only (n<2)", () => {
