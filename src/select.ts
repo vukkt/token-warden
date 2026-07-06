@@ -72,7 +72,7 @@ function sessionsPerWeek(): number {
  * rule); 2 SE drops that to ~2-3%. Lower it (toward 1) to trade precision for
  * power once you trust your benchmark's variance. Clamped to ≥ 1.
  */
-function confidenceZ(): number {
+export function confidenceZ(): number {
 	const raw = Number(process.env.WARDEN_CONFIDENCE_Z ?? 2);
 	return Number.isFinite(raw) && raw >= 1 ? raw : 2;
 }
@@ -202,7 +202,7 @@ function perTaskComparisons(
 }
 
 /** Unbiased sample variance; null when fewer than two observations. */
-function sampleVariance(xs: number[]): number | null {
+export function sampleVariance(xs: number[]): number | null {
 	if (xs.length < 2) return null;
 	const m = xs.reduce((a, b) => a + b, 0) / xs.length;
 	return xs.reduce((acc, x) => acc + (x - m) ** 2, 0) / (xs.length - 1);
@@ -212,7 +212,7 @@ function sampleVariance(xs: number[]): number | null {
  * borrowed when an individual task has too few runs to estimate its own
  * run-to-run noise (default runs=3 gives each task its own estimate; this is
  * the backstop at the n=2 edge). Null when no vector has ≥2 observations. */
-function pooledVariance(vectors: number[][]): number | null {
+export function pooledVariance(vectors: number[][]): number | null {
 	let sumSq = 0;
 	let dof = 0;
 	for (const xs of vectors) {

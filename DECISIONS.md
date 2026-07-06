@@ -557,6 +557,60 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.35.0 — empirical calibration and the power planner
+
+- **The synthetic harness is calibrated to an assumed noise model; v0.35.0 calibrates
+  against the recorded one.** validation/calibration.ts proved the verdict math correct
+  under Gaussian/derailment noise with eyeballed parameters (sigma ~25%, 15% derailment).
+  validation/empirical-calibration.ts removes the assumption: it resamples RECORDED
+  active-set golden runs — replicate groups keyed by (task, ruleset version, model), the
+  only rows guaranteed to be repeated measurements of an identical configuration — and
+  pushes A/A splits through the real assessDelta/verdict/top-up pipeline. Both sides of a
+  split come from the same pool, so the true delta is zero by construction and the keep
+  rate IS the empirical false-positive rate, distribution-free.
+- **Permutation for the initial split, bootstrap for the top-up (hybrid, documented).**
+  Counting uncertain trials as evictions would understate the FP rate (the real selector
+  tops up instead of giving up), so an uncertain permutation trial draws its top-up runs
+  with replacement from the held-out remainder of the pool. Bootstrap mode (draws with
+  replacement throughout) additionally supports semi-synthetic POWER: inject a known
+  saving onto real noise. Wilson CIs are reported and explicitly cover Monte-Carlo error
+  only — the pool itself is one sample of history.
+- **Only config='active' runs qualify as replicates.** Candidate/audit rows carry
+  per-decision rule sets not recoverable from the row alone; pooling them would blend
+  genuinely different configurations into the "null" pool. This shrinks eligible data but
+  keeps exchangeability honest — the property the whole method rests on.
+- **The power planner is deliberately conservative.** /warden-power inverts the selector's
+  own promotion rule (keep iff delta >= bar + z*SE) into MDS(n) = bar + (z + z_beta)*SE(n)
+  and required-runs, using the agent's own recorded per-task variances under UNIFORM
+  allocation. The real selector's Neyman top-up only tightens the SE, so the planner's
+  answer is an upper bound on the runs needed — a verification burn planned with it cannot
+  come out underpowered by design. Rent defaults to the median context_cost of the agent's
+  active rules (representative of what is actually deployed), 25 when none.
+
+## v0.33.0-v0.34.0 — cloud-built releases, reviewed and corrected locally
+
+- **Compression A/B is a swap, not an addition (review fix).** As delivered, the
+  compressed variant was queued as an ordinary candidate and benched ON TOP of the
+  still-active original; a semantically identical rule adds ~0 marginal saving, so the
+  A/B was unwinnable by construction. rules.replaces (migration #15) records the swap
+  intent and the selector measures such candidates against the active set MINUS the
+  original, from a per-swap reference pass; the shared baseline became lazy so swap-only
+  invocations skip it. The variant faces the standard 2x-rent bar standalone; the
+  redundant original is never auto-removed — it exits through its own two-strike
+  re-audits. Chosen over "evict the original first" (loses the measured rule before its
+  replacement is proven) and over doc-only warnings (ships a feature that cannot work).
+- **The auto-select cooldown counts ANY benchmark run (review fix).** The selector spends
+  the shared baseline (config='active') before any candidate/audit rows exist; a cooldown
+  keyed only on candidate/audit rows restarts the burn on every session start after a
+  mid-baseline crash. Any bench inside the window now suppresses auto-select — slightly
+  over-suppressing (a manual /warden-bench delays auto-select a day) in exchange for
+  making the failure mode bounded.
+- **Advisory dollars never enter a verdict.** Selector output and receipts price deltas
+  at the agent's real token mix, but the keep/evict gate stays token-denominated — same
+  boundary as v0.26.0, restated here because two new surfaces now show dollars.
+- **Auto-select is opt-in (TOKEN_WARDEN_AUTO_SELECT=1), default off.** Selection spends
+  real benchmark tokens; spending is a user decision unless explicitly delegated.
+
 ## v0.32.0 — two-strike re-audit retention, verdict-grounded distillation
 
 - **Retention was statistically inconsistent with admission — fixed with probation, not a

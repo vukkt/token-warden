@@ -816,6 +816,39 @@ export function goldenTaskTotals(
 		.all(agent);
 }
 
+export interface GoldenReplicateRun {
+	taskHash: string;
+	rulesetVersion: number;
+	/** Model the run executed under; empty string when unrecorded. */
+	model: string;
+	total: number;
+}
+
+/**
+ * Completed plain active-set golden runs with their replicate-group keys.
+ * Runs sharing (task, ruleset version, model) executed the identical
+ * configuration, so within a group they are genuine repeated measurements of
+ * the same distribution — the raw material for empirical (permutation /
+ * bootstrap) calibration and for the power planner's per-task variance.
+ * Only config='active': candidate/audit passes carry per-decision rule sets
+ * that are not distinguishable from the row alone.
+ */
+export function goldenReplicateRuns(
+	db: WardenDb,
+	agent: string,
+): GoldenReplicateRun[] {
+	return db
+		.prepare<unknown[], GoldenReplicateRun>(
+			`SELECT task_hash AS taskHash, ruleset_version AS rulesetVersion,
+				COALESCE(model, '') AS model, ${RUN_TOTAL_TOKENS_SQL} AS total
+			 FROM runs
+			 WHERE agent = ? AND task_hash IS NOT NULL AND completed = 1
+				AND config = 'active'
+			 ORDER BY task_hash ASC, ruleset_version ASC, ts ASC`,
+		)
+		.all(agent);
+}
+
 /** Totals of the agent's most recent completed real-work sessions
  * (excluding one run id), newest first — the baseline for anomaly alerting. */
 export function recentRealWorkTotals(

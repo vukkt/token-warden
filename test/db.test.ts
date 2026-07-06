@@ -7,6 +7,7 @@ import {
 	decideRule,
 	getRuleById,
 	getRunBySession,
+	goldenReplicateRuns,
 	insertQuestion,
 	insertRule,
 	listCandidates,
@@ -206,6 +207,64 @@ describe("rule queue ordering", () => {
 		});
 		// Other agents' evictions are invisible.
 		expect(recentEvictedRules(db, "backend", 5)).toHaveLength(0);
+	});
+
+	it("goldenReplicateRuns returns completed active-set runs keyed for replicate grouping", () => {
+		const base: Omit<NewRun, "sessionId" | "ts"> = {
+			agent: "sql",
+			taskHash: "sql-01",
+			inputTokens: 1000,
+			outputTokens: 0,
+			cacheCreation: 0,
+			cacheRead: 0,
+			toolCalls: 1,
+			fileRereads: 0,
+			completed: true,
+			rulesetVersion: 2,
+			config: "active",
+		};
+		upsertRun(db, { ...base, sessionId: "g1", ts: "2026-06-01" });
+		upsertRun(db, {
+			...base,
+			sessionId: "g2",
+			ts: "2026-06-02",
+			inputTokens: 1200,
+		});
+		// Different ruleset version: a separate replicate group, same task.
+		upsertRun(db, {
+			...base,
+			sessionId: "g3",
+			ts: "2026-06-03",
+			rulesetVersion: 3,
+		});
+		// Excluded: incomplete, non-active config, real work (null task).
+		upsertRun(db, {
+			...base,
+			sessionId: "g4",
+			ts: "2026-06-04",
+			completed: false,
+		});
+		upsertRun(db, {
+			...base,
+			sessionId: "g5",
+			ts: "2026-06-05",
+			config: "candidate",
+		});
+		upsertRun(db, {
+			...base,
+			sessionId: "g6",
+			ts: "2026-06-06",
+			taskHash: null,
+			config: "real",
+		});
+
+		const rows = goldenReplicateRuns(db, "sql");
+		expect(rows).toHaveLength(3);
+		expect(rows.map((r) => r.total)).toEqual([1000, 1200, 1000]);
+		expect(rows.map((r) => r.rulesetVersion)).toEqual([2, 2, 3]);
+		expect(rows.every((r) => r.taskHash === "sql-01")).toBe(true);
+		expect(rows.every((r) => r.model === "")).toBe(true);
+		expect(goldenReplicateRuns(db, "backend")).toHaveLength(0);
 	});
 
 	it("candidateCounts groups pending candidates per agent, largest first", () => {

@@ -18,6 +18,7 @@
 		"src/protect.ts",
 		"src/compress.ts",
 		"src/confirm.ts",
+		"src/power.ts",
 		"src/contradict.ts",
 		"src/sample-tasks.ts",
 		"src/cost.ts",

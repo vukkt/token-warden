@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.35.0 — 2026-07-06
+
+Statistical self-validation against the project's own recorded data: empirical
+(distribution-free) calibration of the verdict gate, and a power planner so a
+verification burn is provably adequately powered before it spends. Zero tokens
+for both — and the first empirical run already earned its keep (FINDINGS.md):
+the real false-positive rate under recorded noise is 2-3x the synthetic
+model's claim.
+
+- **Empirical calibration** (`validation/empirical-calibration.ts`,
+  `src/db.ts` `goldenReplicateRuns`). Resamples RECORDED active-set golden
+  runs — replicate groups keyed by (task, ruleset version, model), the only
+  rows guaranteed to be repeated measurements of an identical configuration —
+  and pushes A/A splits through the real `assessDelta`/`verdict`/top-up
+  pipeline. Both sides of a split come from the same pool, so the true delta
+  is zero by construction and the keep rate IS the empirical false-positive
+  rate, with no distributional assumption (the synthetic harness assumes
+  Gaussian + derailment noise with eyeballed parameters). Permutation mode
+  for the exact A/A; bootstrap mode adds semi-synthetic POWER by injecting a
+  known saving onto real noise. Wilson CIs (Monte-Carlo error only, stated).
+- **`/warden-power`** (new `src/power.ts`). Zero-token power planner: inverts
+  the selector's own promotion rule (keep iff delta >= bar + z*SE) into the
+  minimum detectable saving at each run count and the runs/side a target
+  saving needs at 80%/90% power, using the agent's own recorded per-task
+  variances. Deliberately conservative (uniform allocation; the Neyman top-up
+  only tightens the SE), so a burn planned with it cannot come out
+  underpowered by design. Rent defaults to the median context_cost of the
+  agent's active rules.
+- `sampleVariance`, `pooledVariance`, and `confidenceZ` are now exported from
+  `src/select.ts` (unchanged behavior) so the planner and harness reuse the
+  exact production estimators instead of reimplementing them.
+
 ## v0.34.0 — 2026-07-04
 
 The roadmap's CLI-shaped features, in one release: the tooling for all three

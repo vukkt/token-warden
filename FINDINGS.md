@@ -344,6 +344,47 @@ leave. The asymmetry above is the finding: a dead rule pays ~25 tokens/session
 for ~4 extra cycles, while a real earner stops being churned out by single noisy
 draws.
 
+## Empirical calibration (2026-07): the gate measured against its own recorded noise
+
+Every calibration number so far came from a synthetic noise model (Gaussian +
+derailment, sigma ~25%, parameters eyeballed from a few runs). v0.35.0's
+`validation/empirical-calibration.ts` removes the assumption: it resamples the
+RECORDED active-set golden runs — replicate groups keyed by (task, ruleset
+version, model), so every group is repeated measurements of an identical
+configuration — and pushes fake with/without splits through the real
+`assessDelta` + `verdict` + top-up pipeline. Both sides of a split come from
+the same pool, so the true delta is zero by construction and the keep rate IS
+the false-positive rate, distribution-free.
+
+First run against the live database (sql agent, the only one with enough
+replicate history: 3 tasks x 4-5 runs at one ruleset version, runs=2/side):
+
+| measurement | result |
+|---|---|
+| permutation A/A false-positive rate | **8.8% [7.9%, 9.7%]** (4,000 trials) |
+| bootstrap A/A false-positive rate | 10.9% [10.0%, 11.9%] |
+| power at a 10% injected saving (4,724 tok) | 34.7% |
+| power at a 20% injected saving (9,448 tok) | 69.8% |
+
+The synthetic harness claims ~4% FP at these settings (z=2, runs=2). The
+empirical rate is **2-3x higher**: real recorded noise is heavier-tailed /
+more structured than the model. Honest read of the gate today: at z=2 and
+runs=2 it delivers ~91% specificity on real data, not ~96%. Caveats, stated
+plainly: the pool is small (13 runs across 3 tasks — one sample of history,
+and the Wilson CIs cover Monte-Carlo error only), and trial top-ups draw from
+thin held-out remainders. The remedy is built in: every selector invocation
+adds runs=3 of fresh active-set replicates per task, so this measurement
+sharpens with normal use — re-run it before trusting any marginal verdict.
+
+`/warden-power` (same release) turns the recorded variances into planning
+numbers. For sql today: minimum detectable saving at the default 3 runs/side
+is **~12,330 tok/run at 80% power** (~14,230 at 90%); a 10%-of-session rule
+(4,724 tok) needs **21 runs/side** at 80% power. Conservative by design
+(uniform allocation — the Neyman top-up only tightens). The practical
+consequence for the dogfood plan: expect the fixture gate to bank only
+large-effect rules at default run counts; budget runs with /warden-power
+before a verification burn instead of discovering "inconclusive" after it.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can
