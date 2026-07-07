@@ -27,7 +27,7 @@ import {
 	openDb,
 	type RuleRow,
 } from "./db.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { assertKnownAgent, knownAgents } from "./registry.js";
 
 const DEFAULT_STALE_AFTER_DAYS = 30;
 const MS_PER_DAY = 86_400_000;
@@ -167,18 +167,15 @@ export function parseHealthArgs(argv: string[]): HealthArgs {
 		else if (flag === "--json") args.json = true;
 		else throw new Error(`unknown flag: ${flag}`);
 	}
-	if (
-		args.agent &&
-		!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)
-	) {
-		throw new Error(`--agent must be one of: ${DOMAIN_AGENTS.join(", ")}`);
+	if (args.agent) {
+		assertKnownAgent(args.agent);
 	}
 	return args;
 }
 
 export function main(argv: string[], nowMs = Date.now()): number {
 	const args = parseHealthArgs(argv);
-	const agents = args.agent ? [args.agent] : [...DOMAIN_AGENTS];
+	const agents = args.agent ? [args.agent] : knownAgents();
 	const db = openDb();
 	try {
 		let anyStale = false;

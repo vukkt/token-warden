@@ -40,8 +40,8 @@ import {
 	upsertRun,
 	type WardenDb,
 } from "./db.js";
+import { knownAgents, userAgentsDir, userBenchmarksDir } from "./registry.js";
 import { parseTranscript } from "./transcript.js";
-import { DOMAIN_AGENTS } from "./types.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureDir = join(pluginRoot, "benchmarks", "fixture");
@@ -90,12 +90,9 @@ export function parseArgs(argv: string[]): BenchArgs {
 				throw new Error(`unknown flag: ${flag}`);
 		}
 	}
-	if (
-		args.agent !== "all" &&
-		!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)
-	) {
+	if (args.agent !== "all" && !knownAgents().includes(args.agent)) {
 		throw new Error(
-			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")}, all (got "${args.agent}")`,
+			`--agent must be one of: ${knownAgents().join(", ")}, all (got "${args.agent}")`,
 		);
 	}
 	if (!Number.isInteger(args.runs) || args.runs < 1) {
@@ -154,7 +151,19 @@ export function parseGoldenTask(text: string, file: string): GoldenTask {
 }
 
 export function loadGoldenTasks(agent: string): GoldenTask[] {
-	const dir = join(pluginRoot, "benchmarks", agent);
+	const bundledDir = join(pluginRoot, "benchmarks", agent);
+	const userDir = join(userBenchmarksDir(), agent);
+	// Bundled suite wins; a user suite is only consulted when no bundled dir
+	// exists for this agent (custom agents), and neither existing is an error.
+	let dir = bundledDir;
+	if (!existsSync(bundledDir)) {
+		if (!existsSync(userDir)) {
+			throw new Error(
+				`no golden suite for agent "${agent}": looked in ${bundledDir} and ${userDir}`,
+			);
+		}
+		dir = userDir;
+	}
 	const files = readdirSync(dir)
 		.filter((name) => /^golden-\d+\.md$/.test(name))
 		.sort();
@@ -263,7 +272,10 @@ export function parseAgentDefinition(
 }
 
 export function loadAgentDefinition(agent: string): AgentDefinition {
-	const path = join(pluginRoot, "agents", `${agent}.md`);
+	const bundledPath = join(pluginRoot, "agents", `${agent}.md`);
+	const path = existsSync(bundledPath)
+		? bundledPath
+		: join(userAgentsDir(), `${agent}.md`);
 	return parseAgentDefinition(readFileSync(path, "utf8"), path);
 }
 
@@ -631,7 +643,7 @@ function pctOfRun1(current: number, run1: number): string {
 export function main(args: BenchArgs, suite: typeof runSuite = runSuite): void {
 	const db = openDb();
 	try {
-		const agents = args.agent === "all" ? [...DOMAIN_AGENTS] : [args.agent];
+		const agents = args.agent === "all" ? knownAgents() : [args.agent];
 		let benchTokens = 0;
 		for (const agent of agents) {
 			benchTokens += benchAgent(db, agent, args, suite);

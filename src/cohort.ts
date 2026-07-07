@@ -22,7 +22,7 @@ import {
 	type VersionedTotal,
 	type WardenDb,
 } from "./db.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { knownAgents } from "./registry.js";
 
 /** Minimum completed sessions per cohort before a verdict is trustworthy. */
 const DEFAULT_MIN_N = 5;
@@ -273,7 +273,7 @@ export function parseCohortArgs(argv: string[]): CohortArgs {
 
 export function main(argv: string[]): number {
 	const args = parseCohortArgs(argv);
-	const agents = args.agent ? [args.agent] : [...DOMAIN_AGENTS];
+	const agents = args.agent ? [args.agent] : knownAgents();
 	const db = openDb();
 	try {
 		const results = agents.map((agent) =>

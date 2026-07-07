@@ -43,7 +43,7 @@ import {
 	openDb,
 	type RuleRow,
 } from "./db.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { assertKnownAgent } from "./registry.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROPOSE_TIMEOUT_MS = 2 * 60 * 1000;
@@ -218,11 +218,7 @@ export function parseEvolveArgs(argv: string[]): EvolveArgs {
 				throw new Error(`unknown flag: ${argv[i]}`);
 		}
 	}
-	if (!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)) {
-		throw new Error(
-			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${args.agent}")`,
-		);
-	}
+	assertKnownAgent(args.agent);
 	if (!Number.isInteger(args.runs) || args.runs < 1) {
 		throw new Error("--runs must be a positive integer");
 	}

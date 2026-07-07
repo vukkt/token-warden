@@ -18,8 +18,8 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { insertRule, listRulesByAgent, openDb, type RuleRow } from "./db.js";
 import { contextCost, trigramSimilarity } from "./distill.js";
+import { knownAgents } from "./registry.js";
 import type { SharedRule } from "./share.js";
-import { DOMAIN_AGENTS } from "./types.js";
 
 /** Matches src/distill.ts's dedupe threshold so adoption and distillation
  * treat "the same rule" identically. */
@@ -129,9 +129,9 @@ export function main(args: AdoptArgs): void {
 	if (ledger === null) {
 		throw new Error(`no valid token-warden ledger block found in ${args.from}`);
 	}
-	if (!(DOMAIN_AGENTS as readonly string[]).includes(ledger.agent)) {
+	if (!knownAgents().includes(ledger.agent)) {
 		throw new Error(
-			`ledger names agent "${ledger.agent}", not one of: ${DOMAIN_AGENTS.join(", ")}`,
+			`ledger names agent "${ledger.agent}", not one of: ${knownAgents().join(", ")}`,
 		);
 	}
 

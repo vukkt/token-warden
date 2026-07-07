@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getActiveRules, openDb } from "./db.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { assertKnownAgent, knownAgents } from "./registry.js";
 
 const STOPWORDS = new Set([
 	"a",
@@ -227,11 +227,8 @@ export function parseContradictArgs(argv: string[]): ContradictArgs {
 		else if (flag === "--gate") args.gate = true;
 		else throw new Error(`unknown flag: ${flag}`);
 	}
-	if (
-		args.agent &&
-		!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)
-	) {
-		throw new Error(`--agent must be one of: ${DOMAIN_AGENTS.join(", ")}`);
+	if (args.agent) {
+		assertKnownAgent(args.agent);
 	}
 	return args;
 }
@@ -245,7 +242,7 @@ export function main(argv: string[]): number {
 		console.log(`No CLAUDE.md found at ${args.file}; nothing to check.`);
 		return 0;
 	}
-	const agents = args.agent ? [args.agent] : [...DOMAIN_AGENTS];
+	const agents = args.agent ? [args.agent] : knownAgents();
 	const db = openDb();
 	try {
 		let any = false;

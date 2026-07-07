@@ -48,6 +48,7 @@ import {
 	goldenReplicateRuns,
 	openDb,
 } from "../src/db.js";
+import { assertKnownAgent, knownAgents } from "../src/registry.js";
 import {
 	allocateTopUpRuns,
 	assessDelta,
@@ -56,7 +57,6 @@ import {
 	mergeSummaries,
 	verdict,
 } from "../src/select.js";
-import { DOMAIN_AGENTS } from "../src/types.js";
 
 const DEFAULT_TRIALS = 2000;
 /** Permutation deals 2×runs distinct totals per trial, so pools of ≥4 qualify
@@ -304,11 +304,7 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 		const flag = argv[i];
 		if (flag === "--agent") {
 			const agent = argv[++i] ?? "";
-			if (!(DOMAIN_AGENTS as readonly string[]).includes(agent)) {
-				throw new Error(
-					`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${agent}")`,
-				);
-			}
+			assertKnownAgent(agent);
 			args.agent = agent;
 		} else if (flag === "--db") {
 			const path = argv[++i];
@@ -457,7 +453,7 @@ function reportAgent(
 
 export function main(argv: string[]): number {
 	const args = parseEmpiricalArgs(argv);
-	const agents = args.agent ? [args.agent] : [...DOMAIN_AGENTS];
+	const agents = args.agent ? [args.agent] : knownAgents();
 	const db = args.dbPath ? openDb(args.dbPath) : openDb();
 	try {
 		const bar = Math.ceil(2 * effectiveRent(args.rent));

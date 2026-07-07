@@ -41,7 +41,7 @@ import {
 	type RuleRow,
 	type WardenDb,
 } from "./db.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { knownAgents } from "./registry.js";
 
 interface ModelbenchArgs {
 	agent: string;
@@ -92,12 +92,9 @@ export function parseModelbenchArgs(argv: string[]): ModelbenchArgs {
 				throw new Error(`unknown flag: ${argv[i]}`);
 		}
 	}
-	if (
-		args.agent !== "all" &&
-		!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)
-	) {
+	if (args.agent !== "all" && !knownAgents().includes(args.agent)) {
 		throw new Error(
-			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")}, all (got "${args.agent}")`,
+			`--agent must be one of: ${knownAgents().join(", ")}, all (got "${args.agent}")`,
 		);
 	}
 	if (args.agent === "all" && args.task !== null) {
@@ -180,7 +177,7 @@ export function main(args: ModelbenchArgs): void {
 		// Category sweep: one comparison per domain suite, then the roll-up.
 		const comparisons: Comparison[] = [];
 		let totalBenchTokens = 0;
-		for (const agent of DOMAIN_AGENTS) {
+		for (const agent of knownAgents()) {
 			if (args.model === (args.baseline ?? loadAgentDefinition(agent).model)) {
 				console.log(
 					`Model-bench agent=${agent}: baseline already "${args.model}" — skipping (nothing to compare)`,

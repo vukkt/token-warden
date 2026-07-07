@@ -18,7 +18,7 @@ import {
 	recordBaseline,
 	type WardenDb,
 } from "../src/db.js";
-import { DOMAIN_AGENTS } from "../src/types.js";
+import { knownAgents } from "../src/registry.js";
 
 describe("parseArgs", () => {
 	it("parses agent, rule, runs, and task", () => {
@@ -78,7 +78,7 @@ describe("golden task files", () => {
 	});
 
 	it("every shipped agent has a complete, well-formed golden suite (>=3 tasks, unique ids)", () => {
-		for (const agent of DOMAIN_AGENTS) {
+		for (const agent of knownAgents()) {
 			const tasks = loadGoldenTasks(agent);
 			// A complete suite is at least 3 tasks; suites may grow (only by
 			// adding files — baselines are frozen), so this is a floor, not an
