@@ -205,10 +205,10 @@ describe("select main() orchestration", () => {
 		const topUpCalls = runSuiteMock.mock.calls.filter((c) =>
 			(c[3] as { label: string }).label.endsWith("-topup"),
 		);
-		// One uniform pass over the whole 5-task sql suite — not N single-task
+		// One uniform pass over the whole 7-task sql suite — not N single-task
 		// allocation calls.
 		expect(topUpCalls).toHaveLength(1);
-		expect((topUpCalls[0]?.[2] as Array<unknown>).length).toBe(5);
+		expect((topUpCalls[0]?.[2] as Array<unknown>).length).toBe(7);
 	});
 
 	it("puts an active rule on probation at its first sub-threshold re-audit", () => {
