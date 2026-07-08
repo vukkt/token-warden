@@ -15,7 +15,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getActiveRules, openDb, type RuleRow } from "./db.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { assertKnownAgent } from "./registry.js";
 
 export interface SharedRule {
 	body: string;
@@ -102,11 +102,7 @@ export function parseShareArgs(argv: string[]): ShareArgs {
 			throw new Error(`unknown flag: ${argv[i]}`);
 		}
 	}
-	if (!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)) {
-		throw new Error(
-			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${args.agent}")`,
-		);
-	}
+	assertKnownAgent(args.agent);
 	return args;
 }
 

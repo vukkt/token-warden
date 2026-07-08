@@ -27,7 +27,7 @@ import {
 	type WardenDb,
 } from "./db.js";
 import { contextCost, trigramSimilarity } from "./distill.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { assertKnownAgent } from "./registry.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -97,11 +97,7 @@ export function parseCompressArgs(argv: string[]): CompressArgs {
 		else if (argv[i] === "--dry-run") dryRun = true;
 		else throw new Error(`unknown flag: ${argv[i]}`);
 	}
-	if (!(DOMAIN_AGENTS as readonly string[]).includes(agent)) {
-		throw new Error(
-			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${agent}")`,
-		);
-	}
+	assertKnownAgent(agent);
 	if (rule === null || !Number.isInteger(rule)) {
 		throw new Error("--rule <id> is required");
 	}

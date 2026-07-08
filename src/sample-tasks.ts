@@ -22,7 +22,7 @@ import {
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { trigramSimilarity } from "./distill.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { assertKnownAgent } from "./registry.js";
 
 /** Two prompts within this trigram similarity are treated as the same task. */
 const DEDUP_THRESHOLD = 0.6;
@@ -154,9 +154,7 @@ export function parseSampleArgs(argv: string[]): SampleArgs {
 		else if (flag === "--out") out = argv[++i] ?? "";
 		else throw new Error(`unknown flag: ${flag}`);
 	}
-	if (!(DOMAIN_AGENTS as readonly string[]).includes(agent)) {
-		throw new Error(`--agent must be one of: ${DOMAIN_AGENTS.join(", ")}`);
-	}
+	assertKnownAgent(agent);
 	if (!from) throw new Error("--from <dir|file> is required");
 	return {
 		agent,

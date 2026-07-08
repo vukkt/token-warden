@@ -19,8 +19,8 @@ import {
 	setRuleScope,
 	type WardenDb,
 } from "./db.js";
+import { assertKnownAgent } from "./registry.js";
 import { compileActiveMemory } from "./select.js";
-import { DOMAIN_AGENTS } from "./types.js";
 
 interface ScopeArgs {
 	agent: string;
@@ -47,11 +47,7 @@ export function parseScopeArgs(argv: string[]): ScopeArgs {
 		else if (flag === "--list") args.list = true;
 		else throw new Error(`unknown flag: ${flag}`);
 	}
-	if (!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)) {
-		throw new Error(
-			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${args.agent}")`,
-		);
-	}
+	assertKnownAgent(args.agent);
 	if (args.list) return args;
 	if (args.rule === null || !Number.isInteger(args.rule)) {
 		throw new Error("--rule <id> is required (or use --list)");
