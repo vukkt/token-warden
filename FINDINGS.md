@@ -421,11 +421,27 @@ under-protecting:
 
 This is correct statistics, not a bug: concentrating weights drops the Kish
 effective sample size (5 tasks -> ~3.2 here), so the SE is estimated from fewer
-effective degrees of freedom and a flat z=2 threshold is too loose. The
-estimator is right; the confidence multiple needs an effective-DoF (t /
-Welch-Satterthwaite) correction in the weighted branch before weighting can
-enter the gate. Held on its branch until then — the same discipline that kept
-robust-SE a report-only flag rather than a gate input.
+effective degrees of freedom and a flat z=2 threshold is too loose.
+
+**Resolution (v0.37.0): the effective-DoF correction closes it.** The confidence
+multiple is now widened by the ratio of small-sample t-inflations (Cornish-Fisher
+`t_df ≈ z(1 + (z²+1)/(4df))`) at the actual effective DoF vs the uniform-weight
+DoF — Welch-Satterthwaite within-task, Kish between-task. It is exactly 1 at
+uniform weights (bit-identical) and clamped to never loosen the gate below z.
+After the correction:
+
+| runs/side | unweighted FP | weighted FP (corrected) |
+|---|---|---|
+| 2 | 4.2% | 5.3% |
+| 3 | 2.7% | 3.4% |
+| 5 | 2.4% | 2.8% |
+
+Within ~0.7 points of unweighted at the default runs=3 and above; the ~1-point
+residual at runs=2 is the inherent limit of estimating variance from two runs
+(the correction assumes the DoF is known, which two runs barely support), a
+regime `/warden-power` already flags as underpowered. Weighting is now a gate
+input — reached, as with everything else, only after the harness said it was
+safe.
 
 ## Still open
 

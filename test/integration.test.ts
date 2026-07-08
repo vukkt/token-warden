@@ -69,6 +69,7 @@ function summary(taskId: string, tokens: number): TaskSummary {
 		results: [{ sessionId: `${taskId}-s`, tokens, completed: true }],
 		meanCompletedTokens: tokens,
 		highVariance: false,
+		weight: 1,
 	};
 }
 

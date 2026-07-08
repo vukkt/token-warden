@@ -54,6 +54,7 @@ describe("bench main() orchestration", () => {
 			results: [{ sessionId: `bench-${taskId}`, tokens, completed }],
 			meanCompletedTokens: completed ? tokens : 0,
 			highVariance: false,
+			weight: 1,
 		};
 	}
 

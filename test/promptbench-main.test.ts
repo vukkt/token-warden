@@ -74,6 +74,7 @@ function stubRunSuite(plan: Plan): typeof runSuite {
 				results: [{ sessionId, tokens, completed }],
 				meanCompletedTokens: completed ? tokens : 0,
 				highVariance: false,
+				weight: 1,
 			};
 		});
 	}) as unknown as typeof runSuite;

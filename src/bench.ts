@@ -118,6 +118,11 @@ export interface GoldenTask {
 	prompt: string;
 	successCheck: string;
 	file: string;
+	/** Distribution weight of this task in the suite (positive, finite; default
+	 * 1). A task standing in for a rarer-but-costlier production case can be
+	 * up-weighted so the measured saving reflects real-work value; the verdict
+	 * estimators weight the mean and its standard error by this. */
+	weight: number;
 }
 
 /** Parse the single-line `key: "value"` frontmatter of a golden task file. */
@@ -141,12 +146,27 @@ export function parseGoldenTask(text: string, file: string): GoldenTask {
 	for (const key of required) {
 		if (!fields.get(key)) throw new Error(`${file}: missing "${key}"`);
 	}
+	// Optional distribution weight: absent -> 1. A present value must parse to a
+	// positive finite number; 0, negative, NaN and non-numeric strings throw so a
+	// typo can never silently zero out a task's contribution to the verdict.
+	let weight = 1;
+	const weightRaw = fields.get("weight");
+	if (weightRaw !== undefined) {
+		const parsed = Number(weightRaw);
+		if (!Number.isFinite(parsed) || parsed <= 0) {
+			throw new Error(
+				`${file}: "weight" must be a positive finite number (got "${weightRaw}")`,
+			);
+		}
+		weight = parsed;
+	}
 	return {
 		id: fields.get("id") as string,
 		agent: fields.get("agent") as string,
 		prompt: fields.get("prompt") as string,
 		successCheck: fields.get("success_check") as string,
 		file,
+		weight,
 	};
 }
 
@@ -458,11 +478,15 @@ export interface TaskSummary {
 	results: RunResult[];
 	meanCompletedTokens: number;
 	highVariance: boolean;
+	/** Distribution weight carried through from the golden task (default 1). The
+	 * weighted verdict estimators in src/select.ts read it off the summaries. */
+	weight: number;
 }
 
 export function summarizeTask(
 	taskId: string,
 	results: RunResult[],
+	weight = 1,
 ): TaskSummary {
 	const completedTokens = results
 		.filter((r) => r.completed)
@@ -473,7 +497,7 @@ export function summarizeTask(
 		const spread = Math.max(...completedTokens) - Math.min(...completedTokens);
 		highVariance = spread / avg > VARIANCE_WARN_RATIO;
 	}
-	return { taskId, results, meanCompletedTokens: avg, highVariance };
+	return { taskId, results, meanCompletedTokens: avg, highVariance, weight };
 }
 
 export interface SuiteOptions {
@@ -534,7 +558,7 @@ export function runSuite(
 				`${result.completed ? "ok" : "FAILED-CHECK"} ${result.tokens} tokens (${result.sessionId})`,
 			);
 		}
-		const summary = summarizeTask(task.id, results);
+		const summary = summarizeTask(task.id, results, task.weight);
 		console.log(
 			`  [${options.label}] ${task.id}: mean(completed)=${summary.meanCompletedTokens}` +
 				(summary.highVariance ? "  runs differ by >25%" : ""),

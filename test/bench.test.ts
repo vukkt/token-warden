@@ -165,6 +165,36 @@ describe("summarizeTask", () => {
 		]);
 		expect(summary.highVariance).toBe(false);
 	});
+
+	it("defaults weight to 1 and carries an explicit weight through", () => {
+		const results = [{ sessionId: "a", tokens: 100, completed: true }];
+		expect(summarizeTask("t", results).weight).toBe(1);
+		expect(summarizeTask("t", results, 4).weight).toBe(4);
+	});
+});
+
+describe("parseGoldenTask weight", () => {
+	const base =
+		'---\nid: sql-01\nagent: sql\nprompt: "Do the thing."\nsuccess_check: "true"';
+	it("defaults an absent weight to 1", () => {
+		expect(parseGoldenTask(`${base}\n---\nbody`, "x.md").weight).toBe(1);
+	});
+	it("parses a fractional weight", () => {
+		expect(
+			parseGoldenTask(`${base}\nweight: 2.5\n---\nbody`, "x.md").weight,
+		).toBe(2.5);
+	});
+	it("rejects a zero, negative, or non-numeric weight", () => {
+		expect(() =>
+			parseGoldenTask(`${base}\nweight: 0\n---\nbody`, "x.md"),
+		).toThrow(/weight/);
+		expect(() =>
+			parseGoldenTask(`${base}\nweight: -3\n---\nbody`, "x.md"),
+		).toThrow(/weight/);
+		expect(() =>
+			parseGoldenTask(`${base}\nweight: x\n---\nbody`, "x.md"),
+		).toThrow(/weight/);
+	});
 });
 
 describe("baseline freezing", () => {
