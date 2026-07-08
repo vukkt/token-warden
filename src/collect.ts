@@ -20,8 +20,8 @@ import {
 	upsertRun,
 } from "./db.js";
 import { shouldDistill } from "./distill.js";
+import { knownAgents } from "./registry.js";
 import { parseTranscriptFile } from "./transcript.js";
-import { DOMAIN_AGENTS } from "./types.js";
 
 /** A session is flagged anomalous when its total tokens reach this multiple
  * of the agent's recent median, given at least this many prior sessions. */
@@ -89,7 +89,7 @@ function resolveAgent(
 	agentType: string | null | undefined,
 	parsedAgent: string,
 ): string {
-	if (agentType && (DOMAIN_AGENTS as readonly string[]).includes(agentType)) {
+	if (agentType && knownAgents().includes(agentType)) {
 		return agentType;
 	}
 	return parsedAgent;
@@ -196,7 +196,7 @@ export async function main(): Promise<void> {
 		// candidates would queue forever.
 		if (
 			process.env.TOKEN_WARDEN_NO_DISTILL !== "1" &&
-			(DOMAIN_AGENTS as readonly string[]).includes(agent) &&
+			knownAgents().includes(agent) &&
 			shouldDistill(db, agent, runId, total)
 		) {
 			spawn(

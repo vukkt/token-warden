@@ -23,7 +23,7 @@ import {
 	openDb,
 	type ReceiptRow,
 } from "./db.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { assertKnownAgent, knownAgents } from "./registry.js";
 
 const DEFAULT_MIN_N = 5;
 
@@ -168,11 +168,7 @@ export function parseConfirmArgs(argv: string[]): ConfirmArgs {
 		const flag = argv[i];
 		if (flag === "--agent") {
 			const agent = argv[++i] ?? "";
-			if (!(DOMAIN_AGENTS as readonly string[]).includes(agent)) {
-				throw new Error(
-					`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${agent}")`,
-				);
-			}
+			assertKnownAgent(agent);
 			args.agent = agent;
 		} else if (flag === "--min-n") {
 			const n = Number(argv[++i]);
@@ -189,7 +185,7 @@ export function parseConfirmArgs(argv: string[]): ConfirmArgs {
 
 export function main(argv: string[]): number {
 	const args = parseConfirmArgs(argv);
-	const agents = args.agent ? [args.agent] : [...DOMAIN_AGENTS];
+	const agents = args.agent ? [args.agent] : knownAgents();
 	const db = openDb();
 	try {
 		const results = agents.map((agent) => {

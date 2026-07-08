@@ -27,7 +27,7 @@ import {
 	type WardenDb,
 } from "./db.js";
 import { blendedDollarsPerToken, type Price, priceFor } from "./pricing.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { assertKnownAgent, knownAgents } from "./registry.js";
 
 /** Average weeks per calendar month, for --months → weeks. */
 const WEEKS_PER_MONTH = 4.345;
@@ -276,18 +276,15 @@ export function parseCostArgs(argv: string[]): CostArgs {
 			args.project = true;
 		} else throw new Error(`unknown flag: ${flag}`);
 	}
-	if (
-		args.agent &&
-		!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)
-	) {
-		throw new Error(`--agent must be one of: ${DOMAIN_AGENTS.join(", ")}`);
+	if (args.agent) {
+		assertKnownAgent(args.agent);
 	}
 	return args;
 }
 
 export function main(argv: string[]): number {
 	const args = parseCostArgs(argv);
-	const agents = args.agent ? [args.agent] : [...DOMAIN_AGENTS];
+	const agents = args.agent ? [args.agent] : knownAgents();
 	const db = openDb();
 	try {
 		if (args.project) {

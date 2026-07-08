@@ -35,7 +35,7 @@ import {
 	openDb,
 	type RuleRow,
 } from "./db.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { assertKnownAgent } from "./registry.js";
 
 interface PromptbenchArgs {
 	agent: string;
@@ -80,11 +80,7 @@ export function parsePromptbenchArgs(argv: string[]): PromptbenchArgs {
 				throw new Error(`unknown flag: ${argv[i]}`);
 		}
 	}
-	if (!(DOMAIN_AGENTS as readonly string[]).includes(args.agent)) {
-		throw new Error(
-			`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${args.agent}")`,
-		);
-	}
+	assertKnownAgent(args.agent);
 	if (args.variant.trim() === "") {
 		throw new Error("--variant <path to agent .md file> is required");
 	}

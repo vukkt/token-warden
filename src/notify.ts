@@ -22,7 +22,7 @@ import {
 	openDb,
 	type WardenDb,
 } from "./db.js";
-import { DOMAIN_AGENTS } from "./types.js";
+import { knownAgents } from "./registry.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -34,9 +34,7 @@ export function buildNudge(
 ): string | null {
 	// Only domain agents can be measured by /warden-select; anything else
 	// would nudge the user toward a command that errors.
-	const counts = allCounts.filter((c) =>
-		(DOMAIN_AGENTS as readonly string[]).includes(c.agent),
-	);
+	const counts = allCounts.filter((c) => knownAgents().includes(c.agent));
 	if (counts.length === 0) return null;
 	const total = counts.reduce((sum, c) => sum + c.pending, 0);
 	const perAgent = counts.map((c) => `${c.agent}: ${c.pending}`).join(", ");
@@ -63,7 +61,7 @@ export function planAutoSelect(
 		return { agent: null, reason: "TOKEN_WARDEN_AUTO_SELECT is not set" };
 	}
 	const counts = allCounts
-		.filter((c) => (DOMAIN_AGENTS as readonly string[]).includes(c.agent))
+		.filter((c) => knownAgents().includes(c.agent))
 		.sort((a, b) => b.pending - a.pending);
 	const top = counts[0];
 	if (!top) return { agent: null, reason: "no pending candidates" };

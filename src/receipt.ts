@@ -23,8 +23,8 @@ import {
 	type WardenDb,
 } from "./db.js";
 import { blendedDollarsPerToken, priceFor } from "./pricing.js";
+import { assertKnownAgent, knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
-import { DOMAIN_AGENTS } from "./types.js";
 
 function fmt(n: number): string {
 	return n.toLocaleString("en-US");
@@ -115,10 +115,8 @@ export function parseReceiptArgs(argv: string[]): ReceiptArgs {
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
 		if (flag === "--agent") {
-			const value = argv[++i];
-			if (!value || !(DOMAIN_AGENTS as readonly string[]).includes(value)) {
-				throw new Error(`--agent must be one of: ${DOMAIN_AGENTS.join(", ")}`);
-			}
+			const value = argv[++i] ?? "";
+			assertKnownAgent(value);
 			args.agent = value;
 		} else if (flag === "--json") {
 			args.json = true;
@@ -131,7 +129,7 @@ export function parseReceiptArgs(argv: string[]): ReceiptArgs {
 
 export function main(argv: string[]): number {
 	const args = parseReceiptArgs(argv);
-	const agents = args.agent ? [args.agent] : [...DOMAIN_AGENTS];
+	const agents = args.agent ? [args.agent] : knownAgents();
 	const db = openDb();
 	try {
 		if (args.json) {

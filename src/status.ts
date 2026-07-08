@@ -23,8 +23,8 @@ import {
 	toolCostRollup,
 	type WardenDb,
 } from "./db.js";
+import { knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
-import { DOMAIN_AGENTS } from "./types.js";
 
 const TOTAL_SQL = RUN_TOTAL_TOKENS_SQL;
 
@@ -169,7 +169,7 @@ export function renderStatus(db: WardenDb): string {
 	lines.push(
 		"----------|------------------|----------------------|---------------------------",
 	);
-	for (const agent of [...DOMAIN_AGENTS, "main"]) {
+	for (const agent of [...knownAgents(), "main"]) {
 		const runs = runCounts(db, agent);
 		const rules = ruleCounts(db, agent);
 		const suite = suiteComparison(db, agent);
@@ -184,7 +184,7 @@ export function renderStatus(db: WardenDb): string {
 	lines.push("");
 	lines.push("Learning curve (avg completed golden-run tokens by day):");
 	let anyCurve = false;
-	for (const agent of DOMAIN_AGENTS) {
+	for (const agent of knownAgents()) {
 		const curve = learningCurve(db, agent);
 		if (curve.length === 0) continue;
 		anyCurve = true;
@@ -200,7 +200,7 @@ export function renderStatus(db: WardenDb): string {
 	lines.push("");
 	lines.push("Active rules:");
 	let anyActive = false;
-	for (const agent of DOMAIN_AGENTS) {
+	for (const agent of knownAgents()) {
 		for (const rule of getActiveRules(db, agent)) {
 			anyActive = true;
 			const provenance =
@@ -215,7 +215,7 @@ export function renderStatus(db: WardenDb): string {
 	lines.push("");
 	lines.push("Last evictions (max 5 per agent):");
 	let anyEvicted = false;
-	for (const agent of DOMAIN_AGENTS) {
+	for (const agent of knownAgents()) {
 		for (const rule of lastEvictions(db, agent, 5)) {
 			anyEvicted = true;
 			lines.push(
@@ -230,7 +230,7 @@ export function renderStatus(db: WardenDb): string {
 		"Real-work learning (avg completed session tokens per ruleset version; domain agents only — rules never apply to 'main'):",
 	);
 	let anyRealWork = false;
-	for (const agent of DOMAIN_AGENTS) {
+	for (const agent of knownAgents()) {
 		const curve = realWorkCurveByAgent(db, agent);
 		if (curve.length === 0) continue;
 		anyRealWork = true;

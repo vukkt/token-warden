@@ -30,8 +30,8 @@ import {
 	openDb,
 	type WardenDb,
 } from "./db.js";
+import { assertKnownAgent, knownAgents } from "./registry.js";
 import { confidenceZ, effectiveRent, sampleVariance } from "./select.js";
-import { DOMAIN_AGENTS } from "./types.js";
 
 /** One-sided normal quantiles for the planner's two power targets. */
 export const Z_POWER_80 = 0.8416;
@@ -213,11 +213,7 @@ export function parsePowerArgs(argv: string[]): PowerArgs {
 		const flag = argv[i];
 		if (flag === "--agent") {
 			const agent = argv[++i] ?? "";
-			if (!(DOMAIN_AGENTS as readonly string[]).includes(agent)) {
-				throw new Error(
-					`--agent must be one of: ${DOMAIN_AGENTS.join(", ")} (got "${agent}")`,
-				);
-			}
+			assertKnownAgent(agent);
 			args.agent = agent;
 		} else if (flag === "--target-saving") {
 			const n = Number(argv[++i]);
@@ -338,7 +334,7 @@ interface PowerJson {
 
 export function main(argv: string[]): number {
 	const args = parsePowerArgs(argv);
-	const agents = args.agent ? [args.agent] : [...DOMAIN_AGENTS];
+	const agents = args.agent ? [args.agent] : knownAgents();
 	const db = openDb();
 	try {
 		const reports: string[] = [];

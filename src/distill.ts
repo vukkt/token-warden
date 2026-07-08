@@ -33,8 +33,8 @@ import {
 	recentQuestionsFrom,
 	type WardenDb,
 } from "./db.js";
+import { knownAgents } from "./registry.js";
 import { digestTranscript } from "./transcript.js";
-import { DOMAIN_AGENTS } from "./types.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -325,7 +325,7 @@ export function distill(args: DistillArgs): void {
 			logLine(`run ${args.runId} not found; nothing to distill`);
 			return;
 		}
-		if (!(DOMAIN_AGENTS as readonly string[]).includes(run.agent)) {
+		if (!knownAgents().includes(run.agent)) {
 			logLine(
 				`run ${run.id}: agent "${run.agent}" has no golden suite; rules would be unmeasurable — skipping`,
 			);

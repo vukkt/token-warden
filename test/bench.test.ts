@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	compileMemoryMd,
@@ -18,7 +19,7 @@ import {
 	recordBaseline,
 	type WardenDb,
 } from "../src/db.js";
-import { DOMAIN_AGENTS } from "../src/types.js";
+import { knownAgents } from "../src/registry.js";
 
 describe("parseArgs", () => {
 	it("parses agent, rule, runs, and task", () => {
@@ -78,7 +79,7 @@ describe("golden task files", () => {
 	});
 
 	it("every shipped agent has a complete, well-formed golden suite (>=3 tasks, unique ids)", () => {
-		for (const agent of DOMAIN_AGENTS) {
+		for (const agent of knownAgents()) {
 			const tasks = loadGoldenTasks(agent);
 			// A complete suite is at least 3 tasks; suites may grow (only by
 			// adding files — baselines are frozen), so this is a floor, not an
@@ -94,6 +95,33 @@ describe("golden task files", () => {
 				expect(ids.has(task.id), `duplicate task id ${task.id}`).toBe(false);
 				ids.add(task.id);
 			}
+		}
+	});
+
+	it("the narrower split tasks parse and carry unique ids within their agent", () => {
+		const splits: Array<{ agent: string; file: string }> = [
+			{ agent: "sql", file: "../benchmarks/sql/golden-06.md" },
+			{ agent: "sql", file: "../benchmarks/sql/golden-07.md" },
+			{ agent: "testing", file: "../benchmarks/testing/golden-05.md" },
+			{ agent: "testing", file: "../benchmarks/testing/golden-06.md" },
+		];
+		const byAgent = new Map<string, Set<string>>();
+		for (const { agent, file } of splits) {
+			const path = fileURLToPath(new URL(file, import.meta.url));
+			const task = parseGoldenTask(readFileSync(path, "utf8"), path);
+			expect(task.agent).toBe(agent);
+			expect(task.id).toMatch(new RegExp(`^${agent}-\\d+$`));
+			expect(task.prompt.length).toBeGreaterThan(20);
+			expect(task.successCheck.length).toBeGreaterThan(0);
+			const seen = byAgent.get(agent) ?? new Set<string>();
+			expect(seen.has(task.id), `duplicate task id ${task.id}`).toBe(false);
+			seen.add(task.id);
+			byAgent.set(agent, seen);
+		}
+		// The added ids must also be unique against the rest of their live suite.
+		for (const agent of ["sql", "testing"]) {
+			const ids = loadGoldenTasks(agent).map((t) => t.id);
+			expect(new Set(ids).size).toBe(ids.length);
 		}
 	});
 });
