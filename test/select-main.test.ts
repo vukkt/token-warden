@@ -73,7 +73,11 @@ describe("select main() orchestration", () => {
 		return logSpy.mock.calls.map((c) => String(c[0])).join("\n");
 	}
 
-	function insertCandidate(body: string, contextCost = 10, agent = "sql"): number {
+	function insertCandidate(
+		body: string,
+		contextCost = 10,
+		agent = "sql",
+	): number {
 		const db = openDb();
 		try {
 			return insertRule(db, {
@@ -214,7 +218,8 @@ describe("select main() orchestration", () => {
 		// One uniform pass over the whole 7-task sql suite — not N single-task
 		// allocation calls.
 		expect(topUpCalls).toHaveLength(1);
-		expect((topUpCalls[0]?.[2] as Array<unknown>).length).toBe(7);
+		const firstTopUp = topUpCalls[0] as unknown[];
+		expect((firstTopUp[2] as unknown[]).length).toBe(7);
 	});
 
 	it("marks the decision line ', WEIGHTED' when any suite task carries a weight", () => {
@@ -241,8 +246,14 @@ describe("select main() orchestration", () => {
 				"---",
 				"",
 			].join("\n");
-		writeFileSync(join(benchmarksDir, "custom", "golden-01.md"), task("custom-01", "3"));
-		writeFileSync(join(benchmarksDir, "custom", "golden-02.md"), task("custom-02"));
+		writeFileSync(
+			join(benchmarksDir, "custom", "golden-01.md"),
+			task("custom-01", "3"),
+		);
+		writeFileSync(
+			join(benchmarksDir, "custom", "golden-02.md"),
+			task("custom-02"),
+		);
 		const id = insertCandidate("Batch the heavy path.", 10, "custom");
 		wireRunSuite({ baseline: [1000, 1000], measured: [500, 500] });
 

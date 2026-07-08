@@ -493,8 +493,7 @@ export function allocateTopUpRuns(
 			// The weighted SE term for task i is wᵢ²·s²ᵢ/nᵢ, so one extra run cuts
 			// it by wᵢ²·s²ᵢ/(nᵢ(nᵢ+1)). Greedy on that marginal minimizes the
 			// WEIGHTED SE for the budget. wᵢ = 1 recovers the old allocation exactly.
-			const marginal =
-				(s.weight ** 2 * s.variance) / (s.n * (s.n + 1));
+			const marginal = (s.weight ** 2 * s.variance) / (s.n * (s.n + 1));
 			if (marginal > bestMarginal) {
 				bestMarginal = marginal;
 				best = s;

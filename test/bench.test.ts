@@ -180,9 +180,9 @@ describe("parseGoldenTask weight", () => {
 		expect(parseGoldenTask(`${base}\n---\nbody`, "x.md").weight).toBe(1);
 	});
 	it("parses a fractional weight", () => {
-		expect(parseGoldenTask(`${base}\nweight: 2.5\n---\nbody`, "x.md").weight).toBe(
-			2.5,
-		);
+		expect(
+			parseGoldenTask(`${base}\nweight: 2.5\n---\nbody`, "x.md").weight,
+		).toBe(2.5);
 	});
 	it("rejects a zero, negative, or non-numeric weight", () => {
 		expect(() =>
