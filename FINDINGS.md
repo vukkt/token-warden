@@ -385,6 +385,48 @@ consequence for the dogfood plan: expect the fixture gate to bank only
 large-effect rules at default run counts; budget runs with /warden-power
 before a verification burn instead of discovering "inconclusive" after it.
 
+## Two calibration verdicts (2026-07): a policy rejected, a feature deferred
+
+v0.36.0 put two candidate changes through the simulation harness before the
+gate. Both were held back — the point of the harness.
+
+**Confidence-sequence retention loses to two-strike.** An anytime-valid
+confidence sequence (Howard et al. 2021) evicts when the time-uniform upper
+bound `UCB_t = mean_t + u(t)` drops below the 2x-rent bar. Against a
+pre-declared criterion (dead rule exits within 8 cycles AND earners live at
+least as long as under two-strike), it fails decisively:
+
+| effect | two-strike life | conf-seq life |
+|---|---|---|
+| 0 (dead) | 5.9 cyc | ~492 cyc |
+| 6,000 tok | 61 cyc | > 500 cyc |
+
+The binding constraint is not the CS theory but the bar/SE ratio: with a
+per-audit SE of ~5,500-7,900 tokens against a ~54-token bar, `u(t)` needs on
+the order of (SE/bar)^2 ~ 10^4 audits to shrink below the bar, so a dead rule
+essentially never exits. Two-strike stays. alpha/rho were fixed before the run
+and not tuned to force a win.
+
+**Distribution weighting inflates the false-positive rate at low run counts.**
+The weighted estimators are provably the exact propagation of per-task noise
+through the weighted mean, and bit-identical to the current gate when all
+weights are 1. But an A/A check with weights [4,1,1,1,1] shows the gate
+under-protecting:
+
+| runs/side | unweighted FP | weighted FP |
+|---|---|---|
+| 2 | 4.2% | 6.5% |
+| 3 | 2.7% | 4.0% |
+| 5 | 2.4% | 3.1% |
+
+This is correct statistics, not a bug: concentrating weights drops the Kish
+effective sample size (5 tasks -> ~3.2 here), so the SE is estimated from fewer
+effective degrees of freedom and a flat z=2 threshold is too loose. The
+estimator is right; the confidence multiple needs an effective-DoF (t /
+Welch-Satterthwaite) correction in the weighted branch before weighting can
+enter the gate. Held on its branch until then — the same discipline that kept
+robust-SE a report-only flag rather than a gate input.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can

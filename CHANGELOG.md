@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.36.0 — 2026-07-08
+
+Bring-your-own-agent (the productization step), narrower golden tasks to cut
+suite variance, and a principled retention policy tested and honestly rejected.
+Built as a reviewed PR stack; the distribution-weighting work is measured but
+deferred (see below).
+
+- **Bring-your-own-agent** (`src/registry.ts`). The four bundled domain agents
+  are no longer the ceiling: an integrator drops `<name>.md` agent definitions
+  into `TOKEN_WARDEN_AGENTS_DIR` (default `~/.token-warden/agents`) and golden
+  suites into `TOKEN_WARDEN_BENCHMARKS_DIR` (default `~/.token-warden/benchmarks`),
+  and every command discovers them via `knownAgents()`. With neither env var
+  set and no such directory present, behavior is byte-identical to before —
+  the bundled four stay the defaults. This is what lets token-warden measure a
+  user's own agents against their own workload rather than only the shipped
+  fixture.
+- **Narrower golden tasks** (`benchmarks/sql/golden-06,07`,
+  `benchmarks/testing/golden-05,06`). `/warden-health` and the empirical
+  calibration flagged sql-02 and testing-02 as the noisiest tasks, burying
+  modest savings under >25% run-to-run variance. Their scope is split into
+  four narrower, independent tasks (schema-only / repository-only;
+  insert-path / query-path) with hand-verified success checks. Frozen tasks
+  are untouched (invariant #4) — these are additions. Lower per-task variance
+  means cheaper, sharper verdicts on every future burn.
+- **Confidence-sequence retention, tested and rejected**
+  (`validation/calibration.ts`). An anytime-valid confidence sequence (Howard
+  et al. 2021) was added as a third policy column beside one- and two-strike,
+  against a pre-declared decision criterion. It loses: because the per-audit
+  SE (~5,500-7,900 tok) dwarfs the ~54-token bar, the time-uniform bound needs
+  on the order of (SE/bar)^2 audits to shrink below the bar, so a dead rule
+  essentially never exits (~492 cycles vs two-strike's ~6). Two-strike stays,
+  now with a principled competitor beaten on the record. A negative result,
+  reported as one — nothing tuned to force a win.
+- Deferred: distribution-weighted suites (task `weight:` in the verdict). The
+  estimators are implemented and proven exact (bit-identical on the unweighted
+  path), but the calibration harness showed the weighted false-positive rate
+  inflates above the pre-declared tolerance at low run counts — a real
+  effective-sample-size effect, not a bug. Held back rather than shipped with a
+  gate that under-protects; it returns once the confidence multiple accounts
+  for reduced effective degrees of freedom. Same discipline that kept robust-SE
+  out of the gate.
+
 ## v0.35.0 — 2026-07-06
 
 Statistical self-validation against the project's own recorded data: empirical
