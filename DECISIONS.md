@@ -557,6 +557,35 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.37.0 — distribution weighting enters the gate (effective-DoF correction)
+
+- **The correction is a ratio normalized to the uniform-weight case, not an absolute
+  t-test.** The unweighted gate uses a calibrated z (not a t-quantile); switching the
+  weighted path to an absolute t would have changed the unweighted numbers too and broken
+  the bit-identical guarantee. Instead the multiple is scaled by
+  `t(df_actual)/t(df_uniform)` via the Cornish-Fisher expansion, which is exactly 1 when
+  weights are uniform (df_actual == df_uniform) and grows only as concentration lowers the
+  effective DoF. The target is parity with the already-accepted unweighted false-positive
+  rate at the same run count, not the nominal z.
+- **Clamped to tighten-only.** Up-weighting a LOW-variance task can raise the effective DoF
+  and pull the raw ratio below 1, which would loosen the gate beneath the calibrated
+  unweighted z. A gate must never be loosened by weighting, so the factor is clamped to
+  >= 1: weighting can make the bar stricter, never weaker. The cost is mild conservatism
+  in those configurations, which is the safe direction.
+- **Per-task DoF uses the simple two-sample form (n_wo-1)+(n_w-1), not the full per-side
+  Welch.** This feeds a second-order correction (a ratio of small-sample inflations), so
+  robustness beats precision; the full Welch per-task DoF gives the same value at equal
+  variances and adds division-by-tiny-number fragility for no meaningful gain.
+- **runs=2 keeps a ~1-point residual, and that is accepted, not tuned away.** The
+  correction assumes the effective DoF is known; two runs per side barely support a
+  variance estimate at all, so no multiple correction can fully fix it. Rather than add a
+  fudge factor to force the calibration under 1 point (the exact sin the harness exists to
+  prevent), the residual is documented and left — the operative regime is runs>=3, where
+  the weighted gate matches the unweighted one within tolerance.
+- **Weighting stays off the frozen bundled suites.** Weights are for new/added tasks and
+  bring-your-own-agent suites; the shipped suites remain unweighted so every existing
+  baseline and verdict is unchanged (invariant #4 / #5).
+
 ## v0.36.0 — bring-your-own-agent, task splitting, a rejected retention policy
 
 - **The agent set is discovered, not hardcoded — but the bundled four stay the default.**

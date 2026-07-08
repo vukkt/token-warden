@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.37.0 — 2026-07-08
+
+Distribution-weighted golden suites enter the gate — the feature deferred in
+v0.36.0, now shipped with the effective-degrees-of-freedom correction that
+closes the calibration gap.
+
+- **Task weights in the verdict** (`src/select.ts`, `src/bench.ts`). A golden
+  task may carry `weight: N` in its frontmatter (default 1); the verdict
+  estimators weight the mean saving `Σwᵢsᵢ/Σwᵢ`, the within-task standard error
+  `sqrt(Σwᵢ²·[·])/Σwᵢ`, the between-task fallback, and the Neyman top-up
+  allocation. A rule protecting a rare but expensive production case is measured
+  in proportion to its real-work value instead of being diluted by common cheap
+  tasks. With every weight 1 the path is bit-identical to before (pinned).
+- **Effective-DoF confidence correction** (`src/select.ts`
+  `withinTaskDofInflation`/`betweenTaskDofInflation`). Concentrating weight
+  lowers the effective sample size of the SE estimate, so a flat z=2 quantile
+  under-covers — the calibration harness measured the weighted false-positive
+  rate at ~6.5% vs ~4.2% unweighted at runs=2. The confidence multiple is now
+  widened by the ratio of small-sample t-inflations (Cornish-Fisher) at the
+  actual vs uniform-weight effective DoF (Welch-Satterthwaite within-task, Kish
+  between-task). It is exactly 1 at uniform weights (bit-identical) and clamped
+  to never loosen the gate below the unweighted z. After the correction the
+  weighted FP is within ~0.7 points of unweighted at the default runs=3 and
+  above (5.3/3.4/2.8 vs 4.2/2.7/2.4 gaussian); the ~1-point residual at runs=2
+  is the inherent limit of estimating variance from two runs, a regime
+  `/warden-power` already flags as underpowered.
+- The bundled suites stay unweighted (frozen; invariant #4). Weighting is for
+  new tasks and bring-your-own-agent suites, so existing baselines and verdicts
+  are unchanged.
+
 ## v0.36.0 — 2026-07-08
 
 Bring-your-own-agent (the productization step), narrower golden tasks to cut

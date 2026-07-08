@@ -285,6 +285,97 @@ function withinTaskSE(pairs: SidePair[], weights: number[]): number | null {
 	return Math.sqrt(sumVar / sumW ** 2);
 }
 
+/**
+ * Effective-degrees-of-freedom inflation of the confidence multiple for a
+ * WEIGHTED suite. Concentrating weight onto fewer tasks lowers the effective
+ * sample size of the SE *estimate*, so a flat normal quantile z under-covers
+ * and the false-positive rate creeps up (the calibration harness measured this:
+ * weights [4,1,1,1,1] pushed FP from ~4% to ~6.5% at runs=2). We widen z by the
+ * ratio of the small-sample t-inflation at the actual effective DoF to the same
+ * at the uniform-weight DoF, using the Cornish-Fisher expansion
+ * `t_df ≈ z·(1 + (z²+1)/(4·df))`:
+ *
+ *   f = [1 + (z²+1)/(4·df_actual)] / [1 + (z²+1)/(4·df_uniform)]
+ *
+ * At uniform weights df_actual == df_uniform so f == 1 *exactly* — the unweighted
+ * gate is bit-identical. As weights concentrate, df_actual < df_uniform so f > 1
+ * and the gate tightens back toward the unweighted false-positive rate. The
+ * target is parity with the (already accepted) unweighted gate at the same run
+ * count, not the nominal z — weighting must not make the gate more
+ * anti-conservative than not weighting.
+ */
+function tInflation(df: number, z: number): number {
+	return Number.isFinite(df) && df > 0 ? 1 + (z ** 2 + 1) / (4 * df) : 1;
+}
+
+/** Within-task effective-DoF inflation: Welch-Satterthwaite over the per-task
+ * variance contributions aᵢ = wᵢ²·(s²_wo,i/n + s²_w,i/n), with per-task DoF
+ * (n_wo-1)+(n_w-1). Returns 1 for uniform weights (bit-identical) or when the
+ * DoF is not estimable. `weights` is aligned with `pairs`. Exported for the
+ * unit tests that pin the correction's shape. */
+export function withinTaskDofInflation(
+	pairs: SidePair[],
+	weights: number[],
+	z: number,
+): number {
+	const k = pairs.length;
+	if (k === 0) return 1;
+	const w0 = weights[0] as number;
+	if (weights.every((w) => w === w0)) return 1;
+	const pooledWithout = pooledVariance(pairs.map((p) => p.without));
+	const pooledWith = pooledVariance(pairs.map((p) => p.with));
+	if (pooledWithout === null || pooledWith === null) return 1;
+	const terms: number[] = [];
+	const dofs: number[] = [];
+	for (let i = 0; i < k; i++) {
+		const p = pairs[i] as SidePair;
+		const vW = sampleVariance(p.without) ?? pooledWithout;
+		const vR = sampleVariance(p.with) ?? pooledWith;
+		const term = vW / p.without.length + vR / p.with.length;
+		if (term <= 0) return 1; // a zero-variance task makes df undefined; no adj.
+		terms.push(term);
+		dofs.push(Math.max(1, p.without.length - 1 + (p.with.length - 1)));
+	}
+	// Welch-Satterthwaite DoF of Σ aᵢ, aᵢ = wᵢ²·termᵢ.
+	const satterthwaite = (ws: number[]): number => {
+		let num = 0;
+		let den = 0;
+		for (let i = 0; i < k; i++) {
+			const a = (ws[i] as number) ** 2 * (terms[i] as number);
+			num += a;
+			den += (a * a) / (dofs[i] as number);
+		}
+		return den > 0 ? (num * num) / den : Number.POSITIVE_INFINITY;
+	};
+	// Clamp to >= 1: weighting may TIGHTEN the gate (concentration onto
+	// equal-variance tasks lowers effective DoF) but must never loosen it below
+	// the calibrated unweighted z — a gate is only ever made stricter by weights.
+	return Math.max(
+		1,
+		tInflation(satterthwaite(weights), z) /
+			tInflation(satterthwaite(weights.map(() => 1)), z),
+	);
+}
+
+/** Between-task effective-DoF inflation (the runs=1 fallback). Concentrating
+ * weight lowers the Kish effective sample size n_eff = (Σw)²/Σw²; the SE there
+ * carries n_eff - 1 degrees of freedom versus K - 1 unweighted. Returns 1 for
+ * uniform weights (bit-identical). Exported for the unit tests. */
+export function betweenTaskDofInflation(weights: number[], z: number): number {
+	const k = weights.length;
+	if (k < 2) return 1;
+	const w0 = weights[0] as number;
+	if (weights.every((w) => w === w0)) return 1;
+	const sumW = weights.reduce((a, b) => a + b, 0);
+	const sumW2 = weights.reduce((a, w) => a + w ** 2, 0);
+	const nEff = (sumW * sumW) / sumW2;
+	// Kish n_eff <= K always, so this ratio is already >= 1; clamp defensively.
+	return Math.max(
+		1,
+		tInflation(Math.max(1, nEff - 1), z) / tInflation(k - 1, z),
+	);
+}
+
 const mean = (xs: number[]): number =>
 	xs.reduce((a, b) => a + b, 0) / xs.length;
 
@@ -395,7 +486,14 @@ export function assessDelta(
 	let standardError: number | null = rawSE;
 	let standardErrorBasis: "within-task" | "between-task" | null =
 		rawSE !== null ? "within-task" : null;
-	if (rawSE === null && k >= 2) {
+	// Effective confidence multiple. For a weighted suite the SE estimate loses
+	// effective degrees of freedom, so z is widened toward the unweighted gate's
+	// coverage (== confidenceZ() exactly when weights are uniform). See
+	// with/betweenTaskDofInflation.
+	let effectiveZ = confidenceZ();
+	if (rawSE !== null) {
+		effectiveZ *= withinTaskDofInflation(rawPairs, weights, confidenceZ());
+	} else if (k >= 2) {
 		// runs=1 everywhere: no run-to-run estimate exists. Fall back to the
 		// between-task spread so confidence is never silently dropped. Reliability
 		// (frequency) weights: the unbiased weighted variance divides by
@@ -410,13 +508,14 @@ export function assessDelta(
 		const varW = wss / (sumW - sumW2 / sumW);
 		standardError = Math.sqrt(varW * sumW2) / sumW;
 		standardErrorBasis = "between-task";
+		effectiveZ *= betweenTaskDofInflation(weights, confidenceZ());
 	}
 
 	const threshold = 2 * effectiveRent(contextCost);
 	const uncertain =
 		!regression &&
 		standardError !== null &&
-		Math.abs(meanDelta - threshold) < confidenceZ() * standardError;
+		Math.abs(meanDelta - threshold) < effectiveZ * standardError;
 	return {
 		delta,
 		regression,

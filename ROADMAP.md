@@ -52,10 +52,13 @@ what remains is running the experiments and recording their results:
   tasks by run-to-run variance so the noisiest are named with evidence. Open:
   actually splitting them (`testing-02` at ~150k tokens/run, `sql-02`) — by
   *adding* task files, never editing frozen ones (invariant #4).
-- **Distribution-weighted / production-sampled suites.**
-  `/warden-sample-tasks` drafts candidate tasks from real transcripts; the
-  open half is weighting the suite to the production task distribution so a
-  rule protecting a rare, expensive case gets measured proportionally.
+- **Distribution-weighted / production-sampled suites.** Shipped in v0.37.0:
+  a golden task carries `weight: N` and the verdict estimators weight the mean,
+  SE, and top-up accordingly, with an effective-DoF confidence correction so
+  the weighted false-positive rate stays at parity with the unweighted gate
+  (calibration-proven). `/warden-sample-tasks` drafts candidate tasks from real
+  transcripts. Open: automatically deriving the weights from the observed
+  production task distribution (they are set by hand today).
 - **Per-category regression reporting.** Shipped in v0.34.0:
   `/warden-modelbench --agent all` sweeps every domain suite and closes with
   a per-category (backend vs frontend vs sql vs testing) regression roll-up.

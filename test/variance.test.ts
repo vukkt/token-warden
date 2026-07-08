@@ -8,10 +8,12 @@ import { buildNudge } from "../src/notify.js";
 import {
 	allocateTopUpRuns,
 	assessDelta,
+	betweenTaskDofInflation,
 	mergeSummaries,
 	type RunAllocation,
 	type SuiteRunner,
 	selectForAgent,
+	withinTaskDofInflation,
 } from "../src/select.js";
 
 function summary(
@@ -315,6 +317,80 @@ describe("assessDelta distribution weighting", () => {
 		const a = assessDelta(without, withRule, 25);
 		expect(a.standardErrorBasis).toBe("between-task");
 		expect(a.standardError).toBeCloseTo(167.70509831248424, 6);
+	});
+
+	it("is identical for any UNIFORM weight — the effective-DoF correction is a no-op", () => {
+		// Equal weights (whatever the value) must reproduce the unweighted verdict
+		// exactly: the weighted mean, SE, AND the effective-DoF confidence multiple
+		// all collapse to their unweighted forms. Pins the bit-identical guarantee.
+		const without = [summary("t1", [1000, 1100]), summary("t2", [2000, 2200])];
+		const withRule = [summary("t1", [940, 1030]), summary("t2", [1900, 2050])];
+		const base = assessDelta(without, withRule, 25);
+		const w7 = assessDelta(
+			[
+				summary("t1", [1000, 1100], true, 7),
+				summary("t2", [2000, 2200], true, 7),
+			],
+			[
+				summary("t1", [940, 1030], true, 7),
+				summary("t2", [1900, 2050], true, 7),
+			],
+			25,
+		);
+		expect(w7.delta).toBe(base.delta);
+		expect(w7.standardError).toBe(base.standardError);
+		expect(w7.uncertain).toBe(base.uncertain);
+	});
+});
+
+describe("effective-DoF confidence-multiple inflation (weighted gate)", () => {
+	// z = 2 by default; the correction widens it by the ratio of small-sample
+	// t-inflations at the actual vs uniform-weight effective degrees of freedom.
+	// Five EQUAL-variance tasks (matching the calibration scenario) so that
+	// concentrating weight genuinely lowers the effective DoF.
+	const equalVar = Array.from({ length: 5 }, (_, i) => ({
+		without: [1000 + i, 1100 + i],
+		with: [900 + i, 1010 + i],
+	}));
+
+	it("is exactly 1 for uniform weights (any value) — bit-identical unweighted", () => {
+		expect(withinTaskDofInflation(equalVar, [1, 1, 1, 1, 1], 2)).toBe(1);
+		expect(withinTaskDofInflation(equalVar, [5, 5, 5, 5, 5], 2)).toBe(1);
+		expect(betweenTaskDofInflation([1, 1, 1], 2)).toBe(1);
+		expect(betweenTaskDofInflation([3, 3], 2)).toBe(1);
+	});
+
+	it("tightens (> 1) and grows as weight concentrates onto equal-variance tasks", () => {
+		const mild = withinTaskDofInflation(equalVar, [2, 1, 1, 1, 1], 2);
+		const heavy = withinTaskDofInflation(equalVar, [9, 1, 1, 1, 1], 2);
+		expect(mild).toBeGreaterThan(1);
+		expect(heavy).toBeGreaterThan(mild);
+	});
+
+	it("tightens (> 1) and grows as weight concentrates (between-task, Kish)", () => {
+		const mild = betweenTaskDofInflation([2, 1, 1, 1, 1], 2);
+		const heavy = betweenTaskDofInflation([9, 1, 1, 1, 1], 2);
+		expect(mild).toBeGreaterThan(1);
+		expect(heavy).toBeGreaterThan(mild);
+	});
+
+	it("never loosens the gate below the unweighted z (clamped at 1)", () => {
+		// Up-weighting a LOW-variance task would raise effective DoF and pull the
+		// raw ratio below 1; the clamp keeps the weighted gate at least as strict
+		// as the unweighted one.
+		const mixed = [
+			{ without: [1000, 1010], with: [900, 910] }, // quiet task
+			{ without: [2000, 2400], with: [1900, 2300] }, // noisy task
+		];
+		expect(withinTaskDofInflation(mixed, [9, 1], 2)).toBe(1);
+	});
+
+	it("returns 1 when a task has zero within-task variance (df undefined)", () => {
+		const flat = [
+			{ without: [1000, 1000], with: [1000, 1000] },
+			{ without: [2000, 2000], with: [2000, 2000] },
+		];
+		expect(withinTaskDofInflation(flat, [9, 1], 2)).toBe(1);
 	});
 });
 
