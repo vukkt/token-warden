@@ -245,8 +245,8 @@ describe("bench main() orchestration", () => {
 		} finally {
 			dbRead.close();
 		}
-		// 5 golden sql tasks × 1 result × 500 tokens from the stub.
-		expect(benchTokens).toBe(2500);
+		// 7 golden sql tasks × 1 result × 500 tokens from the stub.
+		expect(benchTokens).toBe(3500);
 	});
 
 	it("fails fast on Windows, where the fixture-copy benchmark cannot run", () => {
