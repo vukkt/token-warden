@@ -557,6 +557,41 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.36.0 — bring-your-own-agent, task splitting, a rejected retention policy
+
+- **The agent set is discovered, not hardcoded — but the bundled four stay the default.**
+  `DOMAIN_AGENTS` was validated in ~76 call sites; all now route through
+  `knownAgents()` / `assertKnownAgent()` (src/registry.ts), which appends valid custom
+  agents from `TOKEN_WARDEN_AGENTS_DIR` to the bundled defaults. The constant still exists
+  and still leads the ordering, so with no user directory present every code path is
+  byte-identical to before. Custom-agent basenames must match a strict lowercase slug so a
+  stray file never becomes an agent; a missing/unreadable directory contributes nothing and
+  never throws. This is the productization boundary — the tool can now measure a user's own
+  agents — implemented without weakening any invariant.
+- **Noisy tasks are split by ADDING files, never editing frozen ones (invariant #4).**
+  sql-02 and testing-02 were the named variance offenders; rather than touch them, their
+  scope is split into four new narrower tasks with success checks hand-verified to fail on
+  the pristine fixture and pass after the described change. New tasks carry no run1 baseline
+  until first benched — expected, and why they are additions rather than edits.
+- **Anytime-valid confidence sequences were tested against a pre-declared criterion and
+  lost.** Added as a third column in the churn simulation (not production code). The
+  criterion — dead-rule exit within 8 cycles AND earner lifetime at least two-strike's —
+  was fixed before the run; alpha/rho were not tuned afterward. It fails the dead-rule leg
+  by two orders of magnitude because the bar/SE ratio, not the CS theory, is binding
+  (u(t) needs ~(SE/bar)^2 audits to cross a ~54-token bar against a ~5,500-token SE). Two-
+  strike stays. Recording the negative result so the policy is not re-proposed without
+  addressing the bar/SE gap first.
+- **Distribution-weighted suites are implemented but deferred from the gate.** The weighted
+  estimators are the exact propagation of per-task noise through the weighted mean and are
+  bit-identical to the current gate on the unweighted path (pinned in tests). But the
+  calibration harness showed the weighted false-positive rate rising above the pre-declared
+  ~1-point tolerance at low run counts — a genuine effective-sample-size (Kish) effect that
+  makes a flat z=2 under-protect when weights concentrate, not a coding error. Per the same
+  rule that kept robust-SE out of the gate (measure it; if it inflates FP, do not ship it),
+  the feature is held on its branch until the confidence multiple accounts for reduced
+  effective degrees of freedom (a Welch-Satterthwaite / t correction in the weighted branch
+  only). The math is correct; the gate constant is what needs the follow-up.
+
 ## v0.35.0 — empirical calibration and the power planner
 
 - **The synthetic harness is calibrated to an assumed noise model; v0.35.0 calibrates

@@ -372,6 +372,18 @@ subagent — the optimizer extends each one's memory independently. Per-agent is
 deliberate: a rule that pays rent for the sql agent is never charged to the frontend
 agent's context.
 
+### Bring your own agent
+
+The bundled four are defaults, not a ceiling. To point token-warden at your own agents,
+drop `<name>.md` agent definitions into `TOKEN_WARDEN_AGENTS_DIR` (default
+`~/.token-warden/agents`) and golden suites into `TOKEN_WARDEN_BENCHMARKS_DIR`
+(default `~/.token-warden/benchmarks/<name>/`, same `golden-*.md` format as the bundled
+suites — `/warden-sample-tasks` can draft them from your real transcripts). Every command
+then discovers the custom agent automatically. With neither variable set and no such
+directory present, nothing changes — the bundled agents and their frozen baselines behave
+exactly as before. This is how you measure token-warden against *your* workload rather than
+the shipped fixture.
+
 ---
 
 ## Inter-agent approval gate (experimental)

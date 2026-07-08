@@ -65,6 +65,8 @@ set of environment variables, read at process start; all are optional.
 |---|---|---|
 | `TOKEN_WARDEN_DB` | `~/.token-warden/warden.db` | SQLite database path. Set to an isolated file to run benchmarks without touching real data (the validation harness uses this). |
 | `TOKEN_WARDEN_MEMORY_DIR` | `~/.claude/agent-memory` | Where compiled `MEMORY.md` files are written, one subdirectory per agent. |
+| `TOKEN_WARDEN_AGENTS_DIR` | `~/.token-warden/agents` | Bring-your-own-agent: directory of `<name>.md` agent definitions. Any valid lowercase-slug basename here becomes a known agent alongside the bundled four. Missing/empty is fine — the bundled agents stand. |
+| `TOKEN_WARDEN_BENCHMARKS_DIR` | `~/.token-warden/benchmarks` | Golden suites for custom agents: `<name>/golden-*.md`, same format as the bundled `benchmarks/<agent>/`. Consulted only for agents with no bundled suite. |
 | `TOKEN_WARDEN_NO_DISTILL` | unset | Set to `1` to suppress spawning the distiller from the Stop hook (collection still runs). |
 | `TOKEN_WARDEN_DISTILL_MODEL` | `sonnet` | Model the distiller calls to propose rules. Defaults to `sonnet` because candidate quality is the loop's bottleneck (haiku proposed narrow, low-impact rules — see FINDINGS.md). Override with `haiku` to economize. Also used by `/warden-compress`. |
 | `TOKEN_WARDEN_DISTILL_K` | `1` | Best-of-K distillation: sample the distiller K times (1–3) per expensive run and pool the distinct proposals. Each distinct candidate still costs a full benchmark to measure, so keep K small. |
