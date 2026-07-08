@@ -26,12 +26,14 @@ function summary(
 	taskId: string,
 	meanTokens: number,
 	completed = true,
+	weight = 1,
 ): TaskSummary {
 	return {
 		taskId,
 		results: [{ sessionId: `${taskId}-s`, tokens: meanTokens, completed }],
 		meanCompletedTokens: completed ? meanTokens : 0,
 		highVariance: false,
+		weight,
 	};
 }
 
@@ -107,6 +109,7 @@ describe("assessDelta (delta math)", () => {
 			],
 			meanCompletedTokens: 1100,
 			highVariance: false,
+			weight: 1,
 		};
 		const withRule: TaskSummary = {
 			taskId: "t1",
@@ -116,6 +119,7 @@ describe("assessDelta (delta math)", () => {
 			],
 			meanCompletedTokens: 400,
 			highVariance: false,
+			weight: 1,
 		};
 		expect(assessDelta([without], [withRule], 10).completionDrop).toBe(true);
 	});
@@ -131,6 +135,7 @@ describe("assessDelta (delta math)", () => {
 			],
 			meanCompletedTokens: 1100,
 			highVariance: false,
+			weight: 1,
 		};
 		const withRule: TaskSummary = {
 			taskId: "t1",
@@ -142,6 +147,7 @@ describe("assessDelta (delta math)", () => {
 			],
 			meanCompletedTokens: 855,
 			highVariance: false,
+			weight: 1,
 		};
 		const assessment = assessDelta([without], [withRule], 10);
 		expect(assessment.completionDrop).toBe(false);

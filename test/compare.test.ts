@@ -204,6 +204,7 @@ describe("runComparison", () => {
 			results: [{ sessionId, tokens: input, completed }],
 			meanCompletedTokens: completed ? input : 0,
 			highVariance: false,
+			weight: 1,
 		};
 	}
 

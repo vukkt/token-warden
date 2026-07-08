@@ -61,6 +61,7 @@ const summary = (taskId: string, tokens: number): TaskSummary => ({
 	results: [{ sessionId: `${taskId}-s`, tokens, completed: true }],
 	meanCompletedTokens: tokens,
 	highVariance: false,
+	weight: 1,
 });
 
 log("════ token-warden dress rehearsal (simulated agent, 0 tokens) ════\n");

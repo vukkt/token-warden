@@ -88,6 +88,7 @@ function side(
 	sd: number,
 	runs: number,
 	model: NoiseModel,
+	weights?: number[],
 ): TaskSummary[] {
 	const out: TaskSummary[] = [];
 	for (let t = 0; t < TASKS; t++) {
@@ -96,7 +97,7 @@ function side(
 			tokens: runTokens(rng, mean, sd, model),
 			completed: true,
 		}));
-		out.push(summarizeTask(`t${t}`, results));
+		out.push(summarizeTask(`t${t}`, results, weights?.[t] ?? 1));
 	}
 	return out;
 }
@@ -109,9 +110,10 @@ function keptOnce(
 	sd: number,
 	runs: number,
 	model: NoiseModel,
+	weights?: number[],
 ): boolean {
-	const without = side(rng, BASELINE, sd, runs, model);
-	const withRule = side(rng, BASELINE - trueDelta, sd, runs, model);
+	const without = side(rng, BASELINE, sd, runs, model, weights);
+	const withRule = side(rng, BASELINE - trueDelta, sd, runs, model, weights);
 	const a = assessDelta(without, withRule, RENT);
 	if (a.regression || a.delta === null || a.uncertain) return false;
 	return verdict({ measuredDelta: a.delta, contextCost: RENT }) === "active";
@@ -122,11 +124,12 @@ export function keepRate(
 	trueDelta: number,
 	runs: number,
 	model: NoiseModel,
+	weights?: number[],
 ): number {
 	const sd = BASELINE * SIGMA_FRAC;
 	let kept = 0;
 	for (let i = 0; i < TRIALS; i++) {
-		if (keptOnce(rng, trueDelta, sd, runs, model)) kept++;
+		if (keptOnce(rng, trueDelta, sd, runs, model, weights)) kept++;
 	}
 	return kept / TRIALS;
 }
@@ -170,6 +173,46 @@ function report(model: NoiseModel, z: number): void {
 	console.log(
 		`min detectable saving (power ≥ ${pct(POWER_TARGET)}): ${md.join("  ·  ")}`,
 	);
+}
+
+/** Distribution weights for the weighted-suite calibration scenario: one heavy
+ * task standing in for a rare-but-expensive production case, four light ones. */
+const SUITE_WEIGHTS = [4, 1, 1, 1, 1];
+
+/**
+ * WEIGHTED-SUITE FALSE-POSITIVE CHECK — the correctness proof for the weighted
+ * estimators (docs/specs/weighted-suites.md). Same synthetic model, same zero
+ * true effect, but the suite is weighted [4,1,1,1,1]. If the weighted
+ * within-task SE were mis-propagated (e.g. still divided by K² instead of
+ * (Σw)²/Σw²-adjusted), the uncertainty band would be too narrow and this FP
+ * rate would inflate above the unweighted one. The estimators are correct only
+ * if the two rows track within ~1 point at z=2.
+ */
+function weightedFPReport(model: NoiseModel): void {
+	process.env.WARDEN_CONFIDENCE_Z = "2";
+	console.log(
+		`\n=== weighted-suite FP check: weights [${SUITE_WEIGHTS.join(",")}] vs all-1 · noise model: ${model} · effect 0 · z=2 ===`,
+	);
+	console.log(
+		[
+			"suite".padStart(12),
+			...RUN_COUNTS.map((r) => `runs=${r}`.padStart(9)),
+		].join("  "),
+	);
+	const rows: Array<[string, number[] | undefined]> = [
+		["unweighted", undefined],
+		["weighted", SUITE_WEIGHTS],
+	];
+	for (const [label, weights] of rows) {
+		const cells = RUN_COUNTS.map((runs) => {
+			// Same per-cell seeds as the main FP row so the two suites face
+			// identical noise streams.
+			const rng = mulberry32(0x9e3779b1 ^ (runs * 131));
+			return pct(keepRate(rng, 0, runs, model, weights)).padStart(9);
+		});
+		console.log([label.padStart(12), ...cells].join("  "));
+	}
+	delete process.env.WARDEN_CONFIDENCE_Z;
 }
 
 /** One simulated re-audit of an ACTIVE rule with known true effect: measures
@@ -424,6 +467,8 @@ function main(): number {
 		report("derailment", z);
 	}
 	delete process.env.WARDEN_CONFIDENCE_Z;
+	weightedFPReport("gaussian");
+	weightedFPReport("derailment");
 	churnReport("gaussian");
 	churnReport("derailment");
 	console.log(
@@ -431,6 +476,9 @@ function main(): number {
 	);
 	console.log(
 		"The churn tables show expected active lifetime (in re-audit cycles) of a rule with a given TRUE effect: one-strike churns real earners at the per-cycle sub-threshold rate; two-strike squares it while a dead rule still exits within a few cycles.",
+	);
+	console.log(
+		"The weighted-suite FP check must show the weighted row within ~1 point of the unweighted row: the weighted SE is the exact propagation of per-task noise through the weighted mean, so weighting a suite redistributes power but must not manufacture confidence.",
 	);
 	console.log(
 		"Confidence-sequence column (NEGATIVE result): the anytime-valid upper bound UCB_t = mean_t + u(t) evicts only when it drops below the bar (~54 tok), but the per-audit SE is thousands of tokens. Shrinking u(t) below the bar needs t on the order of (SE/bar)^2 audits, so a DEAD rule essentially never exits (> 500 cycles) — the dead-rule leg of the pre-declared criterion fails. CS keeps genuine earners effectively forever, but so does it keep zero-value rules; the binding constraint is the bar/SE ratio, not the CS theory. Two-strike stays as the retention policy. Tuning alpha/rho would not close a gap this large and was not attempted.",

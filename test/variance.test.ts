@@ -18,6 +18,7 @@ function summary(
 	taskId: string,
 	tokens: number[],
 	completed = true,
+	weight = 1,
 ): TaskSummary {
 	const results = tokens.map((t, i) => ({
 		sessionId: `${taskId}-s${i}`,
@@ -31,7 +32,13 @@ function summary(
 					completedTokens.reduce((a, b) => a + b, 0) / completedTokens.length,
 				)
 			: 0;
-	return { taskId, results, meanCompletedTokens: mean, highVariance: false };
+	return {
+		taskId,
+		results,
+		meanCompletedTokens: mean,
+		highVariance: false,
+		weight,
+	};
 }
 
 describe("assessDelta", () => {
@@ -248,6 +255,69 @@ describe("assessDelta confidence band (WARDEN_CONFIDENCE_Z)", () => {
 	});
 });
 
+describe("assessDelta distribution weighting", () => {
+	it("is BIT-IDENTICAL on the unweighted path (regression pin)", () => {
+		// A fixed all-weight-1 scenario. These literals pin the exact outputs of
+		// the pre-weighting estimators; the weighted refactor must not move them.
+		const without = [
+			summary("t1", [1000, 1100, 1050]),
+			summary("t2", [2000, 2100, 1900]),
+		];
+		const withRule = [
+			summary("t1", [900, 950, 1000]),
+			summary("t2", [1850, 1900, 1950]),
+		];
+		const a = assessDelta(without, withRule, 25);
+		expect(a.delta).toBe(100);
+		expect(a.standardError).toBe(38.18813079129867);
+		expect(a.standardErrorBasis).toBe("within-task");
+		expect(a.uncertain).toBe(true);
+		expect(a.robustDelta).toBe(100);
+		expect(a.tailRisk).toBe(false);
+	});
+
+	it("weights the mean saving: savings {100,400} at weights {3,1} -> 175", () => {
+		// Reference (baseline) weights define the suite composition; runs=1 so the
+		// point estimate is a pure weighted mean.
+		const without = [
+			summary("t1", [1100], true, 3),
+			summary("t2", [1400], true, 1),
+		];
+		const withRule = [summary("t1", [1000]), summary("t2", [1000])];
+		expect(assessDelta(without, withRule, 25).delta).toBe(175);
+	});
+
+	it("propagates the weighted within-task SE (hand-computed, 1e-6)", () => {
+		// Var(weighted mean) = Σ wᵢ²(s²_wo,i/n + s²_w,i/n) / (Σwᵢ)².
+		// t1 (w=3): sampleVar 5000 each side, /n=2 -> 2500+2500 = 5000.
+		// t2 (w=1): sampleVar 20000 each side, /n=2 -> 10000+10000 = 20000.
+		// Σ = 9·5000 + 1·20000 = 65000; (Σw)² = 16; SE = sqrt(65000/16).
+		const without = [
+			summary("t1", [1000, 1100], true, 3),
+			summary("t2", [2000, 2200], true, 1),
+		];
+		const withRule = [
+			summary("t1", [900, 1000], true, 3),
+			summary("t2", [1800, 2000], true, 1),
+		];
+		const a = assessDelta(without, withRule, 25);
+		expect(a.standardErrorBasis).toBe("within-task");
+		expect(a.standardError).toBeCloseTo(Math.sqrt(65000 / 16), 6);
+		expect(a.standardError).toBeCloseTo(63.73774391990981, 6);
+	});
+
+	it("weights the between-task fallback SE at runs=1", () => {
+		const without = [
+			summary("t1", [1100], true, 3),
+			summary("t2", [1400], true, 1),
+		];
+		const withRule = [summary("t1", [1000]), summary("t2", [1000])];
+		const a = assessDelta(without, withRule, 25);
+		expect(a.standardErrorBasis).toBe("between-task");
+		expect(a.standardError).toBeCloseTo(167.70509831248424, 6);
+	});
+});
+
 describe("allocateTopUpRuns (Neyman top-up allocation)", () => {
 	const stableRef = [summary("t1", [1000, 1000]), summary("t2", [1000, 1000])];
 
@@ -286,6 +356,25 @@ describe("allocateTopUpRuns (Neyman top-up allocation)", () => {
 		const alloc = allocateTopUpRuns(stableRef, measured, 4);
 		expect(alloc?.has("t2")).toBe(false);
 		expect(alloc?.get("t1")).toBe(4);
+	});
+
+	it("steers the budget to the HIGH-WEIGHT task at equal variance (marginal ∝ w²)", () => {
+		// Both tasks have identical run-to-run variance (20,000). Unweighted, the
+		// budget would split evenly; weighting the reference 3:1 makes the marginal
+		// SE reduction on t1 (w²=9) dominate, so it takes the whole budget.
+		const weightedRef = [
+			summary("t1", [1000, 1000], true, 3),
+			summary("t2", [1000, 1000], true, 1),
+		];
+		const measured = [summary("t1", [900, 1100]), summary("t2", [900, 1100])];
+		const weighted = allocateTopUpRuns(weightedRef, measured, 4);
+		expect(weighted?.get("t1")).toBe(4);
+		expect(weighted?.has("t2")).toBe(false);
+		// Control: with equal weights the same equal-variance case splits evenly.
+		const evenRef = [summary("t1", [1000, 1000]), summary("t2", [1000, 1000])];
+		const even = allocateTopUpRuns(evenRef, measured, 4);
+		expect(even?.get("t1")).toBe(2);
+		expect(even?.get("t2")).toBe(2);
 	});
 });
 
@@ -454,6 +543,68 @@ describe("selectForAgent variance top-up", () => {
 		expect(getRuleById(db, decision?.rule.id ?? -1)?.decided_reason).toContain(
 			"standard error",
 		);
+	});
+});
+
+describe("selectForAgent distribution weighting (end-to-end to the gate)", () => {
+	let dir: string;
+	let db: WardenDb;
+	const agent = "sql";
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-weighted-"));
+		db = openDb(join(dir, "warden.db"));
+		process.env.TOKEN_WARDEN_MEMORY_DIR = join(dir, "agent-memory");
+	});
+
+	afterEach(() => {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+		delete process.env.TOKEN_WARDEN_MEMORY_DIR;
+	});
+
+	/** A rule that saves 400 on t1 and COSTS 400 on t2, measured noiselessly
+	 * (2 identical runs/side, so SE = 0 and the verdict is confident). At
+	 * `heavyWeight` = 1 the mean saving is exactly 0; at 9 it is 320. */
+	function runner(heavyWeight: number): SuiteRunner {
+		return (rules) =>
+			rules.length === 0
+				? [
+						summary("t1", [1000, 1000], true, heavyWeight),
+						summary("t2", [1000, 1000], true, 1),
+					]
+				: [
+						summary("t1", [600, 600], true, heavyWeight),
+						summary("t2", [1400, 1400], true, 1),
+					];
+	}
+
+	function insertCandidate(): number {
+		return insertRule(db, {
+			agent,
+			body: "A rule that only earns on the rare heavy task.",
+			contextCost: 10,
+			sourceRun: null,
+			createdAt: "t",
+		});
+	}
+
+	it("unweighted control: the same measurements evict (mean saving 0)", () => {
+		const id = insertCandidate();
+		const report = selectForAgent(db, agent, runner(1));
+		expect(report.decisions[0]?.delta).toBe(0);
+		expect(report.decisions[0]?.status).toBe("evicted");
+		expect(getRuleById(db, id)?.status).toBe("evicted");
+	});
+
+	it("weighting the heavy task 9:1 FLIPS the verdict to active", () => {
+		const id = insertCandidate();
+		const report = selectForAgent(db, agent, runner(9));
+		// Weighted mean (9·400 + 1·(−400)) / 10 = 320 ≥ the ~21 bar, SE 0.
+		expect(report.decisions[0]?.delta).toBe(320);
+		expect(report.decisions[0]?.uncertain).toBe(false);
+		expect(report.decisions[0]?.status).toBe("active");
+		expect(getRuleById(db, id)?.status).toBe("active");
 	});
 });
 

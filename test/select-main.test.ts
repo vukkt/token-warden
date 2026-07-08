@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -63,6 +63,8 @@ describe("select main() orchestration", () => {
 		logSpy.mockRestore();
 		delete process.env.TOKEN_WARDEN_DB;
 		delete process.env.TOKEN_WARDEN_MEMORY_DIR;
+		delete process.env.TOKEN_WARDEN_AGENTS_DIR;
+		delete process.env.TOKEN_WARDEN_BENCHMARKS_DIR;
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -71,11 +73,11 @@ describe("select main() orchestration", () => {
 		return logSpy.mock.calls.map((c) => String(c[0])).join("\n");
 	}
 
-	function insertCandidate(body: string, contextCost = 10): number {
+	function insertCandidate(body: string, contextCost = 10, agent = "sql"): number {
 		const db = openDb();
 		try {
 			return insertRule(db, {
-				agent: "sql",
+				agent,
 				body,
 				contextCost,
 				sourceRun: null,
@@ -122,6 +124,7 @@ describe("select main() orchestration", () => {
 						results,
 						meanCompletedTokens: mean,
 						highVariance: false,
+						weight: 1,
 					};
 				});
 			},
@@ -153,6 +156,9 @@ describe("select main() orchestration", () => {
 		expect(out).toContain("Advisory dollars (never a gate input)");
 		expect(out).toContain("Compiled 1 active rule(s)");
 		expect(out).toContain("(ruleset v1)");
+		// The bundled suites carry no weights, so the decision line must not
+		// claim a weighted verdict.
+		expect(out).not.toContain(", WEIGHTED");
 		const db = openDb();
 		try {
 			expect(getRuleById(db, id)?.status).toBe("active");
@@ -209,6 +215,42 @@ describe("select main() orchestration", () => {
 		// allocation calls.
 		expect(topUpCalls).toHaveLength(1);
 		expect((topUpCalls[0]?.[2] as Array<unknown>).length).toBe(7);
+	});
+
+	it("marks the decision line ', WEIGHTED' when any suite task carries a weight", () => {
+		// A custom (BYOA) agent whose user suite weights one task — the bundled
+		// suites are frozen and stay unweighted.
+		const agentsDir = join(dir, "agents");
+		const benchmarksDir = join(dir, "benchmarks");
+		mkdirSync(join(benchmarksDir, "custom"), { recursive: true });
+		mkdirSync(agentsDir, { recursive: true });
+		process.env.TOKEN_WARDEN_AGENTS_DIR = agentsDir;
+		process.env.TOKEN_WARDEN_BENCHMARKS_DIR = benchmarksDir;
+		writeFileSync(
+			join(agentsDir, "custom.md"),
+			"---\nmemory: user\nmodel: haiku\n---\nbody\n",
+		);
+		const task = (id: string, weight?: string): string =>
+			[
+				"---",
+				`id: "${id}"`,
+				'agent: "custom"',
+				'prompt: "Do a representative unit of work."',
+				'success_check: "true"',
+				...(weight === undefined ? [] : [`weight: ${weight}`]),
+				"---",
+				"",
+			].join("\n");
+		writeFileSync(join(benchmarksDir, "custom", "golden-01.md"), task("custom-01", "3"));
+		writeFileSync(join(benchmarksDir, "custom", "golden-02.md"), task("custom-02"));
+		const id = insertCandidate("Batch the heavy path.", 10, "custom");
+		wireRunSuite({ baseline: [1000, 1000], measured: [500, 500] });
+
+		main({ agent: "custom", runs: 2, topUp: 1, uniformTopUp: false });
+
+		const out = output();
+		expect(out).toContain(`[candidate] rule ${id} → ACTIVE`);
+		expect(out).toContain(", WEIGHTED");
 	});
 
 	it("puts an active rule on probation at its first sub-threshold re-audit", () => {

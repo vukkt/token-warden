@@ -91,6 +91,7 @@ describe("modelbench main() orchestration", () => {
 			results: [{ sessionId, tokens, completed }],
 			meanCompletedTokens: completed ? tokens : 0,
 			highVariance: false,
+			weight: 1,
 		};
 	}
 

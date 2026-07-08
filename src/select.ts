@@ -155,6 +155,10 @@ interface TaskComparison {
 	saving: number;
 	withoutTokens: number[];
 	withTokens: number[];
+	/** Distribution weight of this task, taken from the BASELINE (without-rule)
+	 * summary: the reference configuration defines the suite composition, so a
+	 * rule cannot alter its own task weighting by changing completion behavior. */
+	weight: number;
 }
 
 /** Per-task comparisons for tasks completed in both configurations
@@ -196,6 +200,7 @@ function perTaskComparisons(
 			saving: base.meanCompletedTokens - other.meanCompletedTokens,
 			withoutTokens,
 			withTokens,
+			weight: base.weight,
 		});
 	}
 	return { comparisons, regression, completionDrop };
@@ -254,22 +259,30 @@ interface SidePair {
 	with: number[];
 }
 
-/** Propagated within-task standard error of the mean saving:
- * `sqrt( (1/K²)·Σᵢ [s²_without,i/n_i + s²_with,i/n_i] )`. Null when no task has
- * ≥2 runs/side. */
-function withinTaskSE(pairs: SidePair[]): number | null {
+/** Propagated within-task standard error of the WEIGHTED mean saving:
+ * `sqrt( Σᵢ wᵢ²·[s²_without,i/n_i + s²_with,i/n_i] ) / Σᵢ wᵢ`. This is the exact
+ * propagation of independent per-task run-to-run noise through the weighted mean
+ * `Σ wᵢ sᵢ / Σ wᵢ`. With every wᵢ = 1 it collapses to the unweighted
+ * `sqrt( (1/K²)·Σᵢ [·] )` — the K² in the old formula is `(Σ 1)²` — so the
+ * unweighted path stays bit-identical. `weights` is aligned with `pairs`. Null
+ * when no task has ≥2 runs/side. */
+function withinTaskSE(pairs: SidePair[], weights: number[]): number | null {
 	const k = pairs.length;
 	if (k === 0) return null;
 	const pooledWithout = pooledVariance(pairs.map((p) => p.without));
 	const pooledWith = pooledVariance(pairs.map((p) => p.with));
 	if (pooledWithout === null || pooledWith === null) return null;
 	let sumVar = 0;
-	for (const p of pairs) {
+	let sumW = 0;
+	for (let i = 0; i < k; i++) {
+		const p = pairs[i] as SidePair;
+		const w = weights[i] as number;
 		const vW = sampleVariance(p.without) ?? pooledWithout;
 		const vR = sampleVariance(p.with) ?? pooledWith;
-		sumVar += vW / p.without.length + vR / p.with.length;
+		sumVar += w ** 2 * (vW / p.without.length + vR / p.with.length);
+		sumW += w;
 	}
-	return Math.sqrt(sumVar / k ** 2);
+	return Math.sqrt(sumVar / sumW ** 2);
 }
 
 const mean = (xs: number[]): number =>
@@ -340,8 +353,13 @@ export function assessDelta(
 		};
 	}
 	const savings = comparisons.map((c) => c.saving);
+	const weights = comparisons.map((c) => c.weight);
 	const k = savings.length;
-	const meanDelta = mean(savings);
+	const sumW = weights.reduce((a, b) => a + b, 0);
+	// Weighted mean saving: Σ wᵢ sᵢ / Σ wᵢ. With every wᵢ = 1 this is the plain
+	// mean, so the unweighted path is unchanged.
+	const meanDelta =
+		comparisons.reduce((acc, c) => acc + c.weight * c.saving, 0) / sumW;
 	const delta = Math.round(meanDelta);
 
 	// The verdict uses the *mean* and the *raw* within-task SE. We deliberately do
@@ -358,11 +376,14 @@ export function assessDelta(
 		without: filterOutliers(c.withoutTokens),
 		with: filterOutliers(c.withTokens),
 	}));
-	const rawSE = withinTaskSE(rawPairs);
-	const robustSE = withinTaskSE(robustPairs);
-	const robustSavingsMean = mean(
-		robustPairs.map((p) => mean(p.without) - mean(p.with)),
-	);
+	const rawSE = withinTaskSE(rawPairs, weights);
+	const robustSE = withinTaskSE(robustPairs, weights);
+	// Robust location weighted identically to the mean, so tail-risk compares
+	// like with like (weighted mean vs weighted robust mean).
+	const robustSavings = robustPairs.map((p) => mean(p.without) - mean(p.with));
+	const robustSavingsMean =
+		robustSavings.reduce((acc, s, i) => acc + (weights[i] as number) * s, 0) /
+		sumW;
 	const robustDelta = robustSE === null ? null : Math.round(robustSavingsMean);
 	// Tail-risk: trimming derailment outliers materially moves the saving — the
 	// rule's measured cost is unstable. A warning for a human, not a gate input.
@@ -376,10 +397,18 @@ export function assessDelta(
 		rawSE !== null ? "within-task" : null;
 	if (rawSE === null && k >= 2) {
 		// runs=1 everywhere: no run-to-run estimate exists. Fall back to the
-		// legacy between-task spread so confidence is never silently dropped.
-		const variance =
-			savings.reduce((acc, s) => acc + (s - meanDelta) ** 2, 0) / (k - 1);
-		standardError = Math.sqrt(variance / k);
+		// between-task spread so confidence is never silently dropped. Reliability
+		// (frequency) weights: the unbiased weighted variance divides by
+		// (Σw - Σw²/Σw), and the SE of the weighted mean is
+		// sqrt(var_w · Σw²) / Σw. With every wᵢ = 1 this reduces to
+		// var = Σ(sᵢ-mean)²/(k-1) and SE = sqrt(var/k) — the legacy formula.
+		const sumW2 = weights.reduce((acc, w) => acc + w ** 2, 0);
+		const wss = comparisons.reduce(
+			(acc, c) => acc + c.weight * (c.saving - meanDelta) ** 2,
+			0,
+		);
+		const varW = wss / (sumW - sumW2 / sumW);
+		standardError = Math.sqrt(varW * sumW2) / sumW;
 		standardErrorBasis = "between-task";
 	}
 
@@ -409,11 +438,12 @@ function completedTokens(summary: TaskSummary | undefined): number[] {
 
 /**
  * Variance-proportional (Neyman) allocation of a fixed top-up run budget across
- * the measured side's tasks. The SE is `sqrt( (1/K²)·Σᵢ s²ᵢ/nᵢ )`; one extra run
- * on task i cuts its term by `s²ᵢ/(nᵢ(nᵢ+1))`, so greedily handing each run to
- * the task with the largest such marginal minimizes the SE for the budget. This
- * pours runs into the few high-variance tasks that dominate the error bar
- * instead of re-running the whole suite uniformly.
+ * the measured side's tasks. The weighted SE is `sqrt( Σᵢ wᵢ²·s²ᵢ/nᵢ ) / Σwᵢ`;
+ * one extra run on task i cuts its term by `wᵢ²·s²ᵢ/(nᵢ(nᵢ+1))`, so greedily
+ * handing each run to the task with the largest such marginal minimizes the SE
+ * for the budget. This pours runs into the few high-variance (and high-weight)
+ * tasks that dominate the error bar instead of re-running the whole suite
+ * uniformly. With every wᵢ = 1 the allocation is identical to the unweighted one.
  *
  * Returns null — meaning "fall back to a uniform full top-up pass" — when no
  * within-task variance is estimable (every task has <2 runs, i.e. runs=1), since
@@ -425,7 +455,13 @@ export function allocateTopUpRuns(
 	budget: number,
 ): Map<string, number> | null {
 	const measuredById = new Map(measured.map((s) => [s.taskId, s]));
-	type Stratum = { taskId: string; variance: number; n: number; alloc: number };
+	type Stratum = {
+		taskId: string;
+		variance: number;
+		weight: number;
+		n: number;
+		alloc: number;
+	};
 	const strata: Stratum[] = [];
 	const measuredVectors: number[][] = [];
 	for (const base of reference) {
@@ -436,6 +472,9 @@ export function allocateTopUpRuns(
 		strata.push({
 			taskId: base.taskId,
 			variance: 0,
+			// Weight from the reference summary — the suite composition the SE is
+			// defined against (matches the estimator's baseline-side weighting).
+			weight: base.weight,
 			n: tokens.length,
 			alloc: 0,
 		});
@@ -451,7 +490,11 @@ export function allocateTopUpRuns(
 		let best: Stratum | null = null;
 		let bestMarginal = 0;
 		for (const s of strata) {
-			const marginal = s.variance / (s.n * (s.n + 1));
+			// The weighted SE term for task i is wᵢ²·s²ᵢ/nᵢ, so one extra run cuts
+			// it by wᵢ²·s²ᵢ/(nᵢ(nᵢ+1)). Greedy on that marginal minimizes the
+			// WEIGHTED SE for the budget. wᵢ = 1 recovers the old allocation exactly.
+			const marginal =
+				(s.weight ** 2 * s.variance) / (s.n * (s.n + 1));
 			if (marginal > bestMarginal) {
 				bestMarginal = marginal;
 				best = s;
@@ -477,10 +520,11 @@ export function mergeSummaries(
 	return first.map((summary) => {
 		const extra = secondById.get(summary.taskId);
 		if (!extra) return summary;
-		return summarizeTask(summary.taskId, [
-			...summary.results,
-			...extra.results,
-		]);
+		return summarizeTask(
+			summary.taskId,
+			[...summary.results, ...extra.results],
+			summary.weight,
+		);
 	});
 }
 
@@ -957,6 +1001,9 @@ export function main(args: SelectArgs): void {
 	const db = openDb();
 	try {
 		const tasks: GoldenTask[] = loadGoldenTasks(args.agent);
+		// Surfaced on every decision line when the suite is distribution-weighted,
+		// so a weighted verdict is never mistaken for a plain one.
+		const weightedSuite = tasks.some((t) => t.weight !== 1);
 		const runner: SuiteRunner = (rules, label, recordBaselines, allocation) => {
 			const rulesetVersion = getRulesetVersion(db, args.agent);
 			const config = recordBaselines
@@ -1026,7 +1073,8 @@ export function main(args: SelectArgs): void {
 					`${decision.uncertain ? ", LOW-CONFIDENCE" : ""}` +
 					`${decision.tailRisk ? ", TAIL-RISK" : ""}` +
 					`${decision.completionDrop ? ", COMPLETION-DROP" : ""}` +
-					`${decision.probation ? ", PROBATION (strike 1 of 2)" : ""}): "${decision.rule.body}"`,
+					`${decision.probation ? ", PROBATION (strike 1 of 2)" : ""}` +
+					`${weightedSuite ? ", WEIGHTED" : ""}): "${decision.rule.body}"`,
 			);
 		}
 		const weeklyDollars =
