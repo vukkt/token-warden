@@ -12,6 +12,7 @@ describe("rate card", () => {
 		expect(DEFAULT_PRICES["claude-opus-4-8"]?.input).toBe(5);
 		expect(DEFAULT_PRICES["claude-fable-5"]?.output).toBe(50);
 		expect(DEFAULT_PRICES["claude-haiku-4-5"]?.input).toBe(1);
+		expect(DEFAULT_PRICES["claude-sonnet-5"]?.input).toBe(3);
 		// The default model is a real, priced entry.
 		expect(DEFAULT_PRICES[DEFAULT_MODEL]).toBeDefined();
 	});

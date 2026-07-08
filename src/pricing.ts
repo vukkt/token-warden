@@ -32,6 +32,10 @@ export const DEFAULT_PRICES: Record<string, Price> = {
 	"claude-opus-4-8": priced(5, 25),
 	"claude-opus-4-7": priced(5, 25),
 	"claude-opus-4-6": priced(5, 25),
+	// Sonnet 5 lists at the same $3/$15 sticker as Sonnet 4.6 (an intro $2/$10
+	// runs through 2026-08-31; the sticker is the durable value, override via
+	// TOKEN_WARDEN_PRICE_INPUT/_OUTPUT to price the intro window).
+	"claude-sonnet-5": priced(3, 15),
 	"claude-sonnet-4-6": priced(3, 15),
 	"claude-haiku-4-5": priced(1, 5),
 	"claude-fable-5": priced(10, 50),
