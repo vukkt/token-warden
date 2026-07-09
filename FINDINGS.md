@@ -496,6 +496,26 @@ that treats an all-or-mostly-failed config pass as an environment failure and
 aborts rather than finalizing a contaminated verdict; (iii) re-queue #5 (via
 `/warden-compress` again) and re-run on a fresh full window once (i) lands.
 
+**Run 2 (2026-07-09) — same wall, confirmed.** Re-queued the identical rule (as
+candidate #6) and re-ran with the top-up disabled (`--top-up 0`) to remove the
+mechanism that contaminated run 1. It died the same way, earlier: at runs=12 the
+burn is ~168 high-effort runs, and the user's Claude quota was exhausted about
+two-thirds through the candidate side (sql-06). The entire baseline half then
+collapsed — **72 of 84 baseline runs `FAILED-CHECK` (0 tokens)** — so the
+comparison inverted into a meaningless −71,998 "delta" and #6 was evicted as
+non-positive. Not a regression; a quota-death artifact (the baseline measurement
+broke, not the rule). **The robust conclusion across both runs: this experiment
+is blocked by the environment, not the statistics.** A ~13-15M-token, ~168-run
+high-effort burn cannot complete inside the available quota window; the second
+half reliably collapses. More runs make it worse (run 2 died earlier than run 1
+precisely because runs=12 hit the ceiling sooner). The compression rule remains
+genuinely promising (run 1's clean candidate side showed +10,851 tok/run at half
+rent, 7/7 passing) but is **unconfirmable in this environment** until the burn is
+made small enough to fit — which requires cutting the suite's per-run cost and
+variance (follow-up i), not repeating the burn. Follow-up (ii) is also now
+clearly worth building: it would have turned run 2's garbage verdict into a clean
+"aborted: environment failure" instead of an evicted rule.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can
