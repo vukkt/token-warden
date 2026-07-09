@@ -443,6 +443,59 @@ regime `/warden-power` already flags as underpowered. Weighting is now a gate
 input — reached, as with everything else, only after the harness said it was
 safe.
 
+## First compression A/B burn (2026-07-08): inconclusive, and honestly so
+
+The first real-token run of `/warden-compress`. sql rule #4 ("Parse task
+descriptions for technical direction...", rent 28, measured +5,731 tok/run) was
+compressed to candidate #5 ("Use task direction; verify schema/deps only if
+unclear", rent 14 — half). The selector measured #5 as a **swap** (active set
+with #5 instead of #4) at 8 runs/side across the now-7-task sql suite: 168 runs,
+~1 hour, ~13M tokens.
+
+Verdict: **EVICTED — "uncertain after top-up"**, and the receipt is the whole
+story:
+
+- Point estimate: **saved 10,851 tok/run** (nearly 2x rule #4's original saving,
+  at HALF the rent), **7/7 tasks still passing** (no regression), tool calls
+  8 -> 7. On its face, compression didn't just preserve the saving — it looked
+  like a big win.
+- But **SE ±7,814**. The sql suite is savagely noisy (single runs ranged
+  34k-256k tokens), so even 8 runs/side left the lower confidence bound *below*
+  the 2x-rent bar. The gate could not confidently say the rule clears the bar,
+  so it declined to promote — the "measured, not vibes" discipline refusing to
+  bank a rule it can't prove, even one whose point estimate is 775x rent.
+
+Two compounding causes, both worth recording:
+
+1. **The suite is far noisier than the planner knew.** `/warden-power` had sized
+   the burn (8 runs/side "well-powered") from the only variance history it had —
+   the 3 old, quieter sql tasks (13 recorded active runs). The real 7-task suite,
+   including 4 brand-new tasks, is much noisier; the measured SE (7,814) was ~3x
+   the planner's estimate (2,645 at 8 runs). Lesson: the power planner is only as
+   good as its variance history, and a suite that just grew is under-characterized.
+   The swap-only path (no re-audit, rules protected) also records nothing under
+   `config='active'`, so this burn did NOT improve the planner's history — the
+   next plan is still blind to the new tasks' variance.
+2. **The top-up ran out of quota.** Because the verdict was uncertain, the
+   selector spent a Neyman top-up pass — and partway through it the user's Claude
+   quota was exhausted: **46 consecutive `FAILED-CHECK` (0-token) runs**. The
+   pre-flight probe confirmed quota was live at the *start*, but a 168-run,
+   hour-long burn drained it by the top-up phase. Those failures contaminated the
+   merged estimate (COMPLETION-DROP + TAIL-RISK flags) instead of tightening it.
+
+What this is and isn't: it is **not** evidence that compression fails — the point
+estimate is strongly positive and no task regressed. It is an **inconclusive**
+result caused by (a) genuine suite variance that 8 runs/side can't see through and
+(b) a quota-contaminated top-up. The correct read is that the gate behaved exactly
+as designed: it will not promote on uncertain, contaminated evidence.
+
+Follow-ups this surfaced: (i) cut sql-suite variance (the task-splitting work) so
+a confirmatory burn is affordable — at this noise, confirming a real saving needs
+many more runs than the planner's stale estimate implied; (ii) a selector guard
+that treats an all-or-mostly-failed config pass as an environment failure and
+aborts rather than finalizing a contaminated verdict; (iii) re-queue #5 (via
+`/warden-compress` again) and re-run on a fresh full window once (i) lands.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can
