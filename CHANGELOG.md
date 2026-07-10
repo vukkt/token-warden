@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.38.0 — 2026-07-10
+
+The environment-failure abort guard — the direct product of the two real
+compression burns (FINDINGS.md, "First compression A/B burn"), both of which
+were killed by quota exhaustion mid-burn and produced verdicts that should
+never have been finalized.
+
+- **Selector abort guard** (`src/select.ts` `environmentFailure`). When at
+  least half of a measurement pass's runs failed WITHOUT spending tokens, the
+  pass is an environment failure (quota exhausted, claude unavailable, spawn
+  timeouts) — not a measurement. The discriminator is token spend: a run the
+  RULE breaks still spends tokens before failing its success check; a run the
+  ENVIRONMENT kills produces zero. On trip, the decision is ABORTED: no
+  verdict persisted, no receipt written, a candidate stays queued for a
+  healthy invocation, an audit target stays untouched, and an all-aborted
+  invocation does not recompile memory (no ruleset bump, no cache bust). Burn
+  2's nonsense -72k eviction of a promising rule would have been a clean
+  "ABORTED (environment failure)" under this guard.
+- Regression-test fixtures that modeled a rule-caused failure as a zero-token
+  run were updated to spend tokens — matching reality, and the guard's
+  discriminator.
+
 ## v0.37.0 — 2026-07-08
 
 Distribution-weighted golden suites enter the gate — the feature deferred in

@@ -15,6 +15,7 @@ import {
 import {
 	assessDelta,
 	effectiveRent,
+	environmentFailure,
 	memoryFilePath,
 	parseSelectArgs,
 	type SuiteRunner,
@@ -266,7 +267,7 @@ describe("selectForAgent", () => {
 		);
 		const runner: SuiteRunner = (rules) =>
 			rules.some((r) => r.id === badId)
-				? [summary("sql-01", 100), summary("sql-02", 0, false)]
+				? [summary("sql-01", 100), summary("sql-02", 7500, false)]
 				: [summary("sql-01", 10_000), summary("sql-02", 10_000)];
 
 		selectForAgent(db, agent, runner);
@@ -359,13 +360,94 @@ describe("selectForAgent", () => {
 		// eviction, probation notwithstanding (safety invariant).
 		const regressingRunner: SuiteRunner = (rules) =>
 			rules.some((r) => r.id === goodId)
-				? [summary("sql-01", 10_000), summary("sql-02", 0, false)]
+				? [summary("sql-01", 10_000), summary("sql-02", 7500, false)]
 				: [summary("sql-01", 10_000), summary("sql-02", 10_000)];
 		selectForAgent(db, agent, regressingRunner);
 
 		const evicted = getRuleById(db, goodId);
 		expect(evicted?.status).toBe("evicted");
 		expect(evicted?.decided_reason).toContain("regression");
+	});
+
+	it("ABORTS (not evicts) a candidate when the measured side is quota-dead — no verdict persisted", () => {
+		// The run-2 failure mode (2026-07-09): quota died during the measurement,
+		// so the pass came back as zero-token failures. The old behavior finalized
+		// a nonsense negative delta and evicted a promising rule; the guard must
+		// abort instead and leave the candidate queued.
+		const id = seedCandidate("A promising rule the environment killed.");
+		const deadRunner: SuiteRunner = (rules) => {
+			if (rules.some((r) => r.id === id)) {
+				// candidate pass: environment dead — all failures, zero tokens
+				return [summary("sql-01", 0, false), summary("sql-02", 0, false)];
+			}
+			return [summary("sql-01", 10_000), summary("sql-02", 10_000)];
+		};
+
+		const report = selectForAgent(db, agent, deadRunner);
+
+		const decision = report.decisions.find((d) => d.rule.id === id);
+		expect(decision?.status).toBe("aborted");
+		// Nothing persisted: still a candidate, available to a future invocation.
+		expect(getRuleById(db, id)?.status).toBe("candidate");
+		expect(getRuleById(db, id)?.decided_at).toBeNull();
+		// No receipt was written for an aborted decision.
+		expect(
+			latestReceipts(db, agent).find((r) => r.rule_id === id),
+		).toBeUndefined();
+		// All-aborted invocation: memory NOT recompiled (no ruleset bump).
+		expect(report.rulesetVersion).toBeNull();
+	});
+
+	it("ABORTS when the reference (baseline) side is quota-dead", () => {
+		const id = seedCandidate("A rule measured against a dead baseline.");
+		const deadBaselineRunner: SuiteRunner = (rules) => {
+			if (rules.some((r) => r.id === id)) {
+				return [summary("sql-01", 8000), summary("sql-02", 8000)];
+			}
+			// baseline pass: quota dead
+			return [summary("sql-01", 0, false), summary("sql-02", 0, false)];
+		};
+
+		const report = selectForAgent(db, agent, deadBaselineRunner);
+		expect(report.decisions[0]?.status).toBe("aborted");
+		expect(getRuleById(db, id)?.status).toBe("candidate");
+	});
+
+	it("does NOT abort on a genuine regression — failed runs that SPENT tokens still evict", () => {
+		// A rule that truly breaks a task produces failed runs WITH token spend
+		// (the model worked, the check failed). That must remain an eviction,
+		// not an abort — the guard's discriminator is zero-token failures only.
+		const badId = seedCandidate("Skip the tests to save tokens.");
+		const runner: SuiteRunner = (rules) =>
+			rules.some((r) => r.id === badId)
+				? [summary("sql-01", 9000), summary("sql-02", 7500, false)]
+				: [summary("sql-01", 10_000), summary("sql-02", 10_000)];
+
+		const report = selectForAgent(db, agent, runner);
+		expect(report.decisions[0]?.status).toBe("evicted");
+		expect(getRuleById(db, badId)?.status).toBe("evicted");
+	});
+
+	it("environmentFailure: half-dead pass trips it; token-spending failures do not", () => {
+		const dead = [summary("t1", 0, false), summary("t2", 0, false)];
+		expect(environmentFailure(dead)).toBe(true);
+		// 1 of 2 runs zero-token-failed: at the 50% threshold — trips.
+		expect(
+			environmentFailure([summary("t1", 0, false), summary("t2", 9000)]),
+		).toBe(true);
+		// Failures that spent tokens are the rule's fault, not the environment's.
+		const brokeTask: TaskSummary = {
+			taskId: "t1",
+			results: [
+				{ sessionId: "a", tokens: 8000, completed: false },
+				{ sessionId: "b", tokens: 9000, completed: false },
+			],
+			meanCompletedTokens: 0,
+			highVariance: false,
+			weight: 1,
+		};
+		expect(environmentFailure([brokeTask, summary("t2", 9000)])).toBe(false);
+		expect(environmentFailure([])).toBe(false);
 	});
 
 	it("does nothing when there are no candidates and no active rules", () => {

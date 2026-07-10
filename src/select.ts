@@ -663,12 +663,44 @@ export type SuiteRunner = (
 	allocation?: RunAllocation,
 ) => TaskSummary[];
 
+/** Fraction of a config pass's runs that failed WITHOUT spending tokens before
+ * the pass is declared an environment failure rather than a measurement. */
+const ENV_FAILURE_RATIO = 0.5;
+
+/**
+ * Detect an environment failure in a measurement pass — quota exhaustion, a
+ * broken `claude` binary, spawn timeouts — as distinct from a rule genuinely
+ * failing tasks. The discriminator is token spend: a run the RULE breaks still
+ * spends tokens before failing its success check, while a run the ENVIRONMENT
+ * kills produces zero tokens (nothing was generated at all). When at least
+ * half of a pass's runs are zero-token failures, no verdict computed from it
+ * can be trusted: both real burns of the compression A/B (2026-07-08/09) died
+ * this way — quota exhaustion mid-burn turned one verdict into "uncertain"
+ * and the other into a nonsense −72k delta that evicted a promising rule.
+ * The selector must abort such a decision, not finalize it (FINDINGS.md,
+ * "First compression A/B burn").
+ */
+export function environmentFailure(summaries: TaskSummary[]): boolean {
+	let runs = 0;
+	let zeroTokenFailures = 0;
+	for (const s of summaries) {
+		for (const r of s.results) {
+			runs++;
+			if (!r.completed && r.tokens === 0) zeroTokenFailures++;
+		}
+	}
+	return runs > 0 && zeroTokenFailures / runs >= ENV_FAILURE_RATIO;
+}
+
 interface Decision {
 	rule: RuleRow;
 	kind: "candidate" | "re-audit";
 	delta: number | null;
 	regression: boolean;
-	status: "active" | "evicted";
+	/** "aborted" means the measurement itself failed (environment failure — see
+	 * environmentFailure): no verdict was persisted and a candidate stays
+	 * queued for a future, healthy invocation. */
+	status: "active" | "evicted" | "aborted";
 	/** True when the verdict was within one standard error of flipping
 	 * after all measurements (decided at low confidence). */
 	uncertain: boolean;
@@ -832,6 +864,29 @@ export function selectForAgent(
 				params.rule.context_cost,
 				params.invert,
 			);
+			// Environment-failure abort: when either side of the comparison is
+			// mostly zero-token failures, the measurement is broken (quota died,
+			// spawn failures) — finalizing would evict on garbage. Persist
+			// nothing: a candidate stays queued, an audit target stays untouched,
+			// and the invocation reports ABORTED so the operator re-runs later.
+			if (
+				environmentFailure(measured) ||
+				environmentFailure(params.reference())
+			) {
+				decisions.push({
+					rule: params.rule,
+					kind: params.kind,
+					delta: null,
+					regression: false,
+					status: "aborted",
+					uncertain: false,
+					toppedUp,
+					tailRisk: false,
+					completionDrop: false,
+					probation: false,
+				});
+				return;
+			}
 			const { delta, regression, uncertain, tailRisk, completionDrop } =
 				assessment;
 			let { status, reason } = finalizeVerdict(
@@ -1002,7 +1057,10 @@ export function selectForAgent(
 
 	let rulesetVersion: number | null = null;
 	const finalActive = getActiveRules(db, agent);
-	if (decisions.length > 0) {
+	// Aborted decisions persisted nothing, so an all-aborted invocation must
+	// not recompile memory (that would bump the ruleset version and bust the
+	// agents' prompt cache for a no-op).
+	if (decisions.some((d) => d.status !== "aborted")) {
 		rulesetVersion = compileActiveMemory(db, agent);
 	}
 
@@ -1159,6 +1217,15 @@ export function main(args: SelectArgs): void {
 			priceFor(loadAgentDefinition(args.agent).model),
 		);
 		for (const decision of report.decisions) {
+			if (decision.status === "aborted") {
+				console.log(
+					`  [${decision.kind}] rule ${decision.rule.id} → ABORTED` +
+						` (environment failure: most runs failed with zero tokens —` +
+						` quota exhausted or claude unavailable; no verdict recorded,` +
+						` re-run when healthy): "${decision.rule.body}"`,
+				);
+				continue;
+			}
 			const dollars =
 				decision.delta !== null
 					? `, ≈$${(decision.delta * perToken).toFixed(4)}/run advisory`
