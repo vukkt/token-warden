@@ -516,6 +516,14 @@ variance (follow-up i), not repeating the burn. Follow-up (ii) is also now
 clearly worth building: it would have turned run 2's garbage verdict into a clean
 "aborted: environment failure" instead of an evicted rule.
 
+*Update (2026-07-10, v0.38.0): follow-up (ii) is built. The engine now
+discriminates zero-token failures (environment) from failed-with-tokens runs
+(rule regression), aborts a pass after 4 consecutive zero-token failures,
+refuses to finalize any verdict from a majority-dead or per-task-dead
+measurement (`ABORTED: environment failure`, non-zero exit, candidate stays
+queued), and the false-regression path that evicted run 2's candidate is
+closed. See CHANGELOG v0.38.0 and DECISIONS.md.*
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can

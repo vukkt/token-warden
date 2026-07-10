@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.38.0 — 2026-07-10
+
+Environment-failure abort: a quota-dead measurement now refuses to produce a
+verdict instead of finalizing a garbage one. Closes follow-up (ii) from the
+2026-07 compression burns (FINDINGS.md), where 72/84 zero-token `FAILED-CHECK`
+baseline runs inverted the delta to −71,998 and evicted a genuinely promising
+rule.
+
+- **Zero-token discriminator** (`src/bench.ts` `isEnvironmentFailure`). A
+  failed run below 1,000 tokens is an environment failure (quota death, API
+  error, crash) — the cheapest genuine golden run observed is ~34k, and even a
+  rule-broken run burns thousands attempting the task. A failed run *with*
+  real tokens stays regression signal, so the safety gate (the rule-3 class)
+  is untouched.
+- **Streak abort in `runSuite`** (`ENV_FAILURE_STREAK = 4`). Four consecutive
+  zero-token failures abort the pass early with a typed
+  `EnvironmentFailureError` instead of burning the rest of the suite producing
+  no evidence (the real quota deaths ran 46 and 72 consecutive). A single
+  broken run still never aborts.
+- **Per-pass majority guard in the selector** (`passEnvironmentFailure`:
+  ≥3 env-failures and a strict majority of the pass). Checked the moment each
+  pass is produced — baseline, swap reference, candidate, audit, top-up —
+  never post-merge, because a contaminated top-up merged into a clean first
+  pass dilutes below any threshold (exactly how burn 1 finalized).
+- **False-regression fix** (`assessDelta.environmentFailure`). A
+  baseline-completed task whose with-side is missing or all zero-token
+  failures no longer reads as a rule regression; it flags environment failure
+  and the selector aborts before `decideRule`/`recordReceipt`/probation — an
+  abort structurally cannot persist a verdict. The rule stays queued as a
+  candidate; decisions made earlier in the invocation stand. `main()` prints
+  `ABORTED: environment failure …` and exits non-zero. No 'aborted' receipt
+  row: an abort is precisely "no decision was made".
+- **Compare surfaces it too** (`src/compare.ts`): model/prompt A/Bs report
+  "environment failure — no verdict" instead of silently mis-reading a
+  quota-dead side.
+- **Power planner honesty** (`src/power.ts`): warns when golden tasks have no
+  active-run variance history ("this plan is under-characterized") — the blind
+  spot that mis-sized both burns by ~3x.
+
 ## v0.37.0 — 2026-07-08
 
 Distribution-weighted golden suites enter the gate — the feature deferred in

@@ -23,6 +23,7 @@
  * the plan is grounded in measured run-to-run noise, not a guess.
  */
 import { pathToFileURL } from "node:url";
+import { loadGoldenTasks } from "./bench.js";
 import {
 	type GoldenReplicateRun,
 	getActiveRules,
@@ -385,11 +386,21 @@ export function main(argv: string[]): number {
 				}
 				json.push(entry);
 			} else {
+				const report = renderPower(agent, noises, rent, {
+					targetSaving: args.targetSaving,
+					runs: args.runs,
+				});
+				// A suite that grew since the last active-set bench has tasks with
+				// no recorded variance — the plan silently understates the SE (this
+				// mis-sized two real burns by ~3x; FINDINGS.md 2026-07). Warn.
+				const suiteTasks = loadGoldenTasks(agent).length;
+				const missing = suiteTasks - noises.length;
 				reports.push(
-					renderPower(agent, noises, rent, {
-						targetSaving: args.targetSaving,
-						runs: args.runs,
-					}),
+					noises.length >= 2 && missing > 0
+						? `${report}\n  WARNING: ${missing} of ${suiteTasks} golden tasks have no` +
+								" active-run variance history — this plan is under-characterized;" +
+								` run npm run bench -- --agent ${agent} first`
+						: report,
 				);
 			}
 		}

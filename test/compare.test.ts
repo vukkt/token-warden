@@ -67,12 +67,26 @@ describe("compareConfigs", () => {
 	});
 
 	it("flags a regression when the candidate fails a baseline-passing task", () => {
+		// The failing run burned real tokens (above the environment-failure
+		// floor): a genuine capability regression, not a quota death.
 		const c = cmp(
 			[task("t1", [[1000, 0]]), task("t2", [[1000, 0]])],
-			[task("t1", [[400, 0]]), task("t2", [[400, 0, false]])],
+			[task("t1", [[400, 0]]), task("t2", [[40_000, 0, false]])],
 		);
 		expect(c.regression).toBe(true);
+		expect(c.environmentFailure).toBe(false);
 		expect(verdictLine(c)).toContain("NOT a safe model change");
+	});
+
+	it("flags an environment failure (no verdict) when the failing side burned ~0 tokens", () => {
+		const c = cmp(
+			[task("t1", [[1000, 0]]), task("t2", [[1000, 0]])],
+			[task("t1", [[400, 0]]), task("t2", [[0, 0, false]])],
+		);
+		expect(c.regression).toBe(false);
+		expect(c.environmentFailure).toBe(true);
+		expect(verdictLine(c)).toContain("environment failure");
+		expect(verdictLine(c)).toContain("says nothing about this model");
 	});
 
 	it("rolls regressions up by category, naming the broken tasks", () => {
@@ -87,8 +101,8 @@ describe("compareConfigs", () => {
 					task(`${subject}-02`, [[1000, 0]]),
 				],
 				[
-					task(`${subject}-01`, [[600, 0]]),
-					task(`${subject}-02`, [[600, 0, failTask !== `${subject}-02`]]),
+					task(`${subject}-01`, [[6000, 0]]),
+					task(`${subject}-02`, [[6000, 0, failTask !== `${subject}-02`]]),
 				],
 			);
 
@@ -136,7 +150,7 @@ describe("compareConfigs", () => {
 			"current",
 			"variant",
 			[task("t1", [[1000, 0]]), task("t2", [[1000, 0]])],
-			[task("t1", [[400, 0]]), task("t2", [[400, 0, false]])],
+			[task("t1", [[400, 0]]), task("t2", [[40_000, 0, false]])],
 		);
 		expect(verdictLine(promptCmp)).toContain("NOT a safe prompt change");
 	});

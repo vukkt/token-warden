@@ -161,11 +161,13 @@ describe("modelbench main() orchestration", () => {
 	});
 
 	it("reports a regression as unsafe regardless of tokens", () => {
-		// haiku would be cheaper, but it fails sql-02 that sonnet completed.
+		// haiku would be cheaper, but it fails sql-02 that sonnet completed —
+		// burning real tokens in the attempt (above the environment-failure
+		// floor), so this is a genuine capability regression.
 		wireRunSuite(
 			"haiku",
 			{ "sql-01": 1000, "sql-02": 1000, "sql-03": 1000 },
-			{ "sql-01": 400, "sql-02": 400, "sql-03": 400 },
+			{ "sql-01": 400, "sql-02": 40_000, "sql-03": 400 },
 			new Set(["sql-02"]),
 		);
 
@@ -290,13 +292,16 @@ describe("modelbench main() orchestration", () => {
 				options: { model: string },
 			): TaskSummary[] => {
 				const isCandidate = options.model === "haiku";
-				return tasks.map((t) =>
-					summaryFor(
+				return tasks.map((t) => {
+					// The one failing task burns real tokens (a genuine regression,
+					// not a zero-token environment failure).
+					const fails = isCandidate && t.id === "testing-02";
+					return summaryFor(
 						t.id,
-						isCandidate ? 600 : 1000,
-						!(isCandidate && t.id === "testing-02"),
-					),
-				);
+						fails ? 40_000 : isCandidate ? 600 : 1000,
+						!fails,
+					);
+				});
 			},
 		);
 

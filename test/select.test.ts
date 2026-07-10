@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { TaskSummary } from "../src/bench.js";
+import { summarizeTask, type TaskSummary } from "../src/bench.js";
 import {
 	getRuleById,
 	getRulesetVersion,
@@ -77,10 +77,32 @@ describe("assessDelta (delta math)", () => {
 		});
 	});
 
-	it("flags a regression when a previously passing task fails", () => {
+	it("flags a regression when a previously passing task fails with real tokens", () => {
+		// The failed run burned real tokens: the agent attempted the task and
+		// broke — rule signal, not environment.
+		const without = [summary("t1", 1000), summary("t2", 2000)];
+		const withRule = [summary("t1", 800), summary("t2", 40_000, false)];
+		const a = assessDelta(without, withRule, 10);
+		expect(a.regression).toBe(true);
+		expect(a.environmentFailure).toBe(false);
+	});
+
+	it("flags an environment failure (not a regression) when the failed side burned ~0 tokens", () => {
+		// A zero-token failure is a quota death / API error: it says nothing
+		// about the rule, and evicting on it was the 2026-07 false-eviction bug.
 		const without = [summary("t1", 1000), summary("t2", 2000)];
 		const withRule = [summary("t1", 800), summary("t2", 0, false)];
-		expect(assessDelta(without, withRule, 10).regression).toBe(true);
+		const a = assessDelta(without, withRule, 10);
+		expect(a.regression).toBe(false);
+		expect(a.environmentFailure).toBe(true);
+	});
+
+	it("flags an environment failure when a baseline-completed task is missing from a truncated pass", () => {
+		const without = [summary("t1", 1000), summary("t2", 2000)];
+		const withRule = [summary("t1", 800)];
+		const a = assessDelta(without, withRule, 10);
+		expect(a.regression).toBe(false);
+		expect(a.environmentFailure).toBe(true);
 	});
 
 	it("ignores tasks that did not complete in the baseline", () => {
@@ -260,13 +282,15 @@ describe("selectForAgent", () => {
 		expect(junk?.delta).toBe(-500);
 	});
 
-	it("evicts immediately on a task regression regardless of tokens", () => {
+	it("evicts immediately on a task regression regardless of token savings", () => {
 		const badId = seedCandidate(
 			"Skip running the test suite to save output tokens.",
 		);
+		// The failing run burns real tokens (the agent attempted the task and
+		// broke it) — a genuine rule regression, not an environment failure.
 		const runner: SuiteRunner = (rules) =>
 			rules.some((r) => r.id === badId)
-				? [summary("sql-01", 100), summary("sql-02", 0, false)]
+				? [summary("sql-01", 100), summary("sql-02", 40_000, false)]
 				: [summary("sql-01", 10_000), summary("sql-02", 10_000)];
 
 		selectForAgent(db, agent, runner);
@@ -359,7 +383,7 @@ describe("selectForAgent", () => {
 		// eviction, probation notwithstanding (safety invariant).
 		const regressingRunner: SuiteRunner = (rules) =>
 			rules.some((r) => r.id === goodId)
-				? [summary("sql-01", 10_000), summary("sql-02", 0, false)]
+				? [summary("sql-01", 10_000), summary("sql-02", 40_000, false)]
 				: [summary("sql-01", 10_000), summary("sql-02", 10_000)];
 		selectForAgent(db, agent, regressingRunner);
 
@@ -448,5 +472,232 @@ describe("selectForAgent", () => {
 		expect(variant?.status).toBe("active");
 		expect(variant?.decided_reason).not.toContain("swap for rule");
 		expect(labels).not.toContain(`swap-base-${variantId}`);
+	});
+});
+
+describe("selectForAgent environment-failure abort", () => {
+	let dir: string;
+	let db: WardenDb;
+	const agent = "sql";
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-select-env-"));
+		db = openDb(join(dir, "warden.db"));
+		process.env.TOKEN_WARDEN_MEMORY_DIR = join(dir, "agent-memory");
+	});
+
+	afterEach(() => {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+		delete process.env.TOKEN_WARDEN_MEMORY_DIR;
+	});
+
+	function seedCandidate(body: string, replaces: number | null = null): number {
+		return insertRule(db, {
+			agent,
+			body,
+			contextCost: Math.ceil(body.length / 4),
+			sourceRun: null,
+			createdAt: new Date().toISOString(),
+			...(replaces === null ? {} : { replaces }),
+		});
+	}
+
+	/** A pass that is entirely zero-token failures — a quota death. */
+	const deadPass = (): TaskSummary[] => [
+		summary("sql-01", 0, false),
+		summary("sql-02", 0, false),
+		summary("sql-03", 0, false),
+	];
+	const cleanPass = (cost: number): TaskSummary[] => [
+		summary("sql-01", cost),
+		summary("sql-02", cost),
+		summary("sql-03", cost),
+	];
+
+	it("aborts on a quota-dead baseline pass: no verdict, no receipt, candidate stays queued", () => {
+		const id = seedCandidate("Use Grep to locate symbols before reading.");
+		const runner: SuiteRunner = (_rules, label) =>
+			label === "active-set" ? deadPass() : cleanPass(8000);
+
+		const report = selectForAgent(db, agent, runner);
+
+		expect(report.aborted).toMatchObject({
+			ruleId: id,
+			kind: "candidate",
+			envFailed: 3,
+			total: 3,
+		});
+		expect(report.decisions).toHaveLength(0);
+		expect(report.rulesetVersion).toBeNull();
+		expect(getRuleById(db, id)?.status).toBe("candidate");
+		expect(getRuleById(db, id)?.decided_reason).toBeNull();
+		expect(latestReceipts(db, agent)).toHaveLength(0);
+	});
+
+	it("aborts on a quota-dead candidate pass", () => {
+		const id = seedCandidate("Use Grep to locate symbols before reading.");
+		const runner: SuiteRunner = (rules) =>
+			rules.some((r) => r.id === id) ? deadPass() : cleanPass(10_000);
+
+		const report = selectForAgent(db, agent, runner);
+
+		expect(report.aborted?.ruleId).toBe(id);
+		expect(getRuleById(db, id)?.status).toBe("candidate");
+		expect(latestReceipts(db, agent)).toHaveLength(0);
+	});
+
+	it("aborts on a quota-dead swap-reference pass and leaves the replaced rule untouched", () => {
+		// Activate an original rule first.
+		const originalId = seedCandidate(
+			"Use Grep to locate the exact symbol before reading any whole file.",
+		);
+		const activate: SuiteRunner = (rules) =>
+			cleanPass(rules.some((r) => r.id === originalId) ? 8000 : 10_000);
+		selectForAgent(db, agent, activate);
+		expect(getRuleById(db, originalId)?.status).toBe("active");
+
+		const variantId = seedCandidate(
+			"Grep the symbol before reading any file.",
+			originalId,
+		);
+		const runner: SuiteRunner = (_rules, label) =>
+			label.startsWith("swap-base-") ? deadPass() : cleanPass(8100);
+
+		const report = selectForAgent(db, agent, runner);
+
+		expect(report.aborted?.ruleId).toBe(variantId);
+		expect(getRuleById(db, variantId)?.status).toBe("candidate");
+		expect(getRuleById(db, originalId)?.status).toBe("active");
+	});
+
+	it("stops the invocation on abort: later candidates are never measured", () => {
+		const firstId = seedCandidate("Use Grep to locate symbols first.");
+		const secondId = seedCandidate("Prefer Glob over find for file listing.");
+		const labels: string[] = [];
+		const runner: SuiteRunner = (rules, label) => {
+			labels.push(label);
+			return rules.some((r) => r.id === firstId)
+				? deadPass()
+				: cleanPass(10_000);
+		};
+
+		const report = selectForAgent(db, agent, runner);
+
+		expect(report.aborted?.ruleId).toBe(firstId);
+		expect(labels.some((l) => l.includes(`candidate-${secondId}`))).toBe(false);
+		expect(getRuleById(db, firstId)?.status).toBe("candidate");
+		expect(getRuleById(db, secondId)?.status).toBe("candidate");
+	});
+
+	it("aborts (not a regression eviction) when one task's with-side is all zero-token failures in a majority-clean pass", () => {
+		const id = seedCandidate("Use Grep to locate symbols before reading.");
+		// Candidate pass: sql-01/02 fine, sql-03 dead at 0 tokens. 1 of 3 runs
+		// env-failed — below the pass-level majority — but the per-task signal
+		// says the measurement is environmentally broken, not that the rule
+		// regressed.
+		const runner: SuiteRunner = (rules) =>
+			rules.some((r) => r.id === id)
+				? [
+						summary("sql-01", 8000),
+						summary("sql-02", 8000),
+						summary("sql-03", 0, false),
+					]
+				: cleanPass(10_000);
+
+		const report = selectForAgent(db, agent, runner);
+
+		expect(report.aborted?.ruleId).toBe(id);
+		expect(getRuleById(db, id)?.status).toBe("candidate");
+		expect(latestReceipts(db, agent)).toHaveLength(0);
+	});
+
+	it("still evicts on a genuine regression: the failed run burned real tokens", () => {
+		const id = seedCandidate("Skip running tests to save output tokens.");
+		const runner: SuiteRunner = (rules) =>
+			rules.some((r) => r.id === id)
+				? [
+						summary("sql-01", 8000),
+						summary("sql-02", 8000),
+						summary("sql-03", 40_000, false),
+					]
+				: cleanPass(10_000);
+
+		const report = selectForAgent(db, agent, runner);
+
+		expect(report.aborted).toBeNull();
+		expect(getRuleById(db, id)?.status).toBe("evicted");
+		expect(getRuleById(db, id)?.decided_reason).toContain("regression");
+		expect(latestReceipts(db, agent)).toHaveLength(1);
+	});
+
+	it("aborts a quota-dead re-audit without evicting or striking the active rule", () => {
+		const goodId = seedCandidate("Use Grep to locate symbols before reading.");
+		const activate: SuiteRunner = (rules) =>
+			cleanPass(rules.some((r) => r.id === goodId) ? 8000 : 10_000);
+		selectForAgent(db, agent, activate);
+		expect(getRuleById(db, goodId)?.status).toBe("active");
+		const receiptsBefore = latestReceipts(db, agent).length;
+
+		// Next invocation: no candidates, only the re-audit — its measured
+		// (without-rule) pass dies environmentally.
+		const runner: SuiteRunner = (_rules, label) =>
+			label.startsWith("audit-") ? deadPass() : cleanPass(8000);
+		const report = selectForAgent(db, agent, runner);
+
+		expect(report.aborted).toMatchObject({ ruleId: goodId, kind: "re-audit" });
+		const rule = getRuleById(db, goodId);
+		expect(rule?.status).toBe("active");
+		expect(rule?.probation).toBe(0);
+		expect(latestReceipts(db, agent)).toHaveLength(receiptsBefore);
+	});
+
+	it("keeps decisions made before the abort and still compiles memory for them", () => {
+		const goodId = seedCandidate("Use Grep to locate symbols before reading.");
+		const badId = seedCandidate("Prefer Glob over find for file listing.");
+		const runner: SuiteRunner = (rules) => {
+			if (rules.some((r) => r.id === badId)) return deadPass();
+			return cleanPass(rules.some((r) => r.id === goodId) ? 8000 : 10_000);
+		};
+
+		const report = selectForAgent(db, agent, runner);
+
+		// Candidate A was decided cleanly before B's pass died.
+		expect(getRuleById(db, goodId)?.status).toBe("active");
+		expect(report.decisions).toHaveLength(1);
+		expect(report.aborted?.ruleId).toBe(badId);
+		expect(getRuleById(db, badId)?.status).toBe("candidate");
+		expect(report.rulesetVersion).toBe(1);
+		expect(readFileSync(memoryFilePath(agent), "utf8")).toContain("Use Grep");
+	});
+
+	it("aborts when the top-up pass is quota-dead instead of finalizing a verdict from it", () => {
+		const id = seedCandidate("Use Grep to locate symbols before reading.");
+		// First passes are noisy enough that the verdict is uncertain (delta ~50
+		// against a ~30-token bar with SE ~1000), forcing a top-up; the top-up
+		// pass then dies environmentally. Burn 1's failure mode: merged, the
+		// contamination is diluted below any threshold — the per-pass guard must
+		// catch it before the merge.
+		const noisy = (taskId: string, a: number, b: number): TaskSummary =>
+			summarizeTask(taskId, [
+				{ sessionId: `${taskId}-1`, tokens: a, completed: true },
+				{ sessionId: `${taskId}-2`, tokens: b, completed: true },
+			]);
+		const runner: SuiteRunner = (rules, label) => {
+			if (label.endsWith("-topup")) return deadPass();
+			if (rules.some((r) => r.id === id)) {
+				return [
+					noisy("sql-01", 10_000, 11_900),
+					noisy("sql-02", 9_950, 11_950),
+				];
+			}
+			return [noisy("sql-01", 10_000, 12_000), noisy("sql-02", 10_000, 12_000)];
+		};
+
+		const report = selectForAgent(db, agent, runner, { topUpBudget: 1 });
+
+		expect(report.aborted?.ruleId).toBe(id);
+		expect(getRuleById(db, id)?.status).toBe("candidate");
+		expect(latestReceipts(db, agent)).toHaveLength(0);
 	});
 });

@@ -5,11 +5,18 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	compileMemoryMd,
+	EnvironmentFailureError,
+	type GoldenTask,
 	goldenSuiteHash,
+	isEnvironmentFailure,
 	loadGoldenTasks,
 	parseAgentDefinition,
 	parseArgs,
 	parseGoldenTask,
+	passEnvironmentFailure,
+	type RunResult,
+	runSuite,
+	type SuiteOptions,
 	summarizeTask,
 	totalTokens,
 } from "../src/bench.js";
@@ -284,5 +291,225 @@ describe("goldenSuiteHash", () => {
 
 	it("differs between agents whose suites differ", () => {
 		expect(goldenSuiteHash("sql")).not.toBe(goldenSuiteHash("backend"));
+	});
+});
+
+describe("environment-failure detection", () => {
+	it("classifies only zero-ish-token failed runs as environment failures", () => {
+		const run = (tokens: number, completed: boolean) => ({
+			sessionId: "s",
+			tokens,
+			completed,
+		});
+		expect(isEnvironmentFailure(run(0, false))).toBe(true);
+		expect(isEnvironmentFailure(run(999, false))).toBe(true);
+		// At the floor the run burned real tokens: rule signal, not environment.
+		expect(isEnvironmentFailure(run(1000, false))).toBe(false);
+		expect(isEnvironmentFailure(run(40_000, false))).toBe(false);
+		// A completed run is never an environment failure, whatever its cost.
+		expect(isEnvironmentFailure(run(0, true))).toBe(false);
+	});
+
+	it("trips the pass-level check on a strict majority with a minimum count", () => {
+		const pass = (envFailed: number, ok: number) => [
+			summarizeTask("t1", [
+				...Array.from({ length: envFailed }, (_, i) => ({
+					sessionId: `f${i}`,
+					tokens: 0,
+					completed: false,
+				})),
+				...Array.from({ length: ok }, (_, i) => ({
+					sessionId: `o${i}`,
+					tokens: 50_000,
+					completed: true,
+				})),
+			]),
+		];
+		// Exactly half is not a majority.
+		expect(passEnvironmentFailure(pass(3, 3)).tripped).toBe(false);
+		expect(passEnvironmentFailure(pass(4, 2)).tripped).toBe(true);
+		// A majority below the minimum count (transient crashes) never trips.
+		expect(passEnvironmentFailure(pass(2, 1)).tripped).toBe(false);
+		expect(passEnvironmentFailure(pass(3, 2)).tripped).toBe(true);
+		// The real quota death: 72 of 84 baseline runs failed.
+		expect(passEnvironmentFailure(pass(72, 12)).tripped).toBe(true);
+		expect(passEnvironmentFailure(pass(4, 2))).toMatchObject({
+			envFailed: 4,
+			total: 6,
+		});
+	});
+
+	it("failed-with-tokens runs are not counted as environment failures", () => {
+		const summaries = [
+			summarizeTask("t1", [
+				{ sessionId: "a", tokens: 40_000, completed: false },
+				{ sessionId: "b", tokens: 45_000, completed: false },
+				{ sessionId: "c", tokens: 42_000, completed: false },
+				{ sessionId: "d", tokens: 41_000, completed: false },
+			]),
+		];
+		expect(passEnvironmentFailure(summaries)).toMatchObject({
+			envFailed: 0,
+			total: 4,
+			tripped: false,
+		});
+	});
+});
+
+describe("runSuite environment-failure streak abort", () => {
+	let dir: string;
+	let db: WardenDb;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-bench-suite-"));
+		db = openDb(join(dir, "warden.db"));
+	});
+
+	afterEach(() => {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	const tasks = (n: number): GoldenTask[] =>
+		Array.from({ length: n }, (_, i) => ({
+			id: `t${i + 1}`,
+			agent: "sql",
+			prompt: "do the thing",
+			successCheck: "true",
+			file: `t${i + 1}.md`,
+			weight: 1,
+		}));
+
+	const options = (runs: number): SuiteOptions => ({
+		rules: [],
+		runs,
+		recordBaselines: false,
+		rulesetVersion: 0,
+		label: "test-pass",
+		config: "candidate",
+		definitionOverride: { content: "agent", model: "sonnet" },
+	});
+
+	/** Fake runOnce returning scripted results in order; throws (RUN-ERROR
+	 * path) when the scripted entry is "crash". */
+	function scripted(script: (RunResult | "crash")[]): {
+		single: () => RunResult;
+		calls: () => number;
+	} {
+		let i = 0;
+		return {
+			single: (): RunResult => {
+				const entry = script[i++];
+				if (entry === undefined) throw new Error("script exhausted");
+				if (entry === "crash") throw new Error("claude crashed");
+				return entry;
+			},
+			calls: () => i,
+		};
+	}
+
+	const envFail = (): RunResult => ({
+		sessionId: "dead",
+		tokens: 0,
+		completed: false,
+	});
+	const ok = (): RunResult => ({
+		sessionId: "ok",
+		tokens: 50_000,
+		completed: true,
+	});
+
+	it("throws EnvironmentFailureError after 4 consecutive zero-token failures and stops running", () => {
+		const fake = scripted([envFail(), envFail(), envFail(), envFail(), ok()]);
+		expect(() =>
+			runSuite(db, "sql", tasks(3), options(2), fake.single as never),
+		).toThrow(EnvironmentFailureError);
+		// No fifth run was attempted after the abort.
+		expect(fake.calls()).toBe(4);
+	});
+
+	it("carries diagnostics (counts, streak, partial summaries) on the error", () => {
+		const fake = scripted([ok(), envFail(), envFail(), envFail(), envFail()]);
+		try {
+			runSuite(db, "sql", tasks(3), options(2), fake.single as never);
+			expect.unreachable("should have thrown");
+		} catch (err) {
+			if (!(err instanceof EnvironmentFailureError)) throw err;
+			expect(err.info).toMatchObject({
+				agent: "sql",
+				label: "test-pass",
+				envFailed: 4,
+				total: 5,
+				streak: 4,
+			});
+			expect(err.info.partial.length).toBeGreaterThan(0);
+		}
+	});
+
+	it("a completed run resets the streak", () => {
+		// fail,fail,fail,ok | fail,fail,fail,fail -> aborts on run 8, not 4.
+		const fake = scripted([
+			envFail(),
+			envFail(),
+			envFail(),
+			ok(),
+			envFail(),
+			envFail(),
+			envFail(),
+			envFail(),
+		]);
+		expect(() =>
+			runSuite(db, "sql", tasks(2), options(4), fake.single as never),
+		).toThrow(EnvironmentFailureError);
+		expect(fake.calls()).toBe(8);
+	});
+
+	it("a failed run that burned real tokens resets the streak (rule signal, not environment)", () => {
+		const ruleFail = (): RunResult => ({
+			sessionId: "broke",
+			tokens: 40_000,
+			completed: false,
+		});
+		const fake = scripted([
+			envFail(),
+			envFail(),
+			envFail(),
+			ruleFail(),
+			ok(),
+			ok(),
+		]);
+		const summaries = runSuite(
+			db,
+			"sql",
+			tasks(3),
+			options(2),
+			fake.single as never,
+		);
+		expect(summaries).toHaveLength(3);
+		expect(fake.calls()).toBe(6);
+	});
+
+	it("crash-thrown runs (RUN-ERROR) count toward the streak", () => {
+		const fake = scripted(["crash", "crash", "crash", "crash", ok()]);
+		expect(() =>
+			runSuite(db, "sql", tasks(3), options(2), fake.single as never),
+		).toThrow(EnvironmentFailureError);
+		expect(fake.calls()).toBe(4);
+	});
+
+	it("a single broken run still does not abort the suite", () => {
+		const fake = scripted([ok(), "crash", ok(), ok()]);
+		const summaries = runSuite(
+			db,
+			"sql",
+			tasks(2),
+			options(2),
+			fake.single as never,
+		);
+		expect(summaries).toHaveLength(2);
+		const failed = summaries
+			.flatMap((s) => s.results)
+			.filter((r) => !r.completed);
+		expect(failed).toHaveLength(1);
 	});
 });
