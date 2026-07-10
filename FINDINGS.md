@@ -524,6 +524,56 @@ measurement (`ABORTED: environment failure`, non-zero exit, candidate stays
 queued), and the false-regression path that evicted run 2's candidate is
 closed. See CHANGELOG v0.38.0 and DECISIONS.md.*
 
+## Third compression burn (2026-07-10): the abort guard validates itself live
+
+The v0.38.0 environment-failure guard got its production trial the same day it
+was built. The third attempt at the compression A/B (same experiment as runs
+1-2, reproduced on an isolated DB: original rule active+protected at rent 28,
+the exact recorded compressed candidate at rent 14, swap provenance) ran at 5
+runs/side — sized by `/warden-power` on fresh variance history for all 7 tasks
+(21-run characterization pass, ~1.6M tokens; the planner said 9/side for 80%
+power, we capped at 5 to fit the window and accepted ~60% pre-top-up power).
+
+**The quota died mid-burn again — and this time the engine refused to lie.**
+The candidate side completed clean (35/35 passing). Partway through the
+swap-reference side the window exhausted: a cascade of zero-token
+`FAILED-CHECK` runs began, exactly the run-1/run-2 profile. The guard's
+behavior, verbatim from the log:
+
+- sql-06 run 2 failed **with 21,258 tokens** — a genuine failed attempt — and
+  correctly *reset* the streak (rule signal, not environment).
+- Four consecutive zero-token failures later:
+  `ENVIRONMENT FAILURE: 4 consecutive zero-token failed runs — quota
+  exhausted? aborting [swap-base-2]`, then
+  `ABORTED: environment failure during swap-base-2 (6 of 31 runs failed with
+  ~0 tokens — quota exhausted?) … Rule 2 was NOT judged … remains queued`,
+  exit code 1.
+- DB state after: candidate still `status='candidate'`, `measured_delta`
+  NULL, **zero receipts**, protected rule untouched. Runs 1 and 2 finalized
+  garbage evictions from this identical situation; run 3 recorded nothing and
+  the measurement simply re-queued.
+
+Two other things this burn surfaced, both fixed in the same release:
+
+1. **Parent-session transcript binding** (`benchChildEnv()`, src/bench.ts).
+   Benching from *inside* a Claude Code session (here: a remote cloud
+   session), the spawned `claude -p` bound to the parent session and reported
+   the parent's session id — so the bench parsed the parent's multi-megatoken
+   conversation transcript as the run's cost (observed: a golden run
+   "measured" 30.4M tokens) and would have frozen that as run1 forever. The
+   child env now strips the session-identity variables; verified live (fresh
+   session ids, sane 34k-174k run costs).
+2. **The suite's true noise, now on the record.** The characterization pass
+   put `config='active'` replicate history on all 7 tasks (5 of 7 exceed the
+   25% variance warning; sql-04's reference side later derailed to a 237k
+   mean on runs that individually ranged 88k-600k). The power planner now
+   plans from measured reality instead of a 3-task stale sample, and warns
+   when tasks lack history.
+
+The re-run on the next window is the same one-liner (`select --agent sql
+--runs 5 --top-up 1`) because the abort left nothing to clean up — which is
+the entire point.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can
