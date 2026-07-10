@@ -574,6 +574,38 @@ The re-run on the next window is the same one-liner (`select --agent sql
 --runs 5 --top-up 1`) because the abort left nothing to clean up — which is
 the entire point.
 
+**Attempts 2 and 3 (same day): two more clean aborts, and the stop-loss.**
+The re-run (fresh window, same shape) completed **all 70 main runs cleanly**
+— candidate side 35/35 passing, reference side 35/35 with one absorbed
+transient failure — and produced per-task savings (reference − candidate) of
+−2,863 / +8,603 / +6,804 / **−65,350** / **−37,246** / −8,223 / −30: mean ≈
+**−14,044 tok/run, verdict `uncertain`**. Note the sign: attempt 1's partial
+data leaned positive (+119k on sql-04!); attempt 2's clean data leans
+negative — the same task's derailment lottery (individual sql-04 runs ranged
+81k–230k) swings the estimate by ±100k per task. The Neyman top-up correctly
+poured 16 runs into sql-04 and died at run 11 when the window exhausted —
+**guard validation #2**, this time in the top-up phase (run 1's exact
+contamination vector, now a clean abort instead of a merged-garbage verdict).
+Attempt 3 (`--top-up 0`, sized at exactly 70 runs to guarantee finalizing)
+died only ~30 runs into its window — **guard validation #3**, candidate-side
+phase. Observed window capacities: ~81 runs, then ~30 — too erratic to fit
+even the minimal 70-run shape.
+
+**Stop-loss and verdict on the experiment.** After three attempts (~16M
+tokens of measurement + 1.6M characterization), the campaign was stopped
+rather than auto-retried further. The compression A/B is closed as
+**unconfirmable in this environment**, now with a sharper reason than runs
+1-2 gave: the effect — whatever its sign — is smaller than the sql suite's
+derailment noise at any run count the environment's quota windows can hold.
+Candidate #2 remains queued (nothing contaminated, nothing to clean up);
+re-attempt only after the suite's per-run cost and tail variance are cut
+(follow-up i, still the binding constraint) or on an environment with larger
+windows. What the three failed windows *did* buy, beyond the negative: the
+abort guard is now validated live in all three measurement phases (reference,
+top-up, candidate), the streak-reset discriminator behaved correctly on a
+real failed-with-tokens run, and not one garbage number reached the ledger —
+the exact opposite of runs 1 and 2.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can
