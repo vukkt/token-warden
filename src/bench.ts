@@ -370,6 +370,37 @@ export interface RunResult {
 	fileRereads?: number;
 }
 
+/**
+ * Environment for the spawned benchmark `claude`, hermetically detached from
+ * any parent Claude Code session. When the benchmark runs INSIDE a Claude
+ * Code session (a /warden-* command, or a remote/cloud session), the child
+ * CLI can bind to the parent session and report the PARENT's session id —
+ * findTranscript then parses the parent's multi-megatoken transcript as the
+ * run's cost (observed live 2026-07-10: a golden run "measured" 30.4M tokens,
+ * and recordBaseline would have frozen that as run1). Stripping the
+ * session-identity variables forces a fresh child session whose transcript is
+ * the run's own. TOKEN_WARDEN_NO_DISTILL serves the same hermeticity goal for
+ * the Stop hook.
+ */
+function benchChildEnv(): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = {
+		...process.env,
+		TOKEN_WARDEN_NO_DISTILL: "1",
+	};
+	for (const key of [
+		"CLAUDECODE",
+		"CLAUDE_CODE_SESSION_ID",
+		"CLAUDE_CODE_REMOTE_SESSION_ID",
+		"CLAUDE_CODE_CHILD_SESSION",
+		"CLAUDE_CODE_ENTRYPOINT",
+		"CLAUDE_CODE_SESSION_INGRESS_TOKEN_FILE",
+		"CLAUDE_SESSION_INGRESS_TOKEN_FILE",
+	]) {
+		delete env[key];
+	}
+	return env;
+}
+
 function runOnce(
 	db: WardenDb,
 	task: GoldenTask,
@@ -404,10 +435,9 @@ function runOnce(
 				encoding: "utf8",
 				timeout: CLAUDE_TIMEOUT_MS,
 				maxBuffer: 64 * 1024 * 1024,
-				// If the plugin is installed globally, its Stop hook fires
-				// inside this benchmark session; this stops that hook from
-				// spawning haiku distillers off golden runs.
-				env: { ...process.env, TOKEN_WARDEN_NO_DISTILL: "1" },
+				// Hermetic child session: no distiller off golden runs, and no
+				// binding to a parent Claude Code session (see benchChildEnv).
+				env: benchChildEnv(),
 			},
 		);
 		if (claude.error) throw claude.error;
