@@ -74,9 +74,11 @@ describe("assessDelta", () => {
 	});
 
 	it("never marks regressions or unmeasurable deltas uncertain", () => {
+		// The t2 failure burned real tokens (≥ the environment-failure floor):
+		// a genuine rule regression, not a quota death.
 		const regressed = [
 			summary("t1", [900]),
-			summary("t2", [0], false),
+			summary("t2", [40_000], false),
 			summary("t3", [900]),
 		];
 		const assessment = assessDelta(baseline, regressed, 25);

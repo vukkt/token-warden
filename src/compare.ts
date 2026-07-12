@@ -80,6 +80,10 @@ export interface Comparison {
 	standardError: number | null;
 	/** Candidate failed a task the baseline completed → unsafe change. */
 	regression: boolean;
+	/** A baseline-completed task's candidate side is only zero-token failed
+	 * runs (quota death, API outage) — the measurement says nothing about the
+	 * candidate and no verdict should be drawn. */
+	environmentFailure: boolean;
 	/** Token difference indistinguishable from zero (|Δ| < standard error). */
 	uncertain: boolean;
 	/** Tasks completed in BOTH configurations — confidence is meaningful
@@ -216,6 +220,7 @@ export function compareConfigs(
 		pct: pctChange(overallCandProc, overallBaseProc),
 		standardError: assessment.standardError,
 		regression: assessment.regression,
+		environmentFailure: assessment.environmentFailure,
 		uncertain: assessment.uncertain,
 		comparableTasks,
 		baselineDurationMean: overallDurationMean(perTask, "baseline"),
@@ -239,6 +244,9 @@ export function verdictLine(cmp: Comparison): string {
 	const { candidateLabel: c, baselineLabel: b, subject, dimension } = cmp;
 	if (cmp.regression) {
 		return `WARNING: ${c} failed a task that ${b} completed — NOT a safe ${dimension} change for ${subject} regardless of tokens.`;
+	}
+	if (cmp.environmentFailure) {
+		return `WARNING: some ${c} runs failed with ~0 tokens (environment failure — quota exhausted?) on a task ${b} completed — the measurement says nothing about this ${dimension}; re-run on a healthy environment before drawing any verdict for ${subject}.`;
 	}
 	if (cmp.comparableTasks < 2) {
 		return `Only ${cmp.comparableTasks} task(s) completed in both ${dimension}s — too few to judge confidence; treat ${cmp.pct} (${c} vs ${b}) as indicative only.`;

@@ -53,6 +53,19 @@ const MAX_TURNS = 60;
  * get a variance warning in the output (LLM variance is real). Shared with
  * /warden-health's per-task variance ranking so "noisy" means one thing. */
 export const VARIANCE_WARN_RATIO = 0.25;
+/** A failed run below this token count is an environment failure (quota
+ * exhaustion, API error, crash) rather than a rule-caused regression: the
+ * cheapest genuine golden run observed is ~34k tokens, and even a rule-broken
+ * run burns thousands attempting the task, while quota-death runs parse to ~0.
+ * Zero tokens = the environment died; tokens = the rule broke the task. */
+export const ENV_FAILURE_TOKEN_FLOOR = 1_000;
+/** Consecutive environment failures that abort a suite pass early. A single
+ * broken run (claude crash, vanished transcript) must not abort the suite;
+ * the real quota deaths ran 46 and 72 consecutive zero-token failures. */
+export const ENV_FAILURE_STREAK = 4;
+/** Minimum environment-failure count before a pass-level majority check can
+ * trip, so 1-2 transient crashes in a small pass never abort. */
+export const ENV_FAILURE_MIN_COUNT = 3;
 
 export interface BenchArgs {
 	agent: string;
@@ -357,6 +370,37 @@ export interface RunResult {
 	fileRereads?: number;
 }
 
+/**
+ * Environment for the spawned benchmark `claude`, hermetically detached from
+ * any parent Claude Code session. When the benchmark runs INSIDE a Claude
+ * Code session (a /warden-* command, or a remote/cloud session), the child
+ * CLI can bind to the parent session and report the PARENT's session id —
+ * findTranscript then parses the parent's multi-megatoken transcript as the
+ * run's cost (observed live 2026-07-10: a golden run "measured" 30.4M tokens,
+ * and recordBaseline would have frozen that as run1). Stripping the
+ * session-identity variables forces a fresh child session whose transcript is
+ * the run's own. TOKEN_WARDEN_NO_DISTILL serves the same hermeticity goal for
+ * the Stop hook.
+ */
+function benchChildEnv(): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = {
+		...process.env,
+		TOKEN_WARDEN_NO_DISTILL: "1",
+	};
+	for (const key of [
+		"CLAUDECODE",
+		"CLAUDE_CODE_SESSION_ID",
+		"CLAUDE_CODE_REMOTE_SESSION_ID",
+		"CLAUDE_CODE_CHILD_SESSION",
+		"CLAUDE_CODE_ENTRYPOINT",
+		"CLAUDE_CODE_SESSION_INGRESS_TOKEN_FILE",
+		"CLAUDE_SESSION_INGRESS_TOKEN_FILE",
+	]) {
+		delete env[key];
+	}
+	return env;
+}
+
 function runOnce(
 	db: WardenDb,
 	task: GoldenTask,
@@ -391,10 +435,9 @@ function runOnce(
 				encoding: "utf8",
 				timeout: CLAUDE_TIMEOUT_MS,
 				maxBuffer: 64 * 1024 * 1024,
-				// If the plugin is installed globally, its Stop hook fires
-				// inside this benchmark session; this stops that hook from
-				// spawning haiku distillers off golden runs.
-				env: { ...process.env, TOKEN_WARDEN_NO_DISTILL: "1" },
+				// Hermetic child session: no distiller off golden runs, and no
+				// binding to a parent Claude Code session (see benchChildEnv).
+				env: benchChildEnv(),
 			},
 		);
 		if (claude.error) throw claude.error;
@@ -500,6 +543,64 @@ export function summarizeTask(
 	return { taskId, results, meanCompletedTokens: avg, highVariance, weight };
 }
 
+/** True when a run's failure is environmental (quota death, API error, crash)
+ * rather than evidence about the rule: it failed AND burned essentially no
+ * tokens. Failed runs with real token spend stay regression signal. */
+export function isEnvironmentFailure(result: RunResult): boolean {
+	return !result.completed && result.tokens < ENV_FAILURE_TOKEN_FLOOR;
+}
+
+/** Pass-level environment-failure check: a measurement pass whose runs are
+ * majority environment failures (with a minimum count so a couple of
+ * transient crashes never trip it) cannot support any verdict. */
+export function passEnvironmentFailure(summaries: TaskSummary[]): {
+	envFailed: number;
+	total: number;
+	tripped: boolean;
+} {
+	const results = summaries.flatMap((s) => s.results);
+	const envFailed = results.filter(isEnvironmentFailure).length;
+	const total = results.length;
+	return {
+		envFailed,
+		total,
+		tripped: envFailed >= ENV_FAILURE_MIN_COUNT && envFailed * 2 > total,
+	};
+}
+
+/**
+ * Thrown when a measurement pass dies environmentally (quota exhaustion, API
+ * outage) instead of producing evidence about a rule. Callers must NOT
+ * finalize any verdict from it: the two real quota-death burns finalized
+ * garbage evictions from the surviving handful of runs (FINDINGS.md, 2026-07).
+ */
+export class EnvironmentFailureError extends Error {
+	readonly info: {
+		agent: string;
+		/** Which measurement pass died. */
+		label: string;
+		/** Zero-token failed runs observed in the pass. */
+		envFailed: number;
+		/** Runs observed in the pass before the abort. */
+		total: number;
+		/** Consecutive-failure count when the streak abort fired; null when the
+		 * pass-level majority check fired instead. */
+		streak: number | null;
+		/** Summaries built before the abort — diagnostics only (raw rows are
+		 * already recorded in `runs`). */
+		partial: TaskSummary[];
+	};
+
+	constructor(info: EnvironmentFailureError["info"]) {
+		super(
+			`environment failure during ${info.label}: ${info.envFailed} of ` +
+				`${info.total} runs failed with ~0 tokens — quota exhausted?`,
+		);
+		this.name = "EnvironmentFailureError";
+		this.info = info;
+	}
+}
+
 export interface SuiteOptions {
 	/** Exact rule set to compile into the agent's MEMORY.md for these runs. */
 	rules: RuleRow[];
@@ -531,10 +632,33 @@ export function runSuite(
 	agent: string,
 	tasks: GoldenTask[],
 	options: SuiteOptions,
+	single: typeof runOnce = runOnce,
 ): TaskSummary[] {
-	ensureFixtureDeps();
+	// Fixture deps are only needed by the real runner; an injected fake
+	// (tests) must not trigger an npm install.
+	if (single === runOnce) ensureFixtureDeps();
 	const definition = options.definitionOverride ?? loadAgentDefinition(agent);
 	const summaries: TaskSummary[] = [];
+	// Consecutive environment failures (zero-token failed runs) span task
+	// boundaries: a quota death kills every subsequent run regardless of task,
+	// and continuing would burn the rest of the pass producing no evidence.
+	let envStreak = 0;
+	let envFailed = 0;
+	let total = 0;
+	const abort = (task: GoldenTask, results: RunResult[]): never => {
+		console.log(
+			`ENVIRONMENT FAILURE: ${envStreak} consecutive zero-token failed runs` +
+				` — quota exhausted? aborting [${options.label}]`,
+		);
+		throw new EnvironmentFailureError({
+			agent,
+			label: options.label,
+			envFailed,
+			total,
+			streak: envStreak,
+			partial: [...summaries, summarizeTask(task.id, results, task.weight)],
+		});
+	};
 	for (const task of tasks) {
 		const results: RunResult[] = [];
 		for (let i = 1; i <= options.runs; i++) {
@@ -546,17 +670,30 @@ export function runSuite(
 			// Failed results are excluded from all savings math anyway.
 			let result: RunResult;
 			try {
-				result = runOnce(db, task, definition, options.rules, options);
+				result = single(db, task, definition, options.rules, options);
 			} catch (err) {
 				const detail = err instanceof Error ? err.message : String(err);
 				console.log(`RUN-ERROR ${detail.split("\n")[0]}`);
-				results.push({ sessionId: "run-error", tokens: 0, completed: false });
+				result = { sessionId: "run-error", tokens: 0, completed: false };
+				results.push(result);
+				total++;
+				envFailed++;
+				envStreak++;
+				if (envStreak >= ENV_FAILURE_STREAK) abort(task, results);
 				continue;
 			}
 			results.push(result);
+			total++;
 			console.log(
 				`${result.completed ? "ok" : "FAILED-CHECK"} ${result.tokens} tokens (${result.sessionId})`,
 			);
+			if (isEnvironmentFailure(result)) {
+				envFailed++;
+				envStreak++;
+				if (envStreak >= ENV_FAILURE_STREAK) abort(task, results);
+			} else {
+				envStreak = 0;
+			}
 		}
 		const summary = summarizeTask(task.id, results, task.weight);
 		console.log(

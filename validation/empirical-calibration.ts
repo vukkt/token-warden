@@ -168,7 +168,9 @@ export function candidateKept(
 	topUp: ((measured: TaskSummary[]) => TaskSummary[] | null) | null,
 ): boolean {
 	let a = assessDelta(without, withRule, rent);
-	if (a.regression || a.delta === null) return false;
+	// An environment-failed measurement makes the selector ABORT (no verdict);
+	// for the keep-rate harness that maps to "not kept".
+	if (a.regression || a.environmentFailure || a.delta === null) return false;
 	if (a.uncertain && topUp !== null) {
 		const extra = topUp(withRule);
 		if (extra) {
@@ -179,6 +181,7 @@ export function candidateKept(
 	return (
 		!a.uncertain &&
 		a.delta !== null &&
+		!a.environmentFailure &&
 		verdict({ measuredDelta: a.delta, contextCost: rent }) === "active"
 	);
 }

@@ -193,11 +193,20 @@ describe("bootstrapTrial", () => {
 
 describe("candidateKept", () => {
 	it("returns false on a regression (a task with zero completed with-side runs)", () => {
+		// The failed runs burned real tokens (above the environment-failure
+		// floor): a genuine regression.
 		const without = [summary("t0", [1000, 1100]), summary("t1", [2000, 2100])];
 		const withRule = [
 			summary("t0", [400, 450]),
-			summary("t1", [500, 550], false),
+			summary("t1", [5000, 5500], false),
 		];
+		expect(candidateKept(without, withRule, 25, null)).toBe(false);
+	});
+
+	it("returns false on an environment-failed measurement (zero-token failures)", () => {
+		// A quota-dead with-side maps to the selector's ABORT — never a keep.
+		const without = [summary("t0", [1000, 1100]), summary("t1", [2000, 2100])];
+		const withRule = [summary("t0", [400, 450]), summary("t1", [0, 0], false)];
 		expect(candidateKept(without, withRule, 25, null)).toBe(false);
 	});
 

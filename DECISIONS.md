@@ -557,6 +557,38 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.38.0 — environment-failure abort (refuse a verdict, don't steer one)
+
+- **An abort is not advisory-axis gating.** The non-goals list forbids gating verdicts on
+  advisory signals (latency, tail risk, completion drop), and this stays true: the
+  environment-failure guard never flips a keep to an evict or vice versa — it refuses to
+  produce *any* verdict from a measurement that says nothing about the rule. That is the
+  follow-up (ii) FINDINGS.md called for after the 2026-07 quota-death burns finalized a
+  −71,998 "delta" from 72/84 failed baseline runs.
+- **The discriminator is tokens, not the failure flag.** `completed=false` alone is rule
+  signal (the agent attempted the task and broke it — the regression gate must keep firing
+  on that, per the rule-3 false-economy catch). `completed=false && tokens < 1,000` is
+  environment: quota-death runs parse to ~0 tokens, while the cheapest genuine golden run
+  observed is ~34k and even a broken attempt burns thousands. The floor is ~30x below any
+  observed genuine attempt.
+- **Three thresholds, all constants, none tunable.** Streak 4 in `runSuite` (the real
+  quota deaths ran 46 and 72 consecutive zero-token failures; a single crash — the case
+  the old "never abort the suite" comment protected — cannot reach 4); pass-level majority
+  with minimum count 3 in the selector (so 1-2 transient crashes in a small pass never
+  abort); and the per-task all-env-failed check inside `assessDelta` (the false-regression
+  path). Env/flag tunability was considered and rejected: config surface without a
+  demonstrated need, and a threshold a user can loosen is a threshold that will one day
+  admit a garbage verdict.
+- **Per-pass, never post-merge.** Burn 1's contaminated top-up merged into a clean first
+  pass was only ~45% failed — below any majority threshold — while as its own pass it was
+  ~82%. The guard wraps the runner so every pass (baseline, swap reference, candidate,
+  audit, top-up) is checked the moment it is produced, before `mergeSummaries`.
+- **No 'aborted' receipt row.** `rule_receipts` is the decision audit trail with
+  active/evicted semantics consumed by receipts, health, and ledger verification; an abort
+  is precisely "no decision was made". Forensics live in the recorded `runs` rows, the
+  ABORT stdout block, and FINDINGS. The candidate simply stays queued and the next
+  invocation re-measures it — re-running IS the recovery procedure.
+
 ## v0.37.0 — distribution weighting enters the gate (effective-DoF correction)
 
 - **The correction is a ratio normalized to the uniform-weight case, not an absolute

@@ -1,11 +1,57 @@
 # Changelog
 
+## v0.39.0 — 2026-07-11
+
+The complete environment-failure abort. v0.38.0 shipped a first, simpler guard
+(majority-zero-token check in the selector); this release replaces it with the
+full implementation, built and validated live through three real quota deaths
+(FINDINGS.md) — same principle, four independent layers, and it fixes a
+dilution flaw in the v0.38.0 check (which ran post-merge, where a clean first
+pass could dilute a contaminated top-up below any threshold — exactly how
+burn 1 finalized).
+
+- **Zero-token discriminator** (`src/bench.ts` `isEnvironmentFailure`). A
+  failed run below 1,000 tokens is an environment failure (quota death, API
+  error, crash) — the cheapest genuine golden run observed is ~34k, and even a
+  rule-broken run burns thousands attempting the task. A failed run *with*
+  real tokens stays regression signal, so the safety gate (the rule-3 class)
+  is untouched.
+- **Streak abort in `runSuite`** (`ENV_FAILURE_STREAK = 4`). Four consecutive
+  zero-token failures abort the pass early with a typed
+  `EnvironmentFailureError` instead of burning the rest of the suite producing
+  no evidence (the real quota deaths ran 46 and 72 consecutive). A single
+  broken run still never aborts.
+- **Per-pass majority guard in the selector** (`passEnvironmentFailure`:
+  >=3 env-failures and a strict majority of the pass). Checked the moment each
+  pass is produced — baseline, swap reference, candidate, audit, top-up —
+  never post-merge.
+- **False-regression fix** (`assessDelta.environmentFailure`). A
+  baseline-completed task whose with-side is missing or all zero-token
+  failures no longer reads as a rule regression; it flags environment failure
+  and the selector aborts before `decideRule`/`recordReceipt`/probation — an
+  abort structurally cannot persist a verdict. The rule stays queued as a
+  candidate; decisions made earlier in the invocation stand. `main()` prints
+  `ABORTED: environment failure …` and exits non-zero. No 'aborted' receipt
+  row: an abort is precisely "no decision was made".
+- **Benchmark subprocess isolation** (`src/bench.ts` `benchChildEnv`). Spawned
+  benchmark `claude` processes no longer inherit a parent Claude Code
+  session's environment — a bug that could make a golden run "measure" the
+  parent session's multi-million-token transcript and freeze it as a run1
+  baseline.
+- **Compare surfaces it too** (`src/compare.ts`): model/prompt A/Bs report
+  "environment failure — no verdict" instead of silently mis-reading a
+  quota-dead side.
+- **Power planner honesty** (`src/power.ts`): warns when golden tasks have no
+  active-run variance history ("this plan is under-characterized") — the blind
+  spot that mis-sized both burns by ~3x.
+
 ## v0.38.0 — 2026-07-10
 
-The environment-failure abort guard — the direct product of the two real
-compression burns (FINDINGS.md, "First compression A/B burn"), both of which
-were killed by quota exhaustion mid-burn and produced verdicts that should
-never have been finalized.
+The environment-failure abort guard, first iteration — the direct product of
+the two real compression burns (FINDINGS.md, "First compression A/B burn"),
+both of which were killed by quota exhaustion mid-burn and produced verdicts
+that should never have been finalized. Superseded by the complete
+implementation in v0.39.0.
 
 - **Selector abort guard** (`src/select.ts` `environmentFailure`). When at
   least half of a measurement pass's runs failed WITHOUT spending tokens, the
@@ -15,9 +61,7 @@ never have been finalized.
   ENVIRONMENT kills produces zero. On trip, the decision is ABORTED: no
   verdict persisted, no receipt written, a candidate stays queued for a
   healthy invocation, an audit target stays untouched, and an all-aborted
-  invocation does not recompile memory (no ruleset bump, no cache bust). Burn
-  2's nonsense -72k eviction of a promising rule would have been a clean
-  "ABORTED (environment failure)" under this guard.
+  invocation does not recompile memory (no ruleset bump, no cache bust).
 - Regression-test fixtures that modeled a rule-caused failure as a zero-token
   run were updated to spend tokens — matching reality, and the guard's
   discriminator.
