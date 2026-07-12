@@ -28,6 +28,11 @@ When it finishes, report:
 2. The compiled memory path and new ruleset version.
 3. If a previously active rule was evicted on re-audit, say so explicitly —
    that is mandatory eviction working, not a malfunction.
+4. If the run prints `ABORTED: environment failure` (and exits non-zero),
+   report that NO verdict was recorded — the measurement died environmentally
+   (quota exhaustion / API outage), the rule is still queued as a candidate,
+   and the fix is to re-run `/warden-select` on a fresh quota window. Never
+   describe an abort as an eviction.
 
 The "≈$/run" and "$/week" figures are advisory only — the keep/evict verdict
 is decided on raw tokens, never dollars. Never edit rules or MEMORY.md by

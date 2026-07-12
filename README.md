@@ -16,6 +16,7 @@ and a dated receipt for each.
 - **Self-funding** — a rule must save ≥ 2× its own context rent to stay.
 - **Self-auditing** — active rules are re-benchmarked and evicted when they stop earning.
 - **Zero session overhead** — collection runs in a Stop hook that never blocks or fails your work.
+- **Environment-honest** — a quota-dead measurement (zero-token failed runs) ABORTs with no verdict recorded; it can never masquerade as an eviction.
 
 ---
 

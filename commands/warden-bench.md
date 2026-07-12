@@ -24,6 +24,10 @@ When it finishes, report:
    surface it prominently: it means benchmarking spent more than 10% of the
    week's collected real-work tokens, and the user should bench less often.
 3. Any per-task `runs differ by >25%` variance warnings.
+4. If the run prints `ENVIRONMENT FAILURE` and aborts, report that the
+   benchmark died environmentally (4 consecutive zero-token failed runs —
+   quota exhaustion / API outage) and should be re-run on a fresh quota
+   window; results recorded before the abort are valid.
 
 Never edit `run1` values or the database by hand; baselines are frozen by
 design.

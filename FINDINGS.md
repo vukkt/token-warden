@@ -516,6 +516,96 @@ variance (follow-up i), not repeating the burn. Follow-up (ii) is also now
 clearly worth building: it would have turned run 2's garbage verdict into a clean
 "aborted: environment failure" instead of an evicted rule.
 
+*Update (2026-07-10, v0.38.0): follow-up (ii) is built. The engine now
+discriminates zero-token failures (environment) from failed-with-tokens runs
+(rule regression), aborts a pass after 4 consecutive zero-token failures,
+refuses to finalize any verdict from a majority-dead or per-task-dead
+measurement (`ABORTED: environment failure`, non-zero exit, candidate stays
+queued), and the false-regression path that evicted run 2's candidate is
+closed. See CHANGELOG v0.38.0 and DECISIONS.md.*
+
+## Third compression burn (2026-07-10): the abort guard validates itself live
+
+The v0.38.0 environment-failure guard got its production trial the same day it
+was built. The third attempt at the compression A/B (same experiment as runs
+1-2, reproduced on an isolated DB: original rule active+protected at rent 28,
+the exact recorded compressed candidate at rent 14, swap provenance) ran at 5
+runs/side — sized by `/warden-power` on fresh variance history for all 7 tasks
+(21-run characterization pass, ~1.6M tokens; the planner said 9/side for 80%
+power, we capped at 5 to fit the window and accepted ~60% pre-top-up power).
+
+**The quota died mid-burn again — and this time the engine refused to lie.**
+The candidate side completed clean (35/35 passing). Partway through the
+swap-reference side the window exhausted: a cascade of zero-token
+`FAILED-CHECK` runs began, exactly the run-1/run-2 profile. The guard's
+behavior, verbatim from the log:
+
+- sql-06 run 2 failed **with 21,258 tokens** — a genuine failed attempt — and
+  correctly *reset* the streak (rule signal, not environment).
+- Four consecutive zero-token failures later:
+  `ENVIRONMENT FAILURE: 4 consecutive zero-token failed runs — quota
+  exhausted? aborting [swap-base-2]`, then
+  `ABORTED: environment failure during swap-base-2 (6 of 31 runs failed with
+  ~0 tokens — quota exhausted?) … Rule 2 was NOT judged … remains queued`,
+  exit code 1.
+- DB state after: candidate still `status='candidate'`, `measured_delta`
+  NULL, **zero receipts**, protected rule untouched. Runs 1 and 2 finalized
+  garbage evictions from this identical situation; run 3 recorded nothing and
+  the measurement simply re-queued.
+
+Two other things this burn surfaced, both fixed in the same release:
+
+1. **Parent-session transcript binding** (`benchChildEnv()`, src/bench.ts).
+   Benching from *inside* a Claude Code session (here: a remote cloud
+   session), the spawned `claude -p` bound to the parent session and reported
+   the parent's session id — so the bench parsed the parent's multi-megatoken
+   conversation transcript as the run's cost (observed: a golden run
+   "measured" 30.4M tokens) and would have frozen that as run1 forever. The
+   child env now strips the session-identity variables; verified live (fresh
+   session ids, sane 34k-174k run costs).
+2. **The suite's true noise, now on the record.** The characterization pass
+   put `config='active'` replicate history on all 7 tasks (5 of 7 exceed the
+   25% variance warning; sql-04's reference side later derailed to a 237k
+   mean on runs that individually ranged 88k-600k). The power planner now
+   plans from measured reality instead of a 3-task stale sample, and warns
+   when tasks lack history.
+
+The re-run on the next window is the same one-liner (`select --agent sql
+--runs 5 --top-up 1`) because the abort left nothing to clean up — which is
+the entire point.
+
+**Attempts 2 and 3 (same day): two more clean aborts, and the stop-loss.**
+The re-run (fresh window, same shape) completed **all 70 main runs cleanly**
+— candidate side 35/35 passing, reference side 35/35 with one absorbed
+transient failure — and produced per-task savings (reference − candidate) of
+−2,863 / +8,603 / +6,804 / **−65,350** / **−37,246** / −8,223 / −30: mean ≈
+**−14,044 tok/run, verdict `uncertain`**. Note the sign: attempt 1's partial
+data leaned positive (+119k on sql-04!); attempt 2's clean data leans
+negative — the same task's derailment lottery (individual sql-04 runs ranged
+81k–230k) swings the estimate by ±100k per task. The Neyman top-up correctly
+poured 16 runs into sql-04 and died at run 11 when the window exhausted —
+**guard validation #2**, this time in the top-up phase (run 1's exact
+contamination vector, now a clean abort instead of a merged-garbage verdict).
+Attempt 3 (`--top-up 0`, sized at exactly 70 runs to guarantee finalizing)
+died only ~30 runs into its window — **guard validation #3**, candidate-side
+phase. Observed window capacities: ~81 runs, then ~30 — too erratic to fit
+even the minimal 70-run shape.
+
+**Stop-loss and verdict on the experiment.** After three attempts (~16M
+tokens of measurement + 1.6M characterization), the campaign was stopped
+rather than auto-retried further. The compression A/B is closed as
+**unconfirmable in this environment**, now with a sharper reason than runs
+1-2 gave: the effect — whatever its sign — is smaller than the sql suite's
+derailment noise at any run count the environment's quota windows can hold.
+Candidate #2 remains queued (nothing contaminated, nothing to clean up);
+re-attempt only after the suite's per-run cost and tail variance are cut
+(follow-up i, still the binding constraint) or on an environment with larger
+windows. What the three failed windows *did* buy, beyond the negative: the
+abort guard is now validated live in all three measurement phases (reference,
+top-up, candidate), the streak-reset discriminator behaved correctly on a
+real failed-with-tokens run, and not one garbage number reached the ledger —
+the exact opposite of runs 1 and 2.
+
 ## Still open
 
 The engine is validated and the loop runs; the open question is narrower: **can

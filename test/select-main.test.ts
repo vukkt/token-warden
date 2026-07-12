@@ -264,6 +264,49 @@ describe("select main() orchestration", () => {
 		expect(out).toContain(", WEIGHTED");
 	});
 
+	it("prints ABORTED and exits non-zero on a quota-dead pass, leaving the candidate queued", () => {
+		const id = insertCandidate("Batch related queries into one statement.");
+		// The candidate pass dies environmentally: every run 0 tokens, failed —
+		// the run-2 quota-death profile. The baseline stays healthy.
+		runSuiteMock.mockImplementation(
+			(
+				_db: unknown,
+				_agent: unknown,
+				tasks: Array<{ id: string }>,
+				options: { runs: number; label: string },
+			): TaskSummary[] => {
+				const dead = options.label.startsWith("candidate-");
+				return tasks.map((t) => ({
+					taskId: t.id,
+					results: Array.from({ length: options.runs }, (_, i) => ({
+						sessionId: `${options.label}-${t.id}-${i}`,
+						tokens: dead ? 0 : 1000,
+						completed: !dead,
+					})),
+					meanCompletedTokens: dead ? 0 : 1000,
+					highVariance: false,
+					weight: 1,
+				}));
+			},
+		);
+
+		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
+
+		const out = output();
+		expect(out).toContain("ABORTED: environment failure");
+		expect(out).toContain(`Rule ${id} was NOT judged`);
+		expect(out).toContain("remains queued as a candidate");
+		expect(out).not.toContain("EVICTED");
+		expect(process.exitCode).toBe(1);
+		process.exitCode = 0;
+		const db = openDb();
+		try {
+			expect(getRuleById(db, id)?.status).toBe("candidate");
+		} finally {
+			db.close();
+		}
+	});
+
 	it("puts an active rule on probation at its first sub-threshold re-audit", () => {
 		const id = insertCandidate("An old rule that stopped earning.");
 		const db = openDb();

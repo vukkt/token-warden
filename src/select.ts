@@ -20,10 +20,13 @@ import { pathToFileURL } from "node:url";
 import {
 	assertPosixPlatform,
 	compileMemoryMd,
+	EnvironmentFailureError,
 	type GoldenTask,
 	goldenSuiteHash,
+	isEnvironmentFailure,
 	loadAgentDefinition,
 	loadGoldenTasks,
+	passEnvironmentFailure,
 	runSuite,
 	summarizeTask,
 	type TaskSummary,
@@ -162,7 +165,8 @@ interface TaskComparison {
 }
 
 /** Per-task comparisons for tasks completed in both configurations
- * (invariant #3), plus the regression flag and the completion-drop flag. */
+ * (invariant #3), plus the regression, completion-drop, and
+ * environment-failure flags. */
 function perTaskComparisons(
 	without: TaskSummary[],
 	withRule: TaskSummary[],
@@ -170,11 +174,13 @@ function perTaskComparisons(
 	comparisons: TaskComparison[];
 	regression: boolean;
 	completionDrop: boolean;
+	environmentFailure: boolean;
 } {
 	const withById = new Map(withRule.map((s) => [s.taskId, s]));
 	const comparisons: TaskComparison[] = [];
 	let regression = false;
 	let completionDrop = false;
+	let environmentFailure = false;
 	for (const base of without) {
 		const withoutTokens = base.results
 			.filter((r) => r.completed)
@@ -185,7 +191,18 @@ function perTaskComparisons(
 			.filter((r) => r.completed)
 			.map((r) => r.tokens);
 		if (!other || withTokens.length === 0) {
-			regression = true;
+			// A baseline-completed task with no completed with-rule run is only a
+			// rule regression when the failures burned real tokens (the agent
+			// attempted the task and broke). When the with-side is missing entirely
+			// (a truncated, environment-aborted pass) or every failure is a
+			// zero-token environment death (quota exhaustion), the runs say nothing
+			// about the rule — evicting on them is the quota-death false-eviction
+			// bug (FINDINGS.md, 2026-07).
+			if (!other || other.results.every(isEnvironmentFailure)) {
+				environmentFailure = true;
+			} else {
+				regression = true;
+			}
 			continue;
 		}
 		// Savings means use completed runs only, so a rule whose failed runs are
@@ -203,7 +220,7 @@ function perTaskComparisons(
 			weight: base.weight,
 		});
 	}
-	return { comparisons, regression, completionDrop };
+	return { comparisons, regression, completionDrop, environmentFailure };
 }
 
 /** Unbiased sample variance; null when fewer than two observations. */
@@ -406,6 +423,11 @@ export interface DeltaAssessment extends DeltaResult {
 	 * mean (survivorship bias). Report-only — never a gate input; a full
 	 * per-task failure is already the regression eviction. */
 	completionDrop: boolean;
+	/** True when a baseline-completed task's with-side is missing or consists
+	 * only of zero-token environment failures (quota death, API outage). The
+	 * measurement says nothing about the rule; no verdict may be finalized
+	 * from it — callers must abort instead of deciding. */
+	environmentFailure: boolean;
 }
 
 /**
@@ -427,10 +449,8 @@ export function assessDelta(
 	withRule: TaskSummary[],
 	contextCost: number,
 ): DeltaAssessment {
-	const { comparisons, regression, completionDrop } = perTaskComparisons(
-		without,
-		withRule,
-	);
+	const { comparisons, regression, completionDrop, environmentFailure } =
+		perTaskComparisons(without, withRule);
 	if (comparisons.length === 0) {
 		return {
 			delta: null,
@@ -441,6 +461,7 @@ export function assessDelta(
 			robustDelta: null,
 			tailRisk: false,
 			completionDrop,
+			environmentFailure,
 		};
 	}
 	const savings = comparisons.map((c) => c.saving);
@@ -525,6 +546,7 @@ export function assessDelta(
 		robustDelta,
 		tailRisk,
 		completionDrop,
+		environmentFailure,
 	};
 }
 
@@ -663,44 +685,12 @@ export type SuiteRunner = (
 	allocation?: RunAllocation,
 ) => TaskSummary[];
 
-/** Fraction of a config pass's runs that failed WITHOUT spending tokens before
- * the pass is declared an environment failure rather than a measurement. */
-const ENV_FAILURE_RATIO = 0.5;
-
-/**
- * Detect an environment failure in a measurement pass — quota exhaustion, a
- * broken `claude` binary, spawn timeouts — as distinct from a rule genuinely
- * failing tasks. The discriminator is token spend: a run the RULE breaks still
- * spends tokens before failing its success check, while a run the ENVIRONMENT
- * kills produces zero tokens (nothing was generated at all). When at least
- * half of a pass's runs are zero-token failures, no verdict computed from it
- * can be trusted: both real burns of the compression A/B (2026-07-08/09) died
- * this way — quota exhaustion mid-burn turned one verdict into "uncertain"
- * and the other into a nonsense −72k delta that evicted a promising rule.
- * The selector must abort such a decision, not finalize it (FINDINGS.md,
- * "First compression A/B burn").
- */
-export function environmentFailure(summaries: TaskSummary[]): boolean {
-	let runs = 0;
-	let zeroTokenFailures = 0;
-	for (const s of summaries) {
-		for (const r of s.results) {
-			runs++;
-			if (!r.completed && r.tokens === 0) zeroTokenFailures++;
-		}
-	}
-	return runs > 0 && zeroTokenFailures / runs >= ENV_FAILURE_RATIO;
-}
-
 interface Decision {
 	rule: RuleRow;
 	kind: "candidate" | "re-audit";
 	delta: number | null;
 	regression: boolean;
-	/** "aborted" means the measurement itself failed (environment failure — see
-	 * environmentFailure): no verdict was persisted and a candidate stays
-	 * queued for a future, healthy invocation. */
-	status: "active" | "evicted" | "aborted";
+	status: "active" | "evicted";
 	/** True when the verdict was within one standard error of flipping
 	 * after all measurements (decided at low confidence). */
 	uncertain: boolean;
@@ -719,11 +709,29 @@ interface Decision {
 	probation: boolean;
 }
 
+/** Details of an invocation-stopping environment failure: which rule was
+ * being measured when the pass died, and how dead the pass was. */
+export interface EnvironmentAbort {
+	ruleId: number;
+	kind: Decision["kind"];
+	/** The measurement pass that died. */
+	label: string;
+	/** Zero-token failed runs in that pass. */
+	envFailed: number;
+	/** Runs observed in that pass. */
+	total: number;
+}
+
 export interface SelectionReport {
 	agent: string;
 	decisions: Decision[];
 	activeBodies: string[];
 	rulesetVersion: number | null;
+	/** Set when the invocation stopped on an environment failure (quota death,
+	 * API outage): the rule being measured was NOT judged — no verdict, no
+	 * receipt, no probation strike — and remains queued for the next
+	 * invocation. Decisions made before the abort stand. */
+	aborted: EnvironmentAbort | null;
 }
 
 export interface SelectOptions {
@@ -827,14 +835,41 @@ export function selectForAgent(
 	}
 
 	const decisions: Decision[] = [];
+	let aborted: EnvironmentAbort | null = null;
 	if (candidates.length > 0 || auditTarget !== undefined) {
 		const activeSet = getActiveRules(db, agent);
+		// Every measurement pass — baseline, swap reference, candidate, audit,
+		// top-up — is checked the moment it is produced: a pass that is majority
+		// zero-token failures (quota death) cannot support any verdict, and the
+		// check must be per-pass, never post-merge (a contaminated top-up merged
+		// into a clean first pass dilutes below any threshold; that is exactly
+		// how burn 1 finalized a garbage verdict, FINDINGS.md 2026-07).
+		const guarded: SuiteRunner = (
+			rules,
+			label,
+			recordBaselines,
+			allocation,
+		) => {
+			const pass = runner(rules, label, recordBaselines, allocation);
+			const { envFailed, total, tripped } = passEnvironmentFailure(pass);
+			if (tripped) {
+				throw new EnvironmentFailureError({
+					agent,
+					label,
+					envFailed,
+					total,
+					streak: null,
+					partial: pass,
+				});
+			}
+			return pass;
+		};
 		// Lazy + memoized: an invocation whose only candidates are compression
 		// swaps (which measure against their own reduced reference) never pays
 		// for an unused baseline pass.
 		let baselineCache: TaskSummary[] | undefined;
 		const baseline = (): TaskSummary[] => {
-			baselineCache ??= runner(activeSet, "active-set", true);
+			baselineCache ??= guarded(activeSet, "active-set", true);
 			return baselineCache;
 		};
 
@@ -864,28 +899,22 @@ export function selectForAgent(
 				params.rule.context_cost,
 				params.invert,
 			);
-			// Environment-failure abort: when either side of the comparison is
-			// mostly zero-token failures, the measurement is broken (quota died,
-			// spawn failures) — finalizing would evict on garbage. Persist
-			// nothing: a candidate stays queued, an audit target stays untouched,
-			// and the invocation reports ABORTED so the operator re-runs later.
-			if (
-				environmentFailure(measured) ||
-				environmentFailure(params.reference())
-			) {
-				decisions.push({
-					rule: params.rule,
-					kind: params.kind,
-					delta: null,
-					regression: false,
-					status: "aborted",
-					uncertain: false,
-					toppedUp,
-					tailRisk: false,
-					completionDrop: false,
-					probation: false,
+			// A pass can slip past the per-pass majority guard yet still leave a
+			// task with only zero-token environment failures on one side — which
+			// the old code misread as a rule regression and evicted on. No verdict
+			// may be finalized from an environmentally dead measurement: throw
+			// BEFORE finalizeVerdict / probation / decideRule / recordReceipt so
+			// an abort structurally cannot persist anything.
+			if (assessment.environmentFailure) {
+				const stats = passEnvironmentFailure(measured);
+				throw new EnvironmentFailureError({
+					agent,
+					label: `${params.kind} measurement of rule ${params.rule.id}`,
+					envFailed: stats.envFailed,
+					total: stats.total,
+					streak: null,
+					partial: measured,
 				});
-				return;
 			}
 			const { delta, regression, uncertain, tailRisk, completionDrop } =
 				assessment;
@@ -972,7 +1001,33 @@ export function selectForAgent(
 			});
 		};
 
+		/** decide(), but an environment failure yields an abort record instead
+		 * of a verdict. Any other error propagates unchanged. */
+		const tryDecide = (
+			params: Parameters<typeof decide>[0],
+		): EnvironmentAbort | null => {
+			try {
+				decide(params);
+				return null;
+			} catch (err) {
+				if (err instanceof EnvironmentFailureError) {
+					return {
+						ruleId: params.rule.id,
+						kind: params.kind,
+						label: err.info.label,
+						envFailed: err.info.envFailed,
+						total: err.info.total,
+					};
+				}
+				throw err;
+			}
+		};
+
 		for (const candidate of candidates) {
+			// An environment failure means every further run this invocation
+			// would die the same way — stop measuring; remaining candidates stay
+			// queued for the next invocation.
+			if (aborted !== null) break;
 			// Compression swap: a candidate carrying `replaces` proposes to stand
 			// in for an active rule that says the same thing in more characters.
 			// Measuring it ON TOP of that original would pin its marginal delta
@@ -989,15 +1044,15 @@ export function selectForAgent(
 				const reduced = activeSet.filter((rule) => rule.id !== replaced.id);
 				let swapRefCache: TaskSummary[] | undefined;
 				const swapReference = (): TaskSummary[] => {
-					swapRefCache ??= runner(reduced, `swap-base-${candidate.id}`, false);
+					swapRefCache ??= guarded(reduced, `swap-base-${candidate.id}`, false);
 					return swapRefCache;
 				};
-				decide({
+				aborted = tryDecide({
 					rule: candidate,
 					kind: "candidate",
 					reference: swapReference,
 					measure: (suffix, allocation) =>
-						runner(
+						guarded(
 							[...reduced, candidate],
 							`candidate-${candidate.id}${suffix}`,
 							false,
@@ -1012,12 +1067,12 @@ export function selectForAgent(
 			// Candidate promotion requires confidence: an uncertain verdict
 			// after top-up evicts rather than activates (don't pay rent on a
 			// rule we can't show clears 2× rent).
-			decide({
+			aborted = tryDecide({
 				rule: candidate,
 				kind: "candidate",
 				reference: baseline,
 				measure: (suffix, allocation) =>
-					runner(
+					guarded(
 						[...activeSet, candidate],
 						`candidate-${candidate.id}${suffix}`,
 						false,
@@ -1029,7 +1084,7 @@ export function selectForAgent(
 			});
 		}
 
-		if (auditTarget !== undefined) {
+		if (auditTarget !== undefined && aborted === null) {
 			const withoutIt = activeSet.filter((rule) => rule.id !== auditTarget.id);
 			// The rule's current worth is cost-without minus cost-with (baseline
 			// includes it), so the measured (toppable) side is the
@@ -1037,12 +1092,12 @@ export function selectForAgent(
 			// gentler point-estimate test: an established rule is de-activated
 			// only on evidence it has stopped earning, not when a noisy
 			// re-measure is merely inconclusive.
-			decide({
+			aborted = tryDecide({
 				rule: auditTarget,
 				kind: "re-audit",
 				reference: baseline,
 				measure: (suffix, allocation) =>
-					runner(
+					guarded(
 						withoutIt,
 						`audit-${auditTarget.id}${suffix}`,
 						false,
@@ -1057,10 +1112,7 @@ export function selectForAgent(
 
 	let rulesetVersion: number | null = null;
 	const finalActive = getActiveRules(db, agent);
-	// Aborted decisions persisted nothing, so an all-aborted invocation must
-	// not recompile memory (that would bump the ruleset version and bust the
-	// agents' prompt cache for a no-op).
-	if (decisions.some((d) => d.status !== "aborted")) {
+	if (decisions.length > 0) {
 		rulesetVersion = compileActiveMemory(db, agent);
 	}
 
@@ -1069,6 +1121,7 @@ export function selectForAgent(
 		decisions,
 		activeBodies: finalActive.map((rule) => rule.body),
 		rulesetVersion,
+		aborted,
 	};
 }
 
@@ -1205,7 +1258,7 @@ export function main(args: SelectArgs): void {
 			fixtureHash: goldenSuiteHash(args.agent),
 		});
 
-		if (report.decisions.length === 0) {
+		if (report.decisions.length === 0 && report.aborted === null) {
 			console.log("No candidates and no active rules to audit; nothing to do.");
 			return;
 		}
@@ -1217,15 +1270,6 @@ export function main(args: SelectArgs): void {
 			priceFor(loadAgentDefinition(args.agent).model),
 		);
 		for (const decision of report.decisions) {
-			if (decision.status === "aborted") {
-				console.log(
-					`  [${decision.kind}] rule ${decision.rule.id} → ABORTED` +
-						` (environment failure: most runs failed with zero tokens —` +
-						` quota exhausted or claude unavailable; no verdict recorded,` +
-						` re-run when healthy): "${decision.rule.body}"`,
-				);
-				continue;
-			}
 			const dollars =
 				decision.delta !== null
 					? `, ≈$${(decision.delta * perToken).toFixed(4)}/run advisory`
@@ -1253,10 +1297,29 @@ export function main(args: SelectArgs): void {
 				`Advisory dollars (never a gate input): the rules kept this pass earn ≈$${weeklyDollars.toFixed(2)}/week at ${sessionsPerWeek()} sessions/week.`,
 			);
 		}
-		console.log(
-			`Compiled ${report.activeBodies.length} active rule(s) → ${memoryFilePath(args.agent)}` +
-				` (ruleset v${report.rulesetVersion})`,
-		);
+		if (report.rulesetVersion !== null) {
+			console.log(
+				`Compiled ${report.activeBodies.length} active rule(s) → ${memoryFilePath(args.agent)}` +
+					` (ruleset v${report.rulesetVersion})`,
+			);
+		}
+		if (report.aborted !== null) {
+			const a = report.aborted;
+			console.log(
+				`ABORTED: environment failure during ${a.label} ` +
+					`(${a.envFailed} of ${a.total} runs failed with ~0 tokens — quota exhausted?)`,
+			);
+			console.log(
+				`Rule ${a.ruleId} was NOT judged: no verdict or receipt was recorded` +
+					(a.kind === "candidate"
+						? "; it remains queued as a candidate."
+						: "; the active rule and its probation state are unchanged."),
+			);
+			console.log("Re-run /warden-select on a fresh quota window.");
+			// Non-zero exit so callers/scripts see the abort; exitCode (not
+			// process.exit) so the finally below still closes the DB.
+			process.exitCode = 1;
+		}
 	} finally {
 		db.close();
 	}
