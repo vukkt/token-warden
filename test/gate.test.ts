@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	insertQuestion,
 	openDb,
@@ -17,7 +17,12 @@ import {
 	questionCounts,
 	type WardenDb,
 } from "../src/db.js";
-import { buildAskResponse, extractMessage, truncateBody } from "../src/gate.js";
+import {
+	buildAskResponse,
+	extractMessage,
+	installFailOpenHandlers,
+	truncateBody,
+} from "../src/gate.js";
 import { renderStatus } from "../src/status.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -295,5 +300,67 @@ describe("question counts in status", () => {
 		]);
 		expect(renderStatus(db)).toContain("frontend: asked 2, approved 1");
 		db.close();
+	});
+});
+
+describe("gate.ts installFailOpenHandlers", () => {
+	it("exits 0 on an uncaught exception and on an unhandled rejection", () => {
+		// The gate runs as a PreToolUse hook on every SendMessage. Node 22
+		// terminates non-zero on an unhandled rejection by default, and a
+		// non-zero PreToolUse exit is user-visible — so this is the one hook
+		// where the process-level handlers are load-bearing.
+		const exit = vi.fn();
+		const log = vi.fn();
+		const before = {
+			uncaught: process.listenerCount("uncaughtException"),
+			rejection: process.listenerCount("unhandledRejection"),
+		};
+		installFailOpenHandlers(log, exit);
+		try {
+			expect(process.listenerCount("uncaughtException")).toBe(
+				before.uncaught + 1,
+			);
+			expect(process.listenerCount("unhandledRejection")).toBe(
+				before.rejection + 1,
+			);
+
+			(process.listeners("uncaughtException").at(-1) as (e: unknown) => void)(
+				new Error("boom"),
+			);
+			(process.listeners("unhandledRejection").at(-1) as (e: unknown) => void)(
+				"a non-Error rejection",
+			);
+
+			expect(exit).toHaveBeenCalledTimes(2);
+			expect(exit).toHaveBeenNthCalledWith(1, 0);
+			expect(exit).toHaveBeenNthCalledWith(2, 0);
+			const logged = log.mock.calls.map((c) => String(c[0])).join("\n");
+			expect(logged).toContain("gate uncaught exception (failing open)");
+			// A thrown non-Error must still be stringified, not crash the handler.
+			expect(logged).toContain("a non-Error rejection");
+		} finally {
+			process.off(
+				"uncaughtException",
+				process.listeners("uncaughtException").at(-1) as (e: unknown) => void,
+			);
+			process.off(
+				"unhandledRejection",
+				process.listeners("unhandledRejection").at(-1) as (e: unknown) => void,
+			);
+		}
+	});
+});
+
+describe("gate.log rotation", () => {
+	it("rotates past the size cap, keeping one generation", () => {
+		// Every gated message writes a line; unrotated this grows without bound
+		// in the same directory as the irreplaceable ledger.
+		const logPath = join(dir, "gate.log");
+		writeFileSync(logPath, "x".repeat(1024 * 1024 + 10));
+		// Any gated message triggers a logLine, and logLine rotates first.
+		runGate(sendMessagePayload());
+		expect(existsSync(`${logPath}.1`)).toBe(true);
+		// The live log was recreated small, not appended to the old one.
+		expect(readFileSync(logPath, "utf8").length).toBeLessThan(1024 * 1024);
 	});
 });

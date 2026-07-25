@@ -18,23 +18,22 @@ export default defineConfig({
 			// can't count them; the pure logic they wrap is unit-tested directly.
 			exclude: ["src/**/*.d.ts"],
 			// Ratchet floor — CI fails if coverage regresses below this. Measured at
-			// v0.40.0 (1017 tests): lines 96.37 / statements 95.56 /
-			// functions 96.15 / branches 88.78, floored just beneath each so a
-			// refactor has headroom but a regression fails. Up from 94/93/96/83
-			// at v0.39.0. Keep this comment's metric order matching the keys below,
+			// v0.40.0 (1023 tests): lines 96.89 / statements 96.06 /
+			// functions 96.98 / branches 89.24, floored just beneath each so a
+			// refactor has headroom but a regression fails. Up from 94/93/96/83 at
+			// v0.39.0. Keep this comment's metric order matching the keys below,
 			// and re-stamp both whenever the floor moves.
 			//
-			// It peaked at 97.91/97.14/97.56/90.09 mid-pass and then fell back as
-			// the last round of hardening added ~125 lines (the SQLITE_BUSY retry,
-			// the notify/gate fail-open handlers, the bench subprocess guards)
-			// whose tests are only partly written. The uncovered remainder is
-			// concentrated in bench.ts, gate.ts and the collect/notify entry
-			// shims; finishing it is the cheapest available coverage work.
+			// What remains uncovered is deliberate rather than pending: the
+			// `invokedDirectly` CLI dispatch blocks (already v8-ignored, exercised
+			// as real subprocesses), the un-seamed IO in copyFixture /
+			// ensureFixtureDeps, and the collect/notify entry shims. bench.ts is
+			// the lowest at ~87% lines and is the honest integration boundary.
 			thresholds: {
 				lines: 96,
-				statements: 95,
+				statements: 96,
 				functions: 96,
-				branches: 88,
+				branches: 89,
 			},
 		},
 	},

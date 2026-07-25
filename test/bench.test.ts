@@ -19,6 +19,7 @@ import {
 	checkChildEnv,
 	cleanupWorkDirs,
 	compileMemoryMd,
+	ENV_FAILURE_TOKEN_FLOOR,
 	EnvironmentFailureError,
 	findTranscript,
 	findTranscriptForWorkDir,
@@ -1149,6 +1150,89 @@ describe("runOnce (spawn boundary injected)", () => {
 			)
 			.get("sess-2");
 		expect(row?.duration_ms).toBeNull();
+	});
+
+	describe("timeout recovery (a hang must be evictable evidence, not a quota death)", () => {
+		it("recovers the transcript and reports the run's REAL token cost", () => {
+			// Before this, a 15-minute CLAUDE_TIMEOUT_MS kill threw, runSuite
+			// synthesized { tokens: 0, completed: false }, and the <1,000-token
+			// discriminator read it as an environment failure — so a rule that sent
+			// the agent into an exploration loop was indistinguishable from the API
+			// dying, and four such runs requeued it forever. The worst possible rule
+			// could never be evicted.
+			const timedOut = claudeOk({
+				status: null,
+				signal: "SIGTERM",
+				stdout: "",
+				error: Object.assign(new Error("spawnSync ETIMEDOUT"), {
+					code: "ETIMEDOUT",
+				}),
+			});
+			const h = harness([timedOut], {
+				findTranscriptForWorkDir: () => join(dir, "transcript.jsonl"),
+			});
+
+			const result = runOnce(db, task, definition, [], options(), h.deps);
+
+			// The real cost is reported, NOT zero — this is the whole fix.
+			expect(result.tokens).toBe(2000);
+			expect(result.tokens).toBeGreaterThan(ENV_FAILURE_TOKEN_FLOOR);
+			expect(result.completed).toBe(false);
+			// Which means the discriminator classifies it as rule evidence.
+			expect(isEnvironmentFailure(result)).toBe(false);
+			// The run is persisted so the selector can see it.
+			expect(runCount("sql-01")).toBe(1);
+			// The success check is never run: the agent was killed mid-task and a
+			// half-mutated fixture must not pass a check it did not earn.
+			expect(h.spawns).toHaveLength(1);
+			// Temp fixture copy still cleaned up.
+			expect(h.disposed).toEqual(h.created);
+		});
+
+		it("still degrades to an environment failure when nothing is recoverable", () => {
+			// A hang that burned NOTHING (an API stall before any turn) has no
+			// transcript to recover, and must stay an environment failure.
+			const timedOut = claudeOk({
+				status: null,
+				signal: "SIGTERM",
+				stdout: "",
+				error: Object.assign(new Error("spawnSync ETIMEDOUT"), {
+					code: "ETIMEDOUT",
+				}),
+			});
+			const h = harness([timedOut], { findTranscriptForWorkDir: () => null });
+
+			expect(() =>
+				runOnce(db, task, definition, [], options(), h.deps),
+			).toThrow();
+			expect(runCount("sql-01")).toBe(0);
+			expect(h.disposed).toEqual(h.created);
+		});
+
+		it("does not attempt recovery for a non-timeout spawn error", () => {
+			// A missing `claude` binary is not a hang; recovering a transcript for
+			// it would invent a measurement that never ran.
+			let asked = 0;
+			const failed = claudeOk({
+				status: null,
+				stdout: "",
+				error: Object.assign(new Error("spawn claude ENOENT"), {
+					code: "ENOENT",
+				}),
+			});
+			const h = harness([failed], {
+				findTranscriptForWorkDir: () => {
+					asked++;
+					return join(dir, "transcript.jsonl");
+				},
+			});
+
+			expect(() =>
+				runOnce(db, task, definition, [], options(), h.deps),
+			).toThrow();
+			expect(asked).toBe(0);
+			expect(runCount("sql-01")).toBe(0);
+		});
 	});
 });
 

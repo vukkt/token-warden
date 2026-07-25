@@ -112,6 +112,16 @@ describe("spawnAutoSelect", () => {
 		}
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
+
+	it("swallows a spawn failure instead of taking the hook down", () => {
+		// A spawn failure arrives as an async 'error' event, and on an
+		// EventEmitter with no listener Node THROWS it — which would make
+		// SessionStart exit non-zero. The auto-selector is best-effort.
+		spawnAutoSelect("sql");
+		const errorHandler = spawnMock.handlers.get("error");
+		expect(errorHandler).toBeTypeOf("function");
+		expect(() => errorHandler?.(new Error("ENOENT"))).not.toThrow();
+	});
 });
 
 describe("notify.ts fails open (subprocess)", () => {

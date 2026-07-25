@@ -6,8 +6,8 @@ A hardening pass over the whole repository, run as a 21-agent audit (10 writers
 with disjoint file ownership, 11 read-only cross-cutting auditors) against the
 principles of *Clean Code*, *The Pragmatic Programmer*, *Functional Programming
 in Scala*, and a systems-design and threat-model review. No feature work. The
-tests go 684 -> 1017 and branch coverage 85.94% -> 88.78%, the axis that was
-weakest; the coverage floor ratchets 94/93/96/83 -> 96/95/96/88.
+tests go 684 -> 1023 and branch coverage 85.94% -> 89.24%, the axis that was
+weakest; the coverage floor ratchets 94/93/96/83 -> 96/96/96/89.
 
 **Correctness bugs fixed** (each silently produced a wrong number or a wrong
 verdict; none announced itself):
@@ -93,14 +93,24 @@ boundaries):
   `SessionStart` nudge no longer fires on `clear`/`compact`.
 - **CI**: the one `${{ }}` interpolation inside a `run:` block moved to `env:`.
 
-**Benchmarks** — `benchmarks/sql/golden-08.md` added. `sql-01`'s check passes on
+**Benchmarks** — every one of the 20 golden checks was executed against an
+untouched copy of the frozen fixture to find checks that pass with the agent
+doing nothing. Two did: `sql-01` and `backend-03`. (`sql-05` was suspected and
+cleared — it correctly exits 1.) `benchmarks/sql/golden-08.md` and
+`benchmarks/backend/golden-04.md` are their non-degenerate replacements. `sql-01`'s check passes on
 the pristine fixture (it greps for `create index` and `user_id`, both already in
 `schema.sql`), so it can never detect a regression, and a quota-dead run on it
 records `completed = true`, hiding it from the environment-failure discriminator
 on the very agent every burn in FINDINGS.md used. `sql-01` is left
 byte-identical — its frozen `run1_tokens` and every published comparison stay
 valid — and the corrected task is *added*, the same remedy v0.36.0 used for the
-noisy-task splits.
+noisy-task splits. `backend-03`'s check was `grep -q 'quantity'
+src/services/orderService.ts && npx vitest run`, and both halves hold on the
+pristine fixture: `quantity` is a PARAMETER NAME of `createOrder`, and the
+shipped suite passes because the seeded pricing bug has no test. `backend-04`
+requires the multiplication in either operand order, a test referencing
+`createOrder`, and a green suite — verified to exit 1 pristine, 1 when the bug
+is fixed WITHOUT the requested regression test, and 0 only when both are done.
 
 **Structure** — `src/select.ts` decomposed (`selectForAgent` 345 -> 65 lines) with
 `MeasurementPlan`/`MeasuredSide`/`DecisionOutcome` replacing boolean-blind
