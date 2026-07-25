@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunRow } from "../src/db.js";
-import { openDb, upsertRun, type WardenDb } from "../src/db.js";
+import {
+	openDb,
+	RUN_TOTAL_TOKENS_SQL,
+	upsertRun,
+	type WardenDb,
+} from "../src/db.js";
 import {
 	buildPrompt,
 	contextCost,
@@ -387,6 +392,78 @@ describe("p75 / shouldDistill", () => {
 			});
 			const current = seedRun("current", 99_000);
 			expect(shouldDistill(db, "backend", current, 99_000)).toBe(false);
+		});
+
+		/** Seed a run that ended aborted or API-errored (completed = 0). */
+		function seedIncompleteRun(sessionId: string, inputTokens: number) {
+			return upsertRun(db, {
+				agent: "backend",
+				sessionId,
+				taskHash: null,
+				inputTokens,
+				outputTokens: 0,
+				cacheCreation: 0,
+				cacheRead: 0,
+				toolCalls: 1,
+				fileRereads: 0,
+				completed: false,
+				rulesetVersion: 0,
+				ts: new Date().toISOString(),
+			});
+		}
+
+		it("excludes aborted/errored runs from the priors", () => {
+			// Only 4 completed real-work priors — an interrupted session is a
+			// truncated, unrepresentative cost and must not count as a 5th.
+			for (let i = 0; i < 4; i++) seedRun(`s${i}`, 10_000);
+			seedIncompleteRun("aborted", 10_000);
+			const current = seedRun("current", 99_000);
+			expect(shouldDistill(db, "backend", current, 99_000)).toBe(false);
+		});
+
+		it("does not let cheap aborted runs drag the percentile down", () => {
+			for (const [i, total] of [
+				40_000, 44_000, 48_000, 52_000, 56_000,
+			].entries()) {
+				seedRun(`s${i}`, total);
+			}
+			// Five truncated sessions that died early. Counting them would drop
+			// the p75 far enough for an ordinary 30k session to look expensive.
+			for (let i = 0; i < 5; i++) seedIncompleteRun(`abort-${i}`, 100);
+			const current = seedRun("current", 30_000);
+			expect(shouldDistill(db, "backend", current, 30_000)).toBe(false);
+			expect(shouldDistill(db, "backend", current, 60_000)).toBe(true);
+		});
+
+		it("still distills an expensive run that itself ended aborted", () => {
+			// The predicate filters PRIORS only: an incomplete run is often
+			// exactly the runaway session worth learning from.
+			for (let i = 0; i < 5; i++) seedRun(`s${i}`, 10_000);
+			const current = seedIncompleteRun("runaway", 99_000);
+			expect(shouldDistill(db, "backend", current, 99_000)).toBe(true);
+		});
+
+		it("is served by the real-work index, with no table scan or sort", () => {
+			// PERFORMANCE GUARD: this query runs on every session end inside the
+			// 2-second Stop-hook budget. Without `completed = 1` the v16 partial
+			// index cannot apply and SQLite scans every session the agent has
+			// ever run, then sorts them in a temp B-tree. Assert the plan, not a
+			// wall-clock time, so this stays fast and non-flaky.
+			seedRun("plan-probe", 1000);
+			const plan = db
+				.prepare(
+					`EXPLAIN QUERY PLAN
+					 SELECT COALESCE(${RUN_TOTAL_TOKENS_SQL}, 0) AS total
+					 FROM runs
+					 WHERE agent = ? AND id != ? AND task_hash IS NULL AND completed = 1
+					 ORDER BY ts DESC LIMIT ?`,
+				)
+				.all("backend", 1, 50) as { detail: string }[];
+			const detail = plan.map((r) => r.detail).join("\n");
+
+			expect(detail).toContain("idx_runs_realwork");
+			expect(detail).not.toContain("SCAN runs");
+			expect(detail).not.toContain("TEMP B-TREE");
 		});
 
 		it("alreadyDistilled flags runs that produced a rule", async () => {

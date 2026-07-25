@@ -106,13 +106,31 @@ export function shouldDistill(
 	runId: number,
 	totalTokens: number,
 ): boolean {
-	// Real-work sessions only: golden/bench runs have a different cost
-	// profile and would drag the percentile, over- or under-triggering
-	// distillation on ordinary sessions.
+	// Completed real-work sessions only. Both predicates are about cost
+	// profile: golden/bench runs (task_hash IS NOT NULL) and aborted or
+	// API-errored runs (completed = 0) are truncated or otherwise unlike an
+	// ordinary session, so they would drag the percentile and over- or
+	// under-trigger distillation. This is the same "real-work predicate" the
+	// sibling `recentRealWorkTotals` uses.
+	//
+	// PERFORMANCE: `completed = 1` is also load-bearing. It is exactly the
+	// WHERE clause of the v16 partial index
+	//   idx_runs_realwork ON runs(agent, ts DESC)
+	//     WHERE task_hash IS NULL AND completed = 1
+	// so this query is index-served and the ORDER BY needs no sort. Drop the
+	// predicate and SQLite falls back to a full SCAN plus a temp B-tree over
+	// every session the agent has ever run — measured at 8.9ms vs 0.03ms on a
+	// 100k-row ledger, growing forever, on the 2-second Stop-hook path.
+	//
+	// COALESCE matches the discipline at every other aggregate site: if a
+	// nullable token column is ever added to RUN_TOTAL_TOKENS_SQL, a NULL
+	// component would make each row's total NULL, p75 NaN, and `totalTokens >
+	// NaN` false — silently disabling distillation forever rather than failing.
 	const priors = db
 		.prepare<unknown[], { total: number }>(
-			`SELECT ${RUN_TOTAL_TOKENS_SQL} AS total
-			 FROM runs WHERE agent = ? AND id != ? AND task_hash IS NULL
+			`SELECT COALESCE(${RUN_TOTAL_TOKENS_SQL}, 0) AS total
+			 FROM runs
+			 WHERE agent = ? AND id != ? AND task_hash IS NULL AND completed = 1
 			 ORDER BY ts DESC LIMIT ?`,
 		)
 		.all(agent, runId, ROLLING_WINDOW)

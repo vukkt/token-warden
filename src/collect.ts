@@ -18,6 +18,7 @@ import {
 	recentRealWorkTotals,
 	recordToolCosts,
 	upsertRun,
+	type WardenDb,
 } from "./db.js";
 import { shouldDistill } from "./distill.js";
 import { knownAgents } from "./registry.js";
@@ -107,6 +108,83 @@ function logLine(message: string): void {
 	}
 }
 
+/**
+ * SQLite contention handling. "The database was busy" is TRANSIENT and
+ * retryable; every other failure (unparseable transcript, unwritable path) is
+ * permanent and correctly skipped. Treating them alike silently deleted whole
+ * sessions from the ledger, and every downstream number — the p75 distill
+ * trigger, the anomaly median, cohort validation, dollar accounting — is then
+ * computed over a corpus with unexplained holes.
+ *
+ * The per-attempt wait is deliberately far below db.ts's 2000ms default:
+ * that default equals the hook's ENTIRE budget, so one blocked attempt would
+ * eat it whole and the watchdog would kill us before a single retry. Three
+ * attempts at 300ms plus jitter stays inside the cap.
+ */
+const DB_RETRY_ATTEMPTS = 3;
+const HOOK_BUSY_TIMEOUT_MS = 300;
+const DB_RETRY_BASE_MS = 50;
+const DB_RETRY_JITTER_MS = 100;
+
+/** Marker for a session the ledger genuinely lost. Greppable on purpose:
+ * `grep -c 'collect DROP' collect.log` counts them, instead of the loss being
+ * buried in a stack trace that reads like any other error. */
+const DROP_MARKER = "collect DROP";
+
+/** Is this a lock-contention failure rather than a real fault? Checked by
+ * code first (better-sqlite3 sets SQLITE_BUSY / SQLITE_BUSY_SNAPSHOT) with a
+ * message fallback, since the driver reports some lock states as plain
+ * "database is locked" without a distinct code. */
+export function isBusyError(err: unknown): boolean {
+	const code = (err as { code?: unknown } | null | undefined)?.code;
+	if (typeof code === "string" && code.startsWith("SQLITE_BUSY")) return true;
+	const message = err instanceof Error ? err.message : String(err);
+	return /database (is locked|table is locked)/i.test(message);
+}
+
+const sleep = (ms: number): Promise<void> =>
+	new Promise((done) => setTimeout(done, ms));
+
+/**
+ * Run a synchronous DB operation, retrying only while SQLite reports
+ * contention. Jittered so two hooks that collide do not re-collide in step.
+ * Any non-busy error propagates on the first attempt — retrying a genuine
+ * fault would just burn the hook's budget.
+ */
+export async function withBusyRetry<T>(
+	operation: () => T,
+	options: {
+		attempts?: number;
+		delayMs?: (attempt: number) => number;
+	} = {},
+): Promise<T> {
+	const attempts = options.attempts ?? DB_RETRY_ATTEMPTS;
+	const delayMs =
+		options.delayMs ??
+		(() => DB_RETRY_BASE_MS + Math.random() * DB_RETRY_JITTER_MS);
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return operation();
+		} catch (err) {
+			if (attempt >= attempts || !isBusyError(err)) throw err;
+			await sleep(delayMs(attempt));
+		}
+	}
+}
+
+/** Open the ledger for the hook: same DB as everything else, but with a
+ * per-attempt lock wait short enough to leave room for a retry. */
+function openHookDb(): WardenDb {
+	const db = openDb();
+	try {
+		db.pragma(`busy_timeout = ${HOOK_BUSY_TIMEOUT_MS}`);
+	} catch (err) {
+		db.close();
+		throw err;
+	}
+	return db;
+}
+
 async function readStdin(): Promise<string> {
 	const chunks: Buffer[] = [];
 	for await (const chunk of process.stdin) {
@@ -140,7 +218,26 @@ function subagentTranscriptPath(
 }
 
 export async function main(): Promise<void> {
+	// Explicit opt-out, honoured before stdin is even read. The benchmark
+	// spawns real `claude -p` children, and the Stop hook fires inside every
+	// one of them: without this each child upserts a config:"real" row with
+	// fixture-shaped token counts and a temp-dir project path, so the plugin
+	// measures ITSELF and books it as the user's workload. Silent by design —
+	// a benchmark runs hundreds of children and a log line each would bury
+	// the entries that matter.
+	if (process.env.TOKEN_WARDEN_NO_COLLECT === "1") return;
+
 	const payload = hookPayloadSchema.parse(JSON.parse(await readStdin()));
+
+	// NOTE: a cwd-under-tmpdir heuristic was tried here as "belt and braces" for
+	// the same phantom-row class and deliberately REMOVED. It is too broad in
+	// both directions: real work done in a temp checkout (a scratch clone, a
+	// `git worktree` under /tmp) would be silently dropped from the ledger, and
+	// the entire test suite runs in temp dirs, so it disabled collection wherever
+	// it was exercised. TOKEN_WARDEN_NO_COLLECT is the precise discriminator —
+	// the benchmark sets it explicitly in benchChildEnv() — and a heuristic that
+	// discards genuine measurements to catch a hypothetical stale-env case is a
+	// bad trade for a ledger whose rows cannot be reconstructed.
 
 	// SubagentStop events record the subagent's work under a suffixed session
 	// key (the subagent shares the parent's session_id) using the subagent's

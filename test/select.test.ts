@@ -127,19 +127,38 @@ describe("assessDelta (delta math)", () => {
 		expect(a.environmentFailure).toBe(true);
 	});
 
-	it("ignores tasks that did not complete in the baseline", () => {
-		const without = [summary("t1", 0, false), summary("t2", 2000)];
+	it("ignores a baseline task that failed while burning real tokens", () => {
+		// Not comparable, but not an environment signal either: the agent
+		// attempted the task and broke it, so the task simply drops out.
+		const without = [summary("t1", 35_000, false), summary("t2", 2000)];
 		const withRule = [summary("t1", 999), summary("t2", 1500)];
 		expect(assessDelta(without, withRule, 10)).toMatchObject({
 			delta: 500,
 			regression: false,
+			environmentFailure: false,
 		});
+	});
+
+	it("flags an environment failure when a baseline task died at ~0 tokens", () => {
+		// The dropped baseline task would otherwise shrink the suite behind the
+		// verdict's back: a delta measured on the survivors, reported as if it
+		// were the whole suite.
+		const without = [summary("t1", 0, false), summary("t2", 2000)];
+		const withRule = [summary("t1", 999), summary("t2", 1500)];
+		const a = assessDelta(without, withRule, 10);
+		expect(a.delta).toBe(500);
+		expect(a.regression).toBe(false);
+		expect(a.environmentFailure).toBe(true);
 	});
 
 	it("returns null delta when nothing is comparable", () => {
 		expect(
-			assessDelta([summary("t1", 0, false)], [summary("t1", 500)], 10),
-		).toMatchObject({ delta: null, regression: false });
+			assessDelta([summary("t1", 35_000, false)], [summary("t1", 500)], 10),
+		).toMatchObject({
+			delta: null,
+			regression: false,
+			environmentFailure: false,
+		});
 	});
 
 	it("flags a completion-rate drop on the with-rule side (survivorship bias)", () => {

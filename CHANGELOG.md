@@ -6,8 +6,8 @@ A hardening pass over the whole repository, run as a 21-agent audit (10 writers
 with disjoint file ownership, 11 read-only cross-cutting auditors) against the
 principles of *Clean Code*, *The Pragmatic Programmer*, *Functional Programming
 in Scala*, and a systems-design and threat-model review. No feature work. The
-tests go 684 -> 1001 and branch coverage 85.94% -> 90.09%, the axis that was
-weakest.
+tests go 684 -> 1017 and branch coverage 85.94% -> 88.78%, the axis that was
+weakest; the coverage floor ratchets 94/93/96/83 -> 96/95/96/88.
 
 **Correctness bugs fixed** (each silently produced a wrong number or a wrong
 verdict; none announced itself):

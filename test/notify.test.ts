@@ -1,5 +1,13 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,15 +20,28 @@ import {
 	type WardenDb,
 } from "../src/db.js";
 import {
+	autoSelectMarkerPath,
+	claimAutoSelect,
+	installFailOpenHandlers,
 	planAutoSelect,
 	sessionStart,
 	spawnAutoSelect,
 } from "../src/notify.js";
 
-/** Keep the real child_process (the fail-open smoke test spawns tsx) but make
+/** Keep the real child_process (the fail-open smoke tests spawn tsx) but make
  * `spawn` observable, so the auto-select guard can be tested without ever
- * forking a real benchmark. */
-const spawnMock = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn() })));
+ * forking a real benchmark. The fake child carries the same 'error'/unref
+ * surface the real one does. */
+const spawnMock = vi.hoisted(() => {
+	const handlers = new Map<string, (err: Error) => void>();
+	const fn = vi.fn(() => ({
+		on: (event: string, handler: (err: Error) => void) => {
+			handlers.set(event, handler);
+		},
+		unref: vi.fn(),
+	}));
+	return Object.assign(fn, { handlers });
+});
 vi.mock("node:child_process", async (importOriginal) => ({
 	...(await importOriginal<typeof import("node:child_process")>()),
 	spawn: spawnMock,
@@ -255,5 +276,106 @@ describe("sessionStart (temp db)", () => {
 		const spawner = vi.fn();
 		sessionStart(db, { TOKEN_WARDEN_AUTO_SELECT: "1" }, NOW, spawner);
 		expect(spawner).not.toHaveBeenCalled();
+	});
+});
+
+describe("claimAutoSelect (double-spawn guard)", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-claim-"));
+		process.env.TOKEN_WARDEN_DB = join(dir, "warden.db");
+	});
+
+	afterEach(() => {
+		delete process.env.TOKEN_WARDEN_DB;
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("lets exactly one caller win — the second stands down", () => {
+		// The whole point: two sessions opening at once both pass the cooldown
+		// (which reads the RESIDUE of a burn, written minutes later), so without
+		// this they would both spend a full benchmark burn on the same agent.
+		expect(claimAutoSelect()).toBe(true);
+		expect(claimAutoSelect()).toBe(false);
+		expect(claimAutoSelect()).toBe(false);
+		expect(existsSync(autoSelectMarkerPath())).toBe(true);
+	});
+
+	it("re-claims once the marker is older than the cooldown", () => {
+		const now = Date.now();
+		expect(claimAutoSelect(now)).toBe(true);
+		// Age is read from the marker's mtime, not from the caller's clock, so
+		// backdate the file rather than advancing `nowMs` — passing a future
+		// timestamp alone leaves the marker young and the claim correctly refused.
+		const marker = autoSelectMarkerPath();
+		const inWindow = new Date(now - 23 * 3600_000);
+		utimesSync(marker, inWindow, inWindow);
+		expect(claimAutoSelect(now)).toBe(false);
+
+		const expired = new Date(now - 25 * 3600_000);
+		utimesSync(marker, expired, expired);
+		expect(claimAutoSelect(now)).toBe(true);
+	});
+
+	it("expires by TIME, not by liveness — a crashed selector still waits out the window", () => {
+		// Deliberately not a PID lock: if a burn died, re-burning immediately is
+		// the wrong response, so time-based expiry IS the intended semantics.
+		const now = Date.UTC(2026, 6, 25, 12, 0, 0);
+		expect(claimAutoSelect(now)).toBe(true);
+		utimesSync(autoSelectMarkerPath(), new Date(now), new Date(now));
+		expect(claimAutoSelect(now + 60_000)).toBe(false);
+	});
+
+	it("writes the marker next to the ledger", () => {
+		expect(dirname(autoSelectMarkerPath())).toBe(dir);
+	});
+});
+
+describe("installFailOpenHandlers", () => {
+	it("exits 0 on an uncaught exception and on an unhandled rejection", () => {
+		// Node 22 terminates non-zero on an unhandled rejection by default, so
+		// without these SessionStart could fail the user's session.
+		const exit = vi.fn();
+		const log = vi.fn();
+		const before = {
+			uncaught: process.listenerCount("uncaughtException"),
+			rejection: process.listenerCount("unhandledRejection"),
+		};
+		installFailOpenHandlers(log, exit);
+		try {
+			expect(process.listenerCount("uncaughtException")).toBe(
+				before.uncaught + 1,
+			);
+			expect(process.listenerCount("unhandledRejection")).toBe(
+				before.rejection + 1,
+			);
+
+			const uncaught = process.listeners("uncaughtException").at(-1) as (
+				e: unknown,
+			) => void;
+			uncaught(new Error("boom"));
+			const rejected = process.listeners("unhandledRejection").at(-1) as (
+				e: unknown,
+			) => void;
+			rejected(new Error("nope"));
+
+			expect(exit).toHaveBeenCalledTimes(2);
+			expect(exit).toHaveBeenNthCalledWith(1, 0);
+			expect(exit).toHaveBeenNthCalledWith(2, 0);
+			expect(log.mock.calls.map((c) => String(c[0])).join("\n")).toContain(
+				"failing open",
+			);
+		} finally {
+			// Leave the process as we found it — these are global listeners.
+			const u = process.listeners("uncaughtException").at(-1) as (
+				e: unknown,
+			) => void;
+			process.off("uncaughtException", u);
+			const r = process.listeners("unhandledRejection").at(-1) as (
+				e: unknown,
+			) => void;
+			process.off("unhandledRejection", r);
+		}
 	});
 });

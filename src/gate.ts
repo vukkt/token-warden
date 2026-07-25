@@ -199,12 +199,37 @@ export async function main(): Promise<void> {
 	}
 }
 
+/**
+ * Register the process-level fail-open net: exit 0 on an asynchronous failure
+ * nobody owns. The try/catch below only covers what `main()` awaits — an
+ * 'error' event on process.stdin (a harness that dies mid-write), or a
+ * rejected promise with no awaiter, reaches the process instead, and Node 22
+ * terminates non-zero on an unhandled rejection by default. A PreToolUse hook
+ * that exits non-zero is exactly the "gate breaks the session" outcome this
+ * file exists to prevent. Exported (and outside the entry shim) so the
+ * behaviour is testable.
+ */
+export function installFailOpenHandlers(
+	log: (message: string) => void = logLine,
+	exit: (code: number) => void = process.exit,
+): void {
+	const bailOut = (kind: string) => (err: unknown) => {
+		const detail =
+			err instanceof Error ? (err.stack ?? err.message) : String(err);
+		log(`gate ${kind} (failing open): ${detail}`);
+		exit(0);
+	};
+	process.on("uncaughtException", bailOut("uncaught exception"));
+	process.on("unhandledRejection", bailOut("unhandled rejection"));
+}
+
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
 const invokedDirectly =
 	process.argv[1] !== undefined &&
 	import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
+	installFailOpenHandlers();
 	try {
 		await main();
 	} catch (err) {

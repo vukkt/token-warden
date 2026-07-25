@@ -13,7 +13,14 @@
  *
  * Evicted rules are never deleted — they are the negative dataset.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -421,15 +428,27 @@ function completedTokens(summary: TaskSummary | undefined): number[] {
 }
 
 /**
- * A baseline-completed task with no completed with-rule run is only a rule
- * regression when the failures burned real tokens (the agent attempted the task
- * and broke). When the with-side is missing entirely (a truncated,
- * environment-aborted pass) or every failure is a zero-token environment death
- * (quota exhaustion), the runs say nothing about the rule — evicting on them is
- * the quota-death false-eviction bug (FINDINGS.md, 2026-07).
+ * True when a task's lack of completed runs is the environment's fault rather
+ * than evidence about the rule: the side is missing entirely (a truncated,
+ * environment-aborted pass), or every run that did happen was a zero-token
+ * death (quota exhaustion, API outage). A failure that burned real tokens is
+ * the opposite — the agent attempted the task and broke it.
+ *
+ * On the with-rule side that distinction is the difference between an abort and
+ * an eviction; reading a quota death as a regression was the false-eviction bug
+ * of FINDINGS.md 2026-07.
+ *
+ * An EMPTY result array counts as environmental, deliberately: a task carried
+ * in a pass with zero recorded runs is a pass that was cut short, and "no data"
+ * must never be read as evidence against a rule. The conservative failure mode
+ * — abort the invocation, requeue the rule, measure again — is the correct one
+ * for an absence of data; the alternatives are evicting a rule that was never
+ * measured, or quietly dropping the task from the suite the verdict claims.
  */
-function missingSideIsEnvironmental(other: TaskSummary | undefined): boolean {
-	return other === undefined || other.results.every(isEnvironmentFailure);
+function noCompletedRunsAreEnvironmental(
+	summary: TaskSummary | undefined,
+): boolean {
+	return summary === undefined || summary.results.every(isEnvironmentFailure);
 }
 
 function perTaskComparisons(
@@ -443,11 +462,22 @@ function perTaskComparisons(
 	let environmentFailure = false;
 	for (const base of without) {
 		const withoutTokens = completedTokens(base);
-		if (withoutTokens.length === 0) continue;
+		if (withoutTokens.length === 0) {
+			// Symmetry with the with-side check below. A BASELINE task whose runs
+			// all died environmentally must not be silently dropped: that shrinks
+			// the suite behind the verdict's back. A quota death taking 3 of 7
+			// baseline tasks stays under the pass-level majority guard, and the
+			// surviving 4 would then produce a confident-looking verdict reported
+			// as if it were measured on the whole suite. A baseline task that
+			// failed while burning real tokens is a different thing — the task is
+			// simply not comparable — and is still skipped.
+			if (noCompletedRunsAreEnvironmental(base)) environmentFailure = true;
+			continue;
+		}
 		const other = withById.get(base.taskId);
 		const withTokens = completedTokens(other);
 		if (other === undefined || withTokens.length === 0) {
-			if (missingSideIsEnvironmental(other)) environmentFailure = true;
+			if (noCompletedRunsAreEnvironmental(other)) environmentFailure = true;
 			else regression = true;
 			continue;
 		}
@@ -836,6 +866,31 @@ function memorySafeRules(rules: RuleRow[]): RuleRow[] {
 	}));
 }
 
+/** The exact bytes the agent's MEMORY.md should hold for a rule set. */
+function compiledMemoryFor(db: WardenDb, agent: string): string {
+	return compileMemoryMd(memorySafeRules(getActiveRules(db, agent)));
+}
+
+/**
+ * Replace a file atomically: write a sibling temp file, then rename over the
+ * target. `writeFileSync` truncates first, so a crash, a SIGKILL or ENOSPC
+ * mid-write leaves a TRUNCATED MEMORY.md — and that file is injected into the
+ * agent's prompt every subsequent session with nothing validating it on read.
+ * A half-written rule is an instruction fragment the agent will try to follow.
+ * rename(2) within a directory is atomic, so a reader sees either the old file
+ * or the new one, never a fragment.
+ */
+function writeFileAtomic(path: string, content: string): void {
+	const temp = `${path}.tmp-${process.pid}`;
+	try {
+		writeFileSync(temp, content);
+		renameSync(temp, path);
+	} catch (err) {
+		rmSync(temp, { force: true });
+		throw err;
+	}
+}
+
 /** Recompile the agent's MEMORY.md from its current active rule set (including
  * protected rules) and bump the ruleset version. The single writer of agent
  * memory — shared by the selector and the protect command so the file is always
@@ -850,11 +905,40 @@ export function compileActiveMemory(db: WardenDb, agent: string): number {
 	mkdirSync(dirname(memoryPath), { recursive: true });
 	return db
 		.transaction(() => {
-			const active = getActiveRules(db, agent);
-			writeFileSync(memoryPath, compileMemoryMd(memorySafeRules(active)));
+			writeFileAtomic(memoryPath, compiledMemoryFor(db, agent));
 			return bumpRulesetVersion(db, agent, new Date().toISOString());
 		})
 		.immediate();
+}
+
+/**
+ * Self-heal DB-vs-memory drift before measuring anything.
+ *
+ * Each rule's fate is committed as it is decided, but memory is compiled once
+ * at the end of an invocation — so an interrupted or crashed /warden-select
+ * leaves a rule `active` in the DB but absent from MEMORY.md, or (the expensive
+ * direction) `evicted` in the DB while the agent keeps reading it and paying
+ * its rent every session, forever, because nothing ever recompiles.
+ *
+ * Recompiling only on an actual content mismatch, rather than unconditionally,
+ * is deliberate: `compileActiveMemory` bumps the ruleset version, and a version
+ * bump on every invocation would churn a counter that receipts, /warden-status
+ * and the run history all segment on, and would rewrite a file the agent's
+ * prompt cache is keyed on, for no change. Comparing first costs one read.
+ *
+ * Returns the version compiled when drift was healed, else null.
+ */
+function healMemoryDrift(db: WardenDb, agent: string): number | null {
+	const memoryPath = memoryFilePath(agent);
+	const expected = compiledMemoryFor(db, agent);
+	const actual = existsSync(memoryPath)
+		? readFileSync(memoryPath, "utf8")
+		: null;
+	if (actual === expected) return null;
+	// No rules and no file is not drift, it is a fresh install: writing an empty
+	// memory file (and burning ruleset v1 on it) would be noise.
+	if (actual === null && getActiveRules(db, agent).length === 0) return null;
+	return compileActiveMemory(db, agent);
 }
 
 // ---------------------------------------------------------------------------
@@ -1443,6 +1527,9 @@ export function selectForAgent(
 	runner: SuiteRunner,
 	options: SelectOptions = {},
 ): SelectionReport {
+	// Before anything else: repair memory left inconsistent with the DB by an
+	// invocation that died between a verdict and the end-of-run compile.
+	const healedVersion = healMemoryDrift(db, agent);
 	const candidates = listCandidates(db, agent, MAX_CANDIDATES_PER_INVOCATION);
 	// Captured before any decision so a rule activated this invocation is
 	// not immediately re-audited.
@@ -1490,8 +1577,10 @@ export function selectForAgent(
 	}
 
 	const finalActive = getActiveRules(db, agent);
+	// A drift repair is also a compile of this invocation, so it is reported as
+	// the ruleset version when no decision produced a later one.
 	const rulesetVersion =
-		decisions.length > 0 ? compileActiveMemory(db, agent) : null;
+		decisions.length > 0 ? compileActiveMemory(db, agent) : healedVersion;
 
 	return {
 		agent,

@@ -21,6 +21,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -329,7 +330,7 @@ export function goldenSuiteHash(agent: string): string {
  * scoped rule is rendered with a "(when <scope>)" prefix so the agent applies it
  * only in that context; unscoped rules are always-on. */
 export function compileMemoryMd(
-	rules: (Pick<RuleRow, "body"> & { scope?: string | null })[],
+	rules: readonly (Pick<RuleRow, "body"> & { scope?: string | null })[],
 ): string {
 	const lines = rules.map((rule) =>
 		rule.scope ? `- (when ${rule.scope}) ${rule.body}` : `- ${rule.body}`,
@@ -520,6 +521,15 @@ const BENCH_PERMISSIONS = {
 			"Bash(npm run typecheck:*)",
 			"Bash(ls:*)",
 		],
+		// `workDir/node_modules` is a SYMLINK to the shared, persistent
+		// `benchmarks/fixture/node_modules` — the temp copy is thrown away but
+		// the link target is not, and `releaseWorkDir` unlinks rather than
+		// following it. A benchmarked agent running with `acceptEdits` that
+		// writes under node_modules would therefore mutate the shared tree, and
+		// the allowlist above lets the NEXT benchmark of ANY agent execute it
+		// via `npx vitest` / `npm test`. Nothing a golden task legitimately does
+		// writes into a dependency, so denying it costs no measurement.
+		deny: ["Write(./node_modules/**)", "Edit(./node_modules/**)"],
 	},
 };
 
@@ -532,7 +542,7 @@ export function installAgent(
 	workDir: string,
 	agent: string,
 	definition: AgentDefinition,
-	rules: RuleRow[],
+	rules: readonly RuleRow[],
 ): void {
 	assertSafePathSegment(agent, "agent", "installAgent");
 	const claudeDir = join(workDir, ".claude");
@@ -565,6 +575,60 @@ export function findTranscript(
 	return null;
 }
 
+/**
+ * Locate the transcript of a run whose session id never reached us — the
+ * `claude` timeout path, where the JSON summary carrying `session_id` is
+ * printed only at the end and the kill destroyed it.
+ *
+ * Attribution is the whole risk here (binding a run to the WRONG transcript is
+ * how the 30.4M-token false baseline happened), so the match is deliberately
+ * narrow: Claude Code names a project directory after the session's cwd with
+ * non-alphanumeric characters replaced by "-", and this run's cwd is a fresh
+ * `mkdtemp` path no other session on the machine can share. We do not depend on
+ * the full encoding — only that the directory name ENDS WITH the encoded form
+ * of that unique basename. No match, no recovery; we never fall back to
+ * "newest transcript anywhere".
+ */
+export function findTranscriptForWorkDir(
+	workDir: string,
+	projectsDir: string = join(homedir(), ".claude", "projects"),
+): string | null {
+	if (!existsSync(projectsDir)) return null;
+	const marker = basename(workDir).replace(/[^A-Za-z0-9]/g, "-");
+	// A short marker could collide with an unrelated directory; mkdtemp's
+	// 6-char suffix alone clears this, so this only rejects absurd inputs.
+	if (marker.length < 8) return null;
+	let newest: { path: string; mtimeMs: number } | null = null;
+	for (const entry of readdirSync(projectsDir)) {
+		if (!entry.endsWith(marker)) continue;
+		let names: string[];
+		try {
+			names = readdirSync(join(projectsDir, entry));
+		} catch {
+			continue;
+		}
+		for (const name of names) {
+			if (!name.endsWith(".jsonl")) continue;
+			const path = join(projectsDir, entry, name);
+			try {
+				const { mtimeMs } = statSync(path);
+				if (!newest || mtimeMs > newest.mtimeMs) newest = { path, mtimeMs };
+			} catch {
+				// Racing cleanup; skip this candidate.
+			}
+		}
+	}
+	return newest?.path ?? null;
+}
+
+/** True when spawnSync killed the child because `timeout` elapsed, rather than
+ * the child exiting on its own or failing to start. */
+export function isSpawnTimeout(result: SpawnResult): boolean {
+	return (
+		(result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT"
+	);
+}
+
 export interface RunResult {
 	sessionId: string;
 	tokens: number;
@@ -574,6 +638,12 @@ export interface RunResult {
 	toolCalls?: number;
 	/** Files read 2+ times in the run; absent for synthetic/failed runs. */
 	fileRereads?: number;
+	/** The run hit CLAUDE_TIMEOUT_MS and was killed mid-task. Advisory: for
+	 * progress output and diagnostics ONLY. The environment-failure guard keys
+	 * on token spend and must never read this — a timeout that burned real
+	 * tokens is rule evidence, a timeout that burned none is an environment
+	 * stall, and the existing token floor already separates the two. */
+	timedOut?: boolean;
 }
 
 /**
@@ -608,6 +678,57 @@ export function benchChildEnv(): NodeJS.ProcessEnv {
 	};
 	for (const key of SESSION_ENV_KEYS) {
 		delete env[key];
+	}
+	return env;
+}
+
+/**
+ * Variables the success check is allowed to see. Everything else — every API
+ * key, cloud credential and token in the parent environment — is withheld.
+ *
+ * The check runs as `bash -c <success_check>` and a success check is arbitrary
+ * shell from a golden-suite file, which under BYOA
+ * (TOKEN_WARDEN_BENCHMARKS_DIR) may be third-party. It used to inherit
+ * `process.env` verbatim, so "run a check" also meant "read ANTHROPIC_API_KEY
+ * and every cloud credential". The check needs to locate tools and run the
+ * fixture's test runner, nothing more, so this is an allowlist rather than a
+ * denylist: a credential variable nobody has thought of yet is excluded by
+ * default instead of leaking until someone adds it to a blocklist.
+ */
+export const CHECK_ENV_ALLOWLIST = [
+	// Locating bash, node, npx, grep and friends.
+	"PATH",
+	// npx/npm resolve their cache and config under HOME; without it `npx
+	// vitest` cannot run, and every bundled success check ends in one.
+	"HOME",
+	// Scratch space for npm/vitest.
+	"TMPDIR",
+	"TEMP",
+	"TMP",
+	// Locale affects `grep -i` and other text matching in success checks, so
+	// it must match what the maintainer saw when the task was written.
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	// Some toolchains (nvm shims, corepack) key off these.
+	"NODE_PATH",
+	"SHELL",
+	"USER",
+	"LOGNAME",
+] as const;
+
+/**
+ * Minimal environment for the `bash -c <success_check>` subprocess: the
+ * allowlist above, plus a marker so a check can tell it is running under the
+ * benchmark. Nothing else crosses the boundary.
+ */
+export function checkChildEnv(
+	source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { TOKEN_WARDEN_BENCH: "1" };
+	for (const key of CHECK_ENV_ALLOWLIST) {
+		const value = source[key];
+		if (value !== undefined) env[key] = value;
 	}
 	return env;
 }
@@ -649,9 +770,11 @@ export interface RunOnceDeps {
 		workDir: string,
 		agent: string,
 		definition: AgentDefinition,
-		rules: RuleRow[],
+		rules: readonly RuleRow[],
 	) => void;
 	findTranscript: (sessionId: string) => string | null;
+	/** Transcript recovery for a run whose session id never arrived (timeout). */
+	findTranscriptForWorkDir: (workDir: string) => string | null;
 	readTranscript: (path: string) => string;
 	now: () => string;
 }
@@ -670,6 +793,7 @@ export const defaultRunOnceDeps: RunOnceDeps = {
 	copyFixture,
 	installAgent,
 	findTranscript: (sessionId) => findTranscript(sessionId),
+	findTranscriptForWorkDir: (workDir) => findTranscriptForWorkDir(workDir),
 	readTranscript: (path) => readFileSync(path, "utf8"),
 	now: () => new Date().toISOString(),
 };
@@ -678,7 +802,7 @@ export function runOnce(
 	db: WardenDb,
 	task: GoldenTask,
 	definition: AgentDefinition,
-	rules: RuleRow[],
+	rules: readonly RuleRow[],
 	options: SuiteOptions,
 	deps: RunOnceDeps = defaultRunOnceDeps,
 ): RunResult {
@@ -714,7 +838,62 @@ export function runOnce(
 				env: benchChildEnv(),
 			},
 		);
-		if (claude.error) throw claude.error;
+		if (claude.error) {
+			// BUG FIX (2026-07): a 15-minute timeout was laundered into an
+			// ENVIRONMENT failure. This threw, runSuite synthesized
+			// { tokens: 0, completed: false }, and the <1,000-token discriminator
+			// read that as quota death — so a candidate rule that sent the agent
+			// into an exploration loop was indistinguishable from the API dying:
+			// four such runs aborted the decision and requeued the rule, forever.
+			// The worst possible rule could never be evicted.
+			//
+			// The discriminator is NOT the bug and is NOT touched. The bug is that
+			// this path reported ZERO tokens for a run that spent fifteen minutes.
+			// The transcript is on disk; only the session id was lost, because the
+			// JSON summary prints at the end and the kill destroyed it. Recover it
+			// from the workdir-derived project directory and report the run's real
+			// cost. The existing token floor then classifies it correctly with no
+			// change in meaning: a hang that burned tokens is rule evidence, a
+			// hang that burned nothing (an API stall) is still an environment
+			// failure. If nothing is recoverable we degrade to the old behavior.
+			const recovered = isSpawnTimeout(claude)
+				? deps.findTranscriptForWorkDir(workDir)
+				: null;
+			if (recovered) {
+				const parsed = parseTranscript(deps.readTranscript(recovered));
+				const timedOutTs = deps.now();
+				// completed is false unconditionally and the success check is NOT
+				// run: the agent was killed mid-task, and a half-mutated fixture
+				// could pass a check it did not earn. A false run never reaches
+				// recordBaseline either.
+				upsertRun(db, {
+					agent: task.agent,
+					sessionId: basename(recovered, ".jsonl"),
+					taskHash: task.id,
+					inputTokens: parsed.inputTokens,
+					outputTokens: parsed.outputTokens,
+					cacheCreation: parsed.cacheCreation,
+					cacheRead: parsed.cacheRead,
+					toolCalls: parsed.toolCalls,
+					fileRereads: parsed.fileRereads,
+					completed: false,
+					rulesetVersion: options.rulesetVersion,
+					ts: timedOutTs,
+					config: options.config,
+					model: options.model ?? definition.model,
+					durationMs: null,
+				});
+				return {
+					sessionId: basename(recovered, ".jsonl"),
+					tokens: totalTokens(parsed),
+					completed: false,
+					toolCalls: parsed.toolCalls,
+					fileRereads: parsed.fileRereads,
+					timedOut: true,
+				};
+			}
+			throw claude.error;
+		}
 		let sessionId: string;
 		let durationMs: number | null = null;
 		try {
@@ -739,6 +918,9 @@ export function runOnce(
 			encoding: "utf8",
 			timeout: CHECK_TIMEOUT_MS,
 			maxBuffer: MAX_OUTPUT_BYTES,
+			// Allowlisted environment only: a success check is arbitrary shell
+			// from a suite file and must never see the parent's credentials.
+			env: checkChildEnv(),
 		});
 		// BUG FIX (2026-07): the success check's own failure to RUN used to be
 		// recorded as the task failing. `bash` unavailable, the 5-minute check
@@ -901,7 +1083,7 @@ export class EnvironmentFailureError extends Error {
 
 export interface SuiteOptions {
 	/** Exact rule set to compile into the agent's MEMORY.md for these runs. */
-	rules: RuleRow[];
+	rules: readonly RuleRow[];
 	runs: number;
 	/** True only for the plain active-set configuration. */
 	recordBaselines: boolean;
@@ -998,7 +1180,9 @@ export function runSuite(
 			results.push(result);
 			total++;
 			console.log(
-				`${result.completed ? "ok" : "FAILED-CHECK"} ${result.tokens} tokens (${result.sessionId})`,
+				`${
+					result.completed ? "ok" : result.timedOut ? "TIMEOUT" : "FAILED-CHECK"
+				} ${result.tokens} tokens (${result.sessionId})`,
 			);
 			if (isEnvironmentFailure(result)) {
 				envFailed++;
@@ -1023,7 +1207,9 @@ export interface MetaCost {
 	realWorkTokens: number;
 	/** benchTokens / realWorkTokens; null when no real work was collected. */
 	ratio: number | null;
-	/** True when benchmarking exceeded 10% of the week's real-work tokens. */
+	/** True when benchmarking exceeded 10% of the week's real-work tokens.
+	 * Only ever true when there IS a ratio: with no real work collected the
+	 * overhead fraction is unknowable, not large. */
 	warn: boolean;
 }
 
@@ -1033,11 +1219,15 @@ export function metaCost(
 	realWorkTokens: number,
 ): MetaCost {
 	if (realWorkTokens <= 0) {
+		// No denominator: "exceeded 10% of the week's real-work tokens" is a
+		// quantitative claim that cannot be made here. Every fresh install
+		// printed it, directly under the correct "no real-work tokens
+		// collected" line, which is the line that actually says something.
 		return {
 			benchTokens,
 			realWorkTokens: 0,
 			ratio: null,
-			warn: benchTokens > 0,
+			warn: false,
 		};
 	}
 	const ratio = benchTokens / realWorkTokens;
@@ -1069,7 +1259,12 @@ export function benchAgent(
 		if (tasks.length === 0) throw new Error(`no task with id ${args.task}`);
 	}
 
-	const rules = getActiveRules(db, agent);
+	// Copy, never push into what the query returned: the active set is the
+	// input to compileMemoryMd, and this was the one in-place mutator on that
+	// path. A caller that reused the returned array would silently get the
+	// candidate rule compiled into its own MEMORY.md.
+	const activeRules = getActiveRules(db, agent);
+	const rules: RuleRow[] = [...activeRules];
 	if (args.rule !== null) {
 		const candidate = getRuleById(db, args.rule);
 		if (!candidate) throw new Error(`no rule with id ${args.rule}`);

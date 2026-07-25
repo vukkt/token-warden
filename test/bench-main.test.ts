@@ -145,12 +145,14 @@ describe("bench main() orchestration", () => {
 		expect(out).toContain("sql-02: vs run1=1000 (n/a)");
 	});
 
-	it("warns when benchmarking with no collected real work to amortize it", () => {
+	it("reports a missing denominator honestly, without a 10% claim it cannot make", () => {
 		main(args(), fakeSuite(900));
 
 		const out = output();
 		expect(out).toContain("no real-work tokens collected in the last 7 days");
-		expect(out).toContain("WARNING: Benchmarking overhead exceeded 10%");
+		// "exceeded 10% of the week's real-work tokens" needs a denominator.
+		// A fresh install printed it every time, right under the line above.
+		expect(out).not.toContain("WARNING: Benchmarking overhead exceeded 10%");
 	});
 
 	it("narrows the suite to one task with --task and rejects unknown ids", () => {

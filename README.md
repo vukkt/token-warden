@@ -10,8 +10,8 @@ tokens than it costs — or it is evicted.
 
 ```text
    version   0.40.0                     commands   20 slash commands
-     tests   1001 across 47 files         agents   4 bundled + bring-your-own
-  coverage   97.91% lines                 source   32 modules, ~12k lines
+     tests   1017 across 47 files         agents   4 bundled + bring-your-own
+  coverage   96.37% lines                 source   32 modules, ~12k lines
 ```
 
 Most "agent memory" accumulates advice nobody ever verifies. What survives here is a
@@ -343,9 +343,9 @@ and `src/compare.ts` are the measurement core; and the ledger
 (`~/.token-warden/warden.db`) holds runs, rules (active and evicted), frozen baselines,
 receipts and the cross-agent question log.
 
-**Testing** — 1001 tests across 47 files at v0.40.0, held above a ratcheted coverage floor
-that CI fails on regression — floor 97 lines / 96 statements / 97 functions / 89 branches,
-currently measuring 97.91% lines / 90.09% branches / 97.56% functions / 97.14% statements.
+**Testing** — 1017 tests across 47 files at v0.40.0, held above a ratcheted coverage floor
+that CI fails on regression — floor 96 lines / 95 statements / 96 functions / 88 branches,
+currently measuring 96.37% lines / 88.78% branches / 96.15% functions / 95.56% statements.
 The transcript parser carries the densest coverage against committed
 anonymized fixtures; hook entrypoints are tested as real child processes including
 fail-open paths; the selector core runs against an injected fake suite-runner, so verdict

@@ -468,8 +468,11 @@ describe("metaCost", () => {
 		expect(metaCost(9, 100)).toMatchObject({ ratio: 0.09, warn: false });
 	});
 
-	it("warns when benching with no collected real work", () => {
-		expect(metaCost(500, 0)).toMatchObject({ ratio: null, warn: true });
+	it("does not warn with no collected real work: the ratio is unknowable", () => {
+		// The warning claims benchmarking exceeded 10% of the week's real-work
+		// tokens. With a zero denominator there is no such fraction to exceed,
+		// and the honest "no real-work tokens collected" line is printed anyway.
+		expect(metaCost(500, 0)).toMatchObject({ ratio: null, warn: false });
 		expect(metaCost(0, 0)).toMatchObject({ ratio: null, warn: false });
 	});
 });

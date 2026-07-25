@@ -12,7 +12,14 @@
  * friction to session startup.
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -28,6 +35,80 @@ const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Minimum gap between auto-spawned selector runs. */
 const AUTO_SELECT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/** Diagnostics for a hook that is otherwise silent by design. Best-effort:
+ * a failure to log must never become a failure to start a session. */
+function logLine(message: string): void {
+	try {
+		const logPath = join(dirname(defaultDbPath()), "notify.log");
+		mkdirSync(dirname(logPath), { recursive: true });
+		appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
+	} catch {
+		// Logging must never take the hook down.
+	}
+}
+
+/** Marker recording that an auto-select burn was ATTEMPTED, next to the DB. */
+export function autoSelectMarkerPath(): string {
+	return join(dirname(defaultDbPath()), "auto-select.attempt");
+}
+
+/**
+ * Claim the exclusive right to spawn one auto-select burn, returning true only
+ * for the process that wins.
+ *
+ * Why a marker and not just the cooldown query: `planAutoSelect` reads
+ * `lastMeasurementTs`, which is the RESIDUE of a burn — it appears only once
+ * the first golden run finishes, minutes after the detached selector starts.
+ * Two sessions opening at the same moment (two projects, or a script starting
+ * several) both read the same stale timestamp, both pass the cooldown, and
+ * both spend a full benchmark burn on the same agent while their
+ * `compileActiveMemory` calls race on one file. This records the ATTEMPT
+ * instead, synchronously and before the spawn, so the second session sees it.
+ *
+ * `wx` is the whole mechanism: O_CREAT|O_EXCL is atomic, so exactly one of any
+ * number of racing processes creates the file. An existing marker inside the
+ * cooldown window means "someone already burned or is burning" and we stand
+ * down; past the window it is deleted and re-claimed. Deliberately NOT a
+ * PID-liveness lock: if a selector crashed, the right behaviour is still to
+ * wait out the cooldown rather than immediately re-burn, so time-based expiry
+ * IS the desired semantics and a stale-PID takeover would defeat it.
+ */
+export function claimAutoSelect(nowMs: number = Date.now()): boolean {
+	const path = autoSelectMarkerPath();
+	try {
+		mkdirSync(dirname(path), { recursive: true });
+	} catch {
+		return false;
+	}
+	// At most two passes: create, and (if an expired marker was in the way)
+	// create again after removing it. The second failure means another process
+	// won the race, which is exactly the outcome this exists to produce.
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			writeFileSync(
+				path,
+				`${new Date(nowMs).toISOString()} pid=${process.pid}\n`,
+				{ flag: "wx" },
+			);
+			return true;
+		} catch {
+			let ageMs: number;
+			try {
+				ageMs = nowMs - statSync(path).mtimeMs;
+			} catch {
+				return false;
+			}
+			if (ageMs < AUTO_SELECT_COOLDOWN_MS) return false;
+			try {
+				rmSync(path, { force: true });
+			} catch {
+				return false;
+			}
+		}
+	}
+	return false;
+}
 
 export function buildNudge(
 	allCounts: { agent: string; pending: number }[],
@@ -94,7 +175,7 @@ export function spawnAutoSelect(agent: string): void {
 	// path never gets there. spawn() is shell-less, so this is the only
 	// injection surface.
 	if (!isValidAgentName(agent)) return;
-	spawn(
+	const child = spawn(
 		"npx",
 		["tsx", join(pluginRoot, "src", "select.ts"), "--agent", agent],
 		{
@@ -102,19 +183,30 @@ export function spawnAutoSelect(agent: string): void {
 			detached: true,
 			stdio: "ignore",
 		},
-	).unref();
+	);
+	// A spawn failure (npx missing, ENOMEM) arrives as an async 'error' event,
+	// and an EventEmitter with no 'error' listener THROWS it — which would
+	// crash SessionStart instead of skipping the burn. Today process.exit(0)
+	// usually wins the race; that is luck, not a design. Swallow it: the
+	// auto-selector is best-effort by construction.
+	child.on("error", (err: Error) => {
+		logLine(`auto-select spawn failed for ${agent}: ${err.message}`);
+	});
+	child.unref();
 }
 
 /**
  * The SessionStart hook body: returns the hook JSON to print (or null for
  * silence) and spawns the auto-selector when the opt-in plan says to.
- * `spawner` is injectable so tests never fork a real benchmark.
+ * `spawner` and `claim` are injectable so tests never fork a real benchmark
+ * and never touch the real marker file.
  */
 export function sessionStart(
 	db: WardenDb,
 	env: NodeJS.ProcessEnv = process.env,
 	nowMs: number = Date.now(),
 	spawner: (agent: string) => void = spawnAutoSelect,
+	claim: (nowMs: number) => boolean = claimAutoSelect,
 ): string | null {
 	const counts = candidateCounts(db);
 	const parts: string[] = [];
@@ -127,7 +219,10 @@ export function sessionStart(
 		lastMeasurementTs(db),
 		nowMs,
 	);
-	if (plan.agent !== null) {
+	// The plan says a burn is due; the claim decides whether THIS session is
+	// the one that spends it. Both must agree, and the claim is taken before
+	// the spawn so a concurrent session cannot slip through behind it.
+	if (plan.agent !== null && claim(nowMs)) {
 		spawner(plan.agent);
 		parts.push(
 			`token-warden: auto-select started in the background for ${plan.agent} (${plan.reason}; opt-in via TOKEN_WARDEN_AUTO_SELECT=1).`,
@@ -143,12 +238,35 @@ export function sessionStart(
 	});
 }
 
+/**
+ * Register the process-level fail-open net: exit 0 on an asynchronous failure
+ * nobody owns. `try/catch` around the hook body only covers what the body
+ * awaits — a rejected promise with no awaiter, or an 'error' event on
+ * process.stdin, reaches the process instead, and Node 22 terminates non-zero
+ * on an unhandled rejection by default. SessionStart must never fail that way.
+ * Exported (and outside the entry shim) so the behaviour is testable.
+ */
+export function installFailOpenHandlers(
+	log: (message: string) => void = logLine,
+	exit: (code: number) => void = process.exit,
+): void {
+	const bailOut = (kind: string) => (err: unknown) => {
+		const detail =
+			err instanceof Error ? (err.stack ?? err.message) : String(err);
+		log(`notify ${kind} (failing open): ${detail}`);
+		exit(0);
+	};
+	process.on("uncaughtException", bailOut("uncaught exception"));
+	process.on("unhandledRejection", bailOut("unhandled rejection"));
+}
+
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
 const invokedDirectly =
 	process.argv[1] !== undefined &&
 	import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
+	installFailOpenHandlers();
 	try {
 		if (existsSync(defaultDbPath())) {
 			const db = openDb();

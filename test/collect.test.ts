@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detectAnomaly } from "../src/collect.js";
+import { detectAnomaly, isBusyError, withBusyRetry } from "../src/collect.js";
 import { getRunBySession, type NewRun, openDb, upsertRun } from "../src/db.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -347,5 +347,86 @@ describe("collect.ts cost anomaly alert", () => {
 		const result = runCollect(payload(), { TOKEN_WARDEN_NO_ALERTS: "1" });
 		expect(result.status).toBe(0);
 		expect(result.stdout.trim()).toBe("");
+	});
+});
+
+describe("SQLITE_BUSY handling (silent-data-loss guard)", () => {
+	it("recognises contention by code and by message, and nothing else", () => {
+		expect(
+			isBusyError(Object.assign(new Error("x"), { code: "SQLITE_BUSY" })),
+		).toBe(true);
+		expect(
+			isBusyError(
+				Object.assign(new Error("x"), { code: "SQLITE_BUSY_SNAPSHOT" }),
+			),
+		).toBe(true);
+		// better-sqlite3 reports some lock states with no distinct code.
+		expect(isBusyError(new Error("database is locked"))).toBe(true);
+		expect(isBusyError(new Error("database table is locked"))).toBe(true);
+
+		// A genuine fault must NOT be retried — retrying it just burns the
+		// hook's 2s budget and still fails.
+		expect(isBusyError(new Error("no such column: foo"))).toBe(false);
+		expect(
+			isBusyError(Object.assign(new Error("x"), { code: "SQLITE_CORRUPT" })),
+		).toBe(false);
+		expect(isBusyError(null)).toBe(false);
+		expect(isBusyError("database is locked")).toBe(true);
+	});
+
+	it("retries a busy write and succeeds, rather than dropping the session", () => {
+		let calls = 0;
+		const op = () => {
+			calls++;
+			if (calls < 3) {
+				throw Object.assign(new Error("database is locked"), {
+					code: "SQLITE_BUSY",
+				});
+			}
+			return "written";
+		};
+		return withBusyRetry(op, { attempts: 5, delayMs: () => 0 }).then((got) => {
+			expect(got).toBe("written");
+			expect(calls).toBe(3);
+		});
+	});
+
+	it("gives up after the attempt budget and surfaces the busy error", async () => {
+		let calls = 0;
+		const op = () => {
+			calls++;
+			throw Object.assign(new Error("database is locked"), {
+				code: "SQLITE_BUSY",
+			});
+		};
+		await expect(
+			withBusyRetry(op, { attempts: 3, delayMs: () => 0 }),
+		).rejects.toThrow(/database is locked/);
+		expect(calls).toBe(3);
+	});
+
+	it("does NOT retry a non-busy error — it throws on the first attempt", async () => {
+		let calls = 0;
+		const op = () => {
+			calls++;
+			throw new Error("no such table: runs");
+		};
+		await expect(
+			withBusyRetry(op, { attempts: 5, delayMs: () => 0 }),
+		).rejects.toThrow(/no such table/);
+		expect(calls).toBe(1);
+	});
+
+	it("returns immediately when the write succeeds first time", async () => {
+		let calls = 0;
+		const got = await withBusyRetry(
+			() => {
+				calls++;
+				return 42;
+			},
+			{ attempts: 3, delayMs: () => 0 },
+		);
+		expect(got).toBe(42);
+		expect(calls).toBe(1);
 	});
 });
