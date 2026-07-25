@@ -14,6 +14,15 @@
  * cohorts; `--project` narrows the scope to reduce that confound. The verdict is
  * a production *signal* meant to feed rule governance (e.g. re-audit/eviction),
  * not a replacement for the controlled benchmark.
+ *
+ * INVARIANT — this module can never admit or evict a rule. It is structurally
+ * read-only: the only db functions it imports are `openDb` and the
+ * `realWorkTotalsByVersion` SELECT, so there is no code path from a cohort
+ * verdict to a rule's status. A regression recommends a fixture re-audit; the
+ * fixture benchmark stays the sole authority that adds or removes a rule.
+ * `test/cohort.test.ts` asserts this against the source text so a future import
+ * of a mutating helper fails the suite rather than quietly widening the blast
+ * radius of an observational signal.
  */
 import { pathToFileURL } from "node:url";
 import {
@@ -121,7 +130,9 @@ export function assessCohorts(
 		};
 	}
 	const delta = baseline.mean - latest.mean;
-	const pctDelta = baseline.mean > 0 ? (delta / baseline.mean) * 100 : 0;
+	// A percentage of a zero (or nonsensical negative) baseline is undefined,
+	// not zero — report it as unknown rather than as "no relative change".
+	const pctDelta = baseline.mean > 0 ? (delta / baseline.mean) * 100 : null;
 	const pooledStdErr =
 		baseline.stdErr !== null && latest.stdErr !== null
 			? Math.sqrt(baseline.stdErr ** 2 + latest.stdErr ** 2)

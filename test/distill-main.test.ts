@@ -219,6 +219,57 @@ describe("distill() orchestration", () => {
 		expect(rules[0]?.body).toBe("Batch related file reads into a single pass.");
 	});
 
+	it("drops a sample whose stdout is valid JSON but not an envelope", () => {
+		const runId = seedExpensiveRun();
+		// REGRESSION: `null` parses fine, so the old `JSON.parse(stdout).result`
+		// threw "Cannot read properties of null" and took the whole detached
+		// distiller down mid-batch instead of dropping the one sample.
+		mockSpawn.mockReturnValue({
+			status: 0,
+			stdout: "null",
+			stderr: "",
+			error: undefined,
+			signal: null,
+			pid: 1,
+			output: [],
+		});
+
+		expect(() => distill({ runId, transcriptPath })).not.toThrow();
+		expect(listRulesByAgent(db, "sql")).toHaveLength(0);
+	});
+
+	it("drops a sample the CLI itself flagged as an error", () => {
+		const runId = seedExpensiveRun();
+		// A quota death still exits 0 with an is_error envelope; its prose must
+		// never be mistaken for a model answer.
+		mockSpawn.mockReturnValue({
+			status: 0,
+			stdout: JSON.stringify({
+				is_error: true,
+				result: "Credit balance is too low",
+			}),
+			stderr: "",
+			error: undefined,
+			signal: null,
+			pid: 1,
+			output: [],
+		});
+
+		expect(() => distill({ runId, transcriptPath })).not.toThrow();
+		expect(listRulesByAgent(db, "sql")).toHaveLength(0);
+	});
+
+	it("drops a candidate whose body hides a bidi override", () => {
+		const runId = seedExpensiveRun();
+		// Trojan Source: the rule a human reviews would differ from the rule the
+		// agent is given. Rejected at the boundary, never inserted.
+		const body = `Use Grep ${String.fromCharCode(0x202e)} before reading any file.`;
+		mockSpawn.mockReturnValue(spawnOk(JSON.stringify([{ body }])));
+
+		expect(() => distill({ runId, transcriptPath })).not.toThrow();
+		expect(listRulesByAgent(db, "sql")).toHaveLength(0);
+	});
+
 	it("skips a run that does not exist without spawning", () => {
 		distill({ runId: 9999, transcriptPath });
 		expect(mockSpawn).not.toHaveBeenCalled();

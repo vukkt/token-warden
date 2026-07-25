@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,6 +97,21 @@ describe("extractMessage", () => {
 	it("defaults the sender to 'lead' when no agent fields are present", () => {
 		const payload = JSON.parse(sendMessagePayload({ agent_type: undefined }));
 		expect(extractMessage(payload)?.from).toBe("lead");
+	});
+
+	it("ignores prototype-chain fields (no own key = not a message)", () => {
+		// A payload whose tool_input carries only a __proto__ object: if the
+		// lookup walked the prototype chain, the gate would invent a message
+		// the tool never sent.
+		const payload = JSON.parse(
+			sendMessagePayload({
+				tool_input: JSON.parse(
+					'{"__proto__":{"recipient":"root","message":"forged question"}}',
+				),
+			}),
+		);
+		expect(extractMessage(payload)).toBeNull();
+		expect(({} as Record<string, unknown>).recipient).toBeUndefined();
 	});
 
 	it("returns null for other tools and unusable inputs", () => {
@@ -235,6 +256,31 @@ describe("gate.ts process behavior", () => {
 		expect(readFileSync(join(dir, "gate.log"), "utf8")).toContain(
 			"failing open",
 		);
+	});
+
+	it("fails open when the DB is corrupt (never blocks the send)", () => {
+		writeFileSync(dbPath, "not a sqlite file at all");
+		const result = runGate(sendMessagePayload());
+		// No ask response, no crash, no non-zero exit: the send proceeds
+		// through the normal permission flow.
+		expect(result.status).toBe(0);
+		expect(result.stdout.trim()).toBe("");
+		expect(readFileSync(join(dir, "gate.log"), "utf8")).toContain(
+			"failing open",
+		);
+	});
+
+	it("fails open when the DB path cannot be created", () => {
+		const blocked = join(dir, "afile", "warden.db");
+		writeFileSync(join(dir, "afile"), "not a directory");
+		const result = spawnSync(tsxBin, [gateScript], {
+			input: sendMessagePayload(),
+			encoding: "utf8",
+			env: { ...process.env, TOKEN_WARDEN_DB: blocked },
+			timeout: 30_000,
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout.trim()).toBe("");
 	});
 });
 

@@ -6,7 +6,7 @@
  * Every failure path logs to collect.log (next to the DB) and exits 0.
  */
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
@@ -21,6 +21,7 @@ import {
 } from "./db.js";
 import { shouldDistill } from "./distill.js";
 import { knownAgents } from "./registry.js";
+import { displayText } from "./sanitize.js";
 import { parseTranscriptFile } from "./transcript.js";
 
 /** A session is flagged anomalous when its total tokens reach this multiple
@@ -67,11 +68,40 @@ const hookPayloadSchema = z.looseObject({
 	agent_id: z.string().nullish(),
 });
 
+/**
+ * The hook's own runtime cap (spec: total hook runtime under 2s). Enforced by
+ * a watchdog in the CLI shim rather than left to the harness timeout, so a
+ * pathological transcript or a wedged filesystem costs the user a logged
+ * skip instead of a stalled session. Overridable for tests.
+ */
+export const HOOK_BUDGET_MS = 2000;
+
+/** Resolve the watchdog budget from the environment. Total: any unusable
+ * value (absent, non-numeric, negative, infinite) falls back to the default. */
+export function hookBudgetMs(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const raw = env.TOKEN_WARDEN_HOOK_BUDGET_MS;
+	// An empty variable is "unset", not zero — Number("") is 0 and would
+	// otherwise silently disable collection for anyone who exports it blank.
+	if (raw === undefined || raw.trim() === "") return HOOK_BUDGET_MS;
+	const value = Number(raw);
+	return Number.isFinite(value) && value >= 0 ? value : HOOK_BUDGET_MS;
+}
+
+/** Append one line to collect.log. Every interpolated value here is
+ * untrusted (session ids, paths, agent names, error text from other code),
+ * so the whole line is flattened through `displayText`: a newline in a
+ * transcript-supplied name must not be able to forge a log entry, and an
+ * escape sequence must not fire when the user cats the log. */
 function logLine(message: string): void {
 	try {
 		const logPath = join(dirname(defaultDbPath()), "collect.log");
 		mkdirSync(dirname(logPath), { recursive: true });
-		appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
+		appendFileSync(
+			logPath,
+			`${new Date().toISOString()} ${displayText(message, 2000)}\n`,
+		);
 	} catch {
 		// Logging must never take the hook down.
 	}
@@ -131,6 +161,22 @@ export async function main(): Promise<void> {
 			return;
 		}
 		transcriptPath = derived;
+	}
+
+	// A transcript_path that exists but is not a regular file (FIFO, socket,
+	// device, directory) can wedge the process inside open() — and a blocked
+	// open holds a threadpool thread that even process.exit() waits on, so
+	// neither the watchdog below nor the harness timeout can rescue it
+	// cleanly. stat() never blocks, so this cheap check is the only reliable
+	// guard. A missing path falls through deliberately: parseTranscriptFile
+	// rejects and the shim logs it, which is the existing contract.
+	const stat = statSync(transcriptPath, { throwIfNoEntry: false });
+	if (stat !== undefined && !stat.isFile()) {
+		logLine(
+			`skip session=${payload.session_id}: transcript is not a regular file ` +
+				`at ${transcriptPath}`,
+		);
+		return;
 	}
 
 	// Streamed line-by-line: peak memory stays flat even for huge transcripts.
@@ -199,18 +245,31 @@ export async function main(): Promise<void> {
 			knownAgents().includes(agent) &&
 			shouldDistill(db, agent, runId, total)
 		) {
-			spawn(
+			const child = spawn(
 				"npx",
 				[
 					"tsx",
 					join(pluginRoot, "src", "distill.ts"),
 					"--run",
 					String(runId),
+					// The RESOLVED path, not payload.transcript_path: on a
+					// SubagentStop the payload names the PARENT conversation, so
+					// passing it here would distil a rule for the subagent out of
+					// evidence the subagent never produced — the run row and the
+					// waste trace must describe the same session.
 					"--transcript",
-					payload.transcript_path,
+					transcriptPath,
 				],
 				{ cwd: pluginRoot, detached: true, stdio: "ignore" },
-			).unref();
+			);
+			// A spawn failure (npx missing, ENOMEM) arrives as an async 'error'
+			// event; an EventEmitter with no 'error' listener THROWS it, which
+			// would surface as an uncaught exception rather than a fail-open
+			// skip. Swallow it — the distiller is best-effort by design.
+			child.on("error", (err: Error) => {
+				logLine(`distiller spawn failed: ${err.message}`);
+			});
+			child.unref();
 			logLine(`run ${runId} above p75 for ${agent}; distiller spawned`);
 		}
 
@@ -223,8 +282,12 @@ export async function main(): Promise<void> {
 			const priors = recentRealWorkTotals(db, agent, ANOMALY_WINDOW, runId);
 			const multiple = detectAnomaly(priors, total);
 			if (multiple !== null) {
+				// `agent` can come from the transcript's own agentName field —
+				// untrusted text on its way to the user's terminal. JSON encoding
+				// alone is not protection: a \u001b escape in the payload is decoded
+				// back to a live control byte when the client renders the message.
 				const msg =
-					`token-warden: this ${agent} session used ${total.toLocaleString("en-US")} tokens` +
+					`token-warden: this ${displayText(agent, 40)} session used ${total.toLocaleString("en-US")} tokens` +
 					` — ~${multiple.toFixed(1)}× your recent median` +
 					` (${parsed.toolCalls} tool calls, ${parsed.fileRereads} file re-reads).`;
 				console.log(JSON.stringify({ systemMessage: msg }));
@@ -245,12 +308,41 @@ const invokedDirectly =
 	import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
+	// Exit 0 on EVERY path, not just the ones main() can throw on. An async
+	// failure with no owner (an 'error' event, a rejected promise nobody
+	// awaited) would otherwise crash the hook with a non-zero status and,
+	// depending on the harness, surface as a broken session.
+	const bailOut = (kind: string) => (err: unknown) => {
+		const detail =
+			err instanceof Error ? (err.stack ?? err.message) : String(err);
+		logLine(`collect ${kind}: ${detail}`);
+		process.exit(0);
+	};
+	process.on("uncaughtException", bailOut("uncaught exception"));
+	process.on("unhandledRejection", bailOut("unhandled rejection"));
+
+	// Enforce the 2s cap ourselves instead of trusting the harness timeout
+	// (currently 120s for Stop): a pathological transcript or a slow disk
+	// costs the user a logged skip, not a stalled session. Safe to exit at
+	// any point this can fire — better-sqlite3 is synchronous, so a timer
+	// callback can never interleave with a half-written transaction.
+	// Limit, measured not assumed: this cannot rescue a thread blocked inside
+	// a syscall (a FIFO open), because process.exit() then waits on that same
+	// thread. The statSync guard in main() is what covers that case.
+	const budget = hookBudgetMs();
+	const watchdog = setTimeout(() => {
+		logLine(`collect abort: hook budget of ${budget}ms exceeded`);
+		process.exit(0);
+	}, budget);
+
 	try {
 		await main();
 	} catch (err) {
 		const detail =
 			err instanceof Error ? (err.stack ?? err.message) : String(err);
 		logLine(`collect error: ${detail}`);
+	} finally {
+		clearTimeout(watchdog);
 	}
 	process.exit(0);
 }

@@ -5,7 +5,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,7 +13,9 @@ import {
 	extractTaskDrafts,
 	main,
 	parseSampleArgs,
+	redactSensitive,
 	renderDraft,
+	sanitizeDraftPrompt,
 } from "../src/sample-tasks.js";
 
 function userLine(content: unknown): string {
@@ -93,6 +95,112 @@ describe("renderDraft", () => {
 		expect(md).toMatch(/success_check: "TODO/);
 		expect(md).toContain("sess-1");
 	});
+
+	it("marks the draft as UNVERIFIED and not part of the suite", () => {
+		const md = renderDraft("sql", 2, {
+			prompt: "Optimize the slow report query.",
+			sourceSession: "sess-1",
+		});
+		expect(md).toContain("UNVERIFIED DRAFT");
+		expect(md).toContain("NOT part of the golden suite");
+		// It says how to promote it, and that leaving it here is inert.
+		expect(md).toContain("golden-NN.md");
+	});
+});
+
+// These prompts come verbatim out of the user's own transcripts, and the
+// drafts are written into the user's repo for them to review and commit.
+describe("redaction of drafted prompts", () => {
+	it("collapses this machine's real home directory to ~", () => {
+		const out = redactSensitive(
+			`Fix the query in ${homedir()}/work/app/db.sql`,
+		);
+		expect(out).not.toContain(homedir());
+		expect(out).toContain("~/work/app/db.sql");
+	});
+
+	it("collapses other people's absolute home paths to ~", () => {
+		expect(redactSensitive("open /Users/jane.doe/Desktop/notes.md")).toBe(
+			"open ~/Desktop/notes.md",
+		);
+		expect(redactSensitive("open /home/bob/src/main.rs")).toBe(
+			"open ~/src/main.rs",
+		);
+	});
+
+	it("redacts credential-shaped strings", () => {
+		const cases = [
+			"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAA",
+			"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			"github_pat_11ABCDEFG0aaaaaaaaaaaaaaaaaaaa",
+			"AKIAIOSFODNN7EXAMPLE",
+			"AIzaSyA0000000000000000000000000000000",
+			"xoxb-1234567890-abcdefghijkl",
+			"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27u",
+			"Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+			"DB_PASSWORD=hunter2hunter2",
+			"api_key: 0123456789abcdef",
+		];
+		for (const secret of cases) {
+			const out = redactSensitive(`Use ${secret} to connect.`);
+			expect(out, secret).toContain("[REDACTED]");
+			expect(out, secret).not.toContain(secret);
+		}
+		expect(redactSensitive("-----BEGIN RSA PRIVATE KEY-----")).toBe(
+			"[REDACTED]",
+		);
+	});
+
+	it("redacts email addresses", () => {
+		expect(redactSensitive("ping alice.smith@example.com about it")).toBe(
+			"ping [EMAIL] about it",
+		);
+	});
+
+	it("leaves ordinary engineering prose untouched", () => {
+		for (const prompt of [
+			"Add a composite index on (tenant_id, created_at).",
+			"Optimize the slow report query in reports.sql.",
+			"Refactor the migration runner to be idempotent and safe.",
+			"Rename src/token-warden/db.ts and update the imports.",
+		]) {
+			expect(redactSensitive(prompt)).toBe(prompt);
+		}
+	});
+
+	it("redacts before clamping, so a secret cannot survive by being cut in half", () => {
+		const secret = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+		const prompt = `${"pad ".repeat(160)}${secret} done`;
+		const out = sanitizeDraftPrompt(prompt);
+		expect(out).not.toContain("ghp_");
+	});
+
+	it("keeps the frontmatter scalar parseable: no quotes, no trailing backslash", () => {
+		const md = renderDraft("sql", 1, {
+			prompt: 'Run "SELECT 1" against C:\\data\\db\\',
+			sourceSession: "s",
+		});
+		const line = md.split("\n").find((l) => l.startsWith("prompt:")) as string;
+		expect(line.startsWith('prompt: "')).toBe(true);
+		expect(line.endsWith('"')).toBe(true);
+		expect(line.slice('prompt: "'.length, -1)).not.toContain('"');
+		expect(line).not.toContain("\\");
+	});
+
+	it("strips ANSI and control characters out of an untrusted prompt", () => {
+		const out = sanitizeDraftPrompt(
+			"Fix \u001b[31mthe\u001b[0m query\u0007 now\nand stop",
+		);
+		expect(out).toBe("Fix the query now and stop");
+	});
+
+	it("the rendered draft never contains the user's home path", () => {
+		const md = renderDraft("sql", 1, {
+			prompt: `Read ${homedir()}/secrets/prod.env and fix the schema`,
+			sourceSession: "s",
+		});
+		expect(md).not.toContain(homedir());
+	});
 });
 
 describe("parseSampleArgs", () => {
@@ -136,6 +244,12 @@ describe("sample-tasks main()", () => {
 		writeFileSync(file, userLine("ok"));
 		const out = join(dir, "drafts");
 		expect(main(["--agent", "sql", "--from", file, "--out", out])).toBe(0);
+		expect(existsSync(out)).toBe(false);
+	});
+
+	it("writes nothing for a directory with no transcripts at all", () => {
+		const out = join(dir, "drafts");
+		expect(main(["--agent", "sql", "--from", dir, "--out", out])).toBe(0);
 		expect(existsSync(out)).toBe(false);
 	});
 

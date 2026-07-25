@@ -5,14 +5,16 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The detached distiller must never really spawn during a unit test. Mock the
-// whole module to a no-op whose return value still answers `.unref()`. The
-// factory is hoisted above imports, so the mock fn is declared via vi.hoisted.
+// whole module to a no-op whose return value still answers the ChildProcess
+// surface collect.ts uses: `.on()` to register the fail-open 'error' listener,
+// and `.unref()` to detach. The factory is hoisted above imports, so the mock
+// fn is declared via vi.hoisted.
 const { spawnMock } = vi.hoisted(() => ({
-	spawnMock: vi.fn(() => ({ unref: vi.fn() })),
+	spawnMock: vi.fn(() => ({ on: vi.fn(), unref: vi.fn() })),
 }));
 vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
-import { main } from "../src/collect.js";
+import { HOOK_BUDGET_MS, hookBudgetMs, main } from "../src/collect.js";
 import { getRunBySession, openDb, upsertRun } from "../src/db.js";
 
 const realStdin = Object.getOwnPropertyDescriptor(process, "stdin");
@@ -236,6 +238,12 @@ describe("collect main() in-process", () => {
 		expect(cmd).toBe("npx");
 		expect(args).toContain("--run");
 		expect(opts.detached).toBe(true);
+		// A spawn failure arrives as an async 'error' event; without a listener
+		// Node rethrows it as an uncaught exception and the hook dies non-zero.
+		const child = spawnMock.mock.results[0]?.value as {
+			on: ReturnType<typeof vi.fn>;
+		};
+		expect(child.on).toHaveBeenCalledWith("error", expect.any(Function));
 	});
 
 	it("SubagentStop: derives the sidechain transcript and records it under a suffixed key", async () => {
@@ -300,6 +308,79 @@ describe("collect main() in-process", () => {
 		} finally {
 			db.close();
 		}
+	});
+
+	it("SubagentStop: hands the distiller the SIDECHAIN transcript, never the parent", async () => {
+		// Regression: the run row is the subagent's, so the waste trace the
+		// distiller reads must be the subagent's too. Passing the parent
+		// conversation here would mint rules for a subagent out of evidence it
+		// never produced, then promote them into that subagent's MEMORY.md.
+		delete process.env.TOKEN_WARDEN_NO_DISTILL;
+		const agentId = "b9c8d7e6f5a4321cd";
+		const parent = writeTranscript("parent2.jsonl", mainTranscriptLines());
+		const sidechainDir = join(dir, "parent2", "subagents");
+		mkdirSync(sidechainDir, { recursive: true });
+		const sidechain = join(sidechainDir, `agent-${agentId}.jsonl`);
+		writeFileSync(
+			sidechain,
+			`${JSON.stringify({
+				type: "assistant",
+				uuid: "sa1",
+				requestId: "sreq",
+				sessionId: "s",
+				isSidechain: true,
+				agentId,
+				agentName: "backend",
+				message: {
+					id: "smsg",
+					role: "assistant",
+					content: [{ type: "text", text: "subagent done" }],
+					usage: {
+						input_tokens: 900,
+						output_tokens: 5,
+						cache_creation_input_tokens: 0,
+						cache_read_input_tokens: 0,
+					},
+				},
+			})}\n`,
+		);
+
+		// Cheap priors so this session clears the p75 distill trigger.
+		const db = openDb(dbPath);
+		for (let i = 0; i < 5; i++) {
+			upsertRun(db, {
+				agent: "backend",
+				sessionId: `p-${i}`,
+				taskHash: null,
+				inputTokens: 1,
+				outputTokens: 0,
+				cacheCreation: 0,
+				cacheRead: 0,
+				toolCalls: 1,
+				fileRereads: 0,
+				completed: true,
+				rulesetVersion: 0,
+				ts: `2026-06-1${i}T00:00:00Z`,
+				config: "real",
+			});
+		}
+		db.close();
+
+		feedStdin(
+			payload({
+				hook_event_name: "SubagentStop",
+				agent_type: "backend",
+				agent_id: agentId,
+				transcript_path: parent,
+			}),
+		);
+		await main();
+
+		expect(spawnMock).toHaveBeenCalledTimes(1);
+		const args = (spawnMock.mock.calls[0] as unknown as [string, string[]])[1];
+		const passed = args[args.indexOf("--transcript") + 1];
+		expect(passed).toBe(sidechain);
+		expect(passed).not.toBe(parent);
 	});
 
 	it("SubagentStop: skips (no double-count) when the sidechain transcript is missing", async () => {
@@ -386,5 +467,100 @@ describe("collect main() in-process", () => {
 		feedStdin(payload());
 		await main();
 		expect(logSpy).not.toHaveBeenCalled();
+	});
+
+	it("sanitizes a hostile transcript agent name before it reaches the user's terminal", async () => {
+		delete process.env.TOKEN_WARDEN_NO_ALERTS;
+		// agentName is written by another program and lands verbatim in the
+		// alert. JSON encoding is not a defence: the client decodes the escape
+		// back to a live control byte when it renders systemMessage.
+		const esc = String.fromCharCode(0x1b);
+		const hostileAgent = `back${esc}[31mend\nFAKE ALERT`;
+		const lines = [
+			JSON.stringify({
+				type: "assistant",
+				uuid: "a-h",
+				requestId: "req-h",
+				sessionId: "s",
+				isSidechain: false,
+				agentName: hostileAgent,
+				message: {
+					id: "msg-h",
+					role: "assistant",
+					content: [{ type: "text", text: "Done." }],
+					usage: {
+						input_tokens: 5000,
+						output_tokens: 0,
+						cache_creation_input_tokens: 0,
+						cache_read_input_tokens: 0,
+					},
+				},
+			}),
+		];
+		const db = openDb(dbPath);
+		for (let i = 0; i < 6; i++) {
+			upsertRun(db, {
+				agent: hostileAgent,
+				sessionId: `h-${i}`,
+				taskHash: null,
+				inputTokens: 100,
+				outputTokens: 0,
+				cacheCreation: 0,
+				cacheRead: 0,
+				toolCalls: 1,
+				fileRereads: 0,
+				completed: true,
+				rulesetVersion: 0,
+				ts: `2026-06-1${i}T00:00:00Z`,
+				config: "real",
+			});
+		}
+		db.close();
+
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		feedStdin(
+			payload({ transcript_path: writeTranscript("hostile.jsonl", lines) }),
+		);
+		await main();
+
+		expect(logSpy).toHaveBeenCalledTimes(1);
+		const msg = (
+			JSON.parse(logSpy.mock.calls[0]?.[0] as string) as {
+				systemMessage: string;
+			}
+		).systemMessage;
+		expect(msg).not.toContain(esc);
+		expect(msg).not.toContain("\n");
+		// Escape and newline become plain spaces: inert, one line, still legible.
+		expect(msg).toContain("this back end FAKE ALERT session used");
+
+		// The ledger still stores the raw name — sanitizing is a presentation
+		// concern and must not rewrite what was collected.
+		const check = openDb(dbPath);
+		try {
+			expect(getRunBySession(check, "main-test-1")?.agent).toBe(hostileAgent);
+		} finally {
+			check.close();
+		}
+	});
+});
+
+describe("hook budget", () => {
+	it("defaults to the 2s cap the spec promises", () => {
+		expect(HOOK_BUDGET_MS).toBe(2000);
+		expect(hookBudgetMs({})).toBe(2000);
+	});
+
+	it("honours an explicit override", () => {
+		expect(hookBudgetMs({ TOKEN_WARDEN_HOOK_BUDGET_MS: "250" })).toBe(250);
+		expect(hookBudgetMs({ TOKEN_WARDEN_HOOK_BUDGET_MS: "0" })).toBe(0);
+	});
+
+	it("falls back to the default for any unusable value", () => {
+		for (const raw of ["", "abc", "-1", "Infinity", "NaN"]) {
+			expect(hookBudgetMs({ TOKEN_WARDEN_HOOK_BUDGET_MS: raw }), raw).toBe(
+				2000,
+			);
+		}
 	});
 });

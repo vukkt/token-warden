@@ -12,6 +12,16 @@
  * Protected (human-authored) rules are exempt: they are deliberately never
  * re-measured. `--gate` exits non-zero when anything is stale, for CI.
  *
+ * SAFETY INVARIANT — health can never evict, and that is structural, not a
+ * convention: this module imports `getActiveRules` and `goldenTaskTotals` and
+ * nothing else from db.ts. There is no `decideRule`, no `setRuleProtected`, no
+ * `compileActiveMemory` in scope, so no code path here can change a rule's
+ * status even by mistake. A future section adds another SELECT, never a write.
+ *
+ * SECURITY — rule bodies are model-generated and golden task ids come from
+ * user-supplied benchmark files; both are rendered through `displayText`, so a
+ * body containing newlines or ANSI escapes cannot forge report lines.
+ *
  * The variance section ranks golden tasks by run-to-run noise (coefficient of
  * variation over recent active-set runs). A noisy task buries modest savings
  * under its own variance; the fix is splitting it into quieter tasks — by
@@ -28,6 +38,7 @@ import {
 	type RuleRow,
 } from "./db.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
+import { displayText } from "./sanitize.js";
 
 const DEFAULT_STALE_AFTER_DAYS = 30;
 const MS_PER_DAY = 86_400_000;
@@ -69,7 +80,7 @@ export function renderHealth(
 	}
 	const lines = stale.map(
 		(s) =>
-			`  rule ${s.id}: last decided ${Math.floor(s.ageDays)} days ago — "${s.body}"`,
+			`  rule ${s.id}: last decided ${Math.floor(s.ageDays)} days ago — "${displayText(s.body)}"`,
 	);
 	return [
 		`${agent}: ${stale.length} rule(s) not re-audited in ${staleAfterDays}+ days (re-audit recommended — not auto-evicted):`,
@@ -132,7 +143,7 @@ export function renderVariance(agent: string, ranked: TaskVariance[]): string {
 	}
 	const lines = noisy.map(
 		(t) =>
-			`  ${t.taskId}: ±${Math.round(t.cv * 100)}% over ${t.n} run(s), mean ${t.mean.toLocaleString("en-US")} tok`,
+			`  ${displayText(t.taskId, 60)}: ±${Math.round(t.cv * 100)}% over ${t.n} run(s), mean ${t.mean.toLocaleString("en-US")} tok`,
 	);
 	return [
 		`${agent}: ${noisy.length} noisy golden task(s) — variance this size buries modest savings; split them by ADDING quieter task files (frozen tasks are never edited):`,

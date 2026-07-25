@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	bumpRulesetVersion,
 	candidateCounts,
 	decideRule,
 	getRuleById,
@@ -17,6 +18,7 @@ import {
 	openDb,
 	recentEvictedRules,
 	recentQuestionsFrom,
+	recentRealWorkTotals,
 	setRuleProbation,
 	upsertRun,
 	type WardenDb,
@@ -96,6 +98,165 @@ describe("openDb / migrations", () => {
 		expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
 		// 1 = NORMAL.
 		expect(db.pragma("synchronous", { simple: true })).toBe(1);
+	});
+
+	it("arms busy_timeout so a concurrent writer waits instead of throwing", () => {
+		expect(db.pragma("busy_timeout", { simple: true })).toBe(2000);
+	});
+
+	it("creates the latency-path indexes for real-work and measurement reads", () => {
+		const indexes = db
+			.prepare<[], { name: string }>(
+				"SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name",
+			)
+			.all()
+			.map((row) => row.name);
+		expect(indexes).toEqual(
+			expect.arrayContaining([
+				"idx_runs_config_ts",
+				"idx_runs_realwork",
+				"idx_receipts_agent",
+			]),
+		);
+	});
+
+	it("plans the Stop hook's recent-real-work read through the partial index", () => {
+		// The Stop hook has a hard 2s budget; this read must not scan `runs`.
+		const plan = db
+			.prepare<
+				unknown[],
+				{ detail: string }
+			>(`EXPLAIN QUERY PLAN SELECT id FROM runs
+				 WHERE agent = ? AND id != ? AND task_hash IS NULL AND completed = 1
+				 ORDER BY ts DESC LIMIT ?`)
+			.all("sql", 0, 5)
+			.map((row) => row.detail)
+			.join(" | ");
+		expect(plan).toContain("idx_runs_realwork");
+		expect(plan).not.toContain("SCAN runs");
+	});
+
+	it("opens a second connection to the same file without re-migrating", () => {
+		// A Stop hook can fire while a benchmark holds the same DB. Both
+		// connections must land on the same stamp and both must be writable.
+		const other = openDb(join(dir, "warden.db"));
+		try {
+			expect(other.pragma("user_version", { simple: true })).toBe(
+				MIGRATION_COUNT,
+			);
+			upsertRun(db, makeRun({ sessionId: "a" }));
+			upsertRun(other, makeRun({ sessionId: "b" }));
+			expect(getRunBySession(db, "b")).toBeDefined();
+		} finally {
+			other.close();
+		}
+	});
+
+	it("resumes migrating a database left at an intermediate version", () => {
+		// A crash between migrations leaves an older stamp with the newer DDL
+		// already rolled back. Rewinding the stamp reproduces that: the tail
+		// migration re-runs (it is index-only and idempotent) and the stamp is
+		// restored. If a future tail migration is NOT idempotent this test must
+		// be given a hand-built fixture instead of a rewind.
+		db.pragma(`user_version = ${MIGRATION_COUNT - 1}`);
+		db.close();
+		db = openDb(join(dir, "warden.db"));
+		expect(db.pragma("user_version", { simple: true })).toBe(MIGRATION_COUNT);
+		upsertRun(db, makeRun());
+		expect(getRunBySession(db, "s1")).toBeDefined();
+	});
+
+	it("warns but does not touch a database newer than this build", () => {
+		const stderr = vi
+			.spyOn(process.stderr, "write")
+			.mockImplementation(() => true);
+		try {
+			const future = MIGRATION_COUNT + 5;
+			db.pragma(`user_version = ${future}`);
+			db.close();
+			db = openDb(join(dir, "warden.db"));
+			// Never rewind a newer schema: the ledger lives in those columns.
+			expect(db.pragma("user_version", { simple: true })).toBe(future);
+			expect(String(stderr.mock.calls[0]?.[0])).toContain("WARNING:");
+			expect(String(stderr.mock.calls[0]?.[0])).toContain(String(future));
+			// Still fully usable on the columns this build knows about.
+			upsertRun(db, makeRun());
+			expect(getRunBySession(db, "s1")).toBeDefined();
+		} finally {
+			stderr.mockRestore();
+		}
+	});
+});
+
+describe("RETURNING guards", () => {
+	/** A connection whose statements silently return nothing — the corrupt-DB
+	 * shape the `requireRow` guards exist for. */
+	const emptyDb = {
+		prepare: () => ({ get: () => undefined }),
+	} as unknown as WardenDb;
+
+	it("upsertRun throws rather than returning a bogus run id", () => {
+		expect(() => upsertRun(emptyDb, makeRun())).toThrow(/upsertRun/);
+	});
+
+	it("insertRule throws rather than returning a bogus rule id", () => {
+		expect(() =>
+			insertRule(emptyDb, {
+				agent: "sql",
+				body: "Rule body number one here.",
+				contextCost: 8,
+				sourceRun: null,
+				createdAt: "t",
+			}),
+		).toThrow(/insertRule/);
+	});
+
+	it("bumpRulesetVersion throws rather than returning a bogus version", () => {
+		expect(() => bumpRulesetVersion(emptyDb, "sql", "t")).toThrow(
+			/bumpRulesetVersion/,
+		);
+	});
+
+	it("insertQuestion throws rather than returning a bogus question id", () => {
+		expect(() => insertQuestion(emptyDb, "a", "b", "body", "t")).toThrow(
+			/insertQuestion/,
+		);
+	});
+});
+
+describe("recentRealWorkTotals", () => {
+	it("returns newest-first totals, excluding one run and non-real-work rows", () => {
+		const base = { agent: "sql" as const, taskHash: null };
+		const keep = upsertRun(
+			db,
+			makeRun({ ...base, sessionId: "r1", ts: "2026-06-01" }),
+		);
+		upsertRun(db, makeRun({ ...base, sessionId: "r2", ts: "2026-06-03" }));
+		const exclude = upsertRun(
+			db,
+			makeRun({ ...base, sessionId: "r3", ts: "2026-06-02" }),
+		);
+		// Excluded by predicate: incomplete, and a golden (task_hash) run.
+		upsertRun(
+			db,
+			makeRun({ ...base, sessionId: "r4", ts: "2026-06-04", completed: false }),
+		);
+		upsertRun(
+			db,
+			makeRun({
+				...base,
+				sessionId: "r5",
+				ts: "2026-06-05",
+				taskHash: "sql-01",
+			}),
+		);
+
+		expect(recentRealWorkTotals(db, "sql", 10, exclude)).toHaveLength(2);
+		// 100 + 50 + 10 + 20.
+		expect(recentRealWorkTotals(db, "sql", 10, exclude)).toEqual([180, 180]);
+		expect(recentRealWorkTotals(db, "sql", 1, exclude)).toHaveLength(1);
+		expect(recentRealWorkTotals(db, "sql", 10, keep)).toHaveLength(2);
+		expect(recentRealWorkTotals(db, "backend", 10, 0)).toEqual([]);
 	});
 });
 

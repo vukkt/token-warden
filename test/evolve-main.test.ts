@@ -253,4 +253,72 @@ describe("evolve main() orchestration", () => {
 		expect(output()).toContain("No valid variant proposed");
 		expect(runSuiteMock).not.toHaveBeenCalled();
 	});
+
+	it("does not treat the CLI's own error envelope as a proposal", () => {
+		// `claude` can exit 0 while reporting its own failure via is_error. That
+		// prose is not a model answer and must never reach checkProposal, let
+		// alone the benchmark.
+		spawnSyncMock.mockReturnValue({
+			status: 0,
+			stdout: JSON.stringify({
+				is_error: true,
+				result: "Credit balance is too low",
+			}),
+			stderr: "",
+			error: undefined,
+		});
+
+		expect(() => main({ agent: "sql", runs: 2, topUp: 1 })).not.toThrow();
+
+		expect(output()).toContain("No valid variant proposed");
+		expect(runSuiteMock).not.toHaveBeenCalled();
+	});
+
+	it("treats a non-zero exit as a failed proposal, not as model output", () => {
+		// BUG FIX: the exit code was never checked here. A quota death exits
+		// non-zero, and whatever it left on stdout was parsed as a proposal.
+		spawnSyncMock.mockReturnValue({
+			status: 1,
+			stdout: JSON.stringify({ result: proposalFromShipped("sql") }),
+			stderr: "credit quota exhausted",
+			error: undefined,
+		});
+
+		expect(() => main({ agent: "sql", runs: 2, topUp: 1 })).not.toThrow();
+
+		expect(output()).toContain("No valid variant proposed");
+		// The decisive assertion: no tokens were spent benchmarking a variant
+		// that came out of a failed call.
+		expect(runSuiteMock).not.toHaveBeenCalled();
+	});
+
+	it("does not recommend a variant when the environment failed mid-suite", () => {
+		// BUG FIX: environmentFailure was not consulted. sql-02's candidate side
+		// is nothing but zero-token failures (quota death), which since v0.39.0
+		// is classified as an environment failure INSTEAD of a regression — so
+		// `regression` stays false while the dead task contributes ~0 tokens and
+		// reads as a large saving. sql-01 and sql-03 still give comparableTasks
+		// >= 2, so every other guard passes and the variant would have been
+		// recommended and written to disk on the strength of a measurement that
+		// never happened.
+		mockPropose(proposalFromShipped("sql"));
+		// Every task in the suite is named so no task falls through to the
+		// 0-vs-0 default, which would flatten the saving and make the verdict
+		// uncertain for an unrelated reason.
+		const allTasks = ["01", "02", "03", "04", "05", "06", "07"].map(
+			(n) => `sql-${n}`,
+		);
+		const baseline = Object.fromEntries(allTasks.map((id) => [id, 5000]));
+		const candidate = Object.fromEntries(
+			allTasks.map((id) => [id, id === "sql-02" ? 0 : 1000]),
+		);
+		wireRunSuite(baseline, candidate, new Set(["sql-02"]));
+
+		main({ agent: "sql", runs: 2, topUp: 0 });
+
+		const out = output();
+		expect(out).toContain("not a measurable improvement");
+		expect(out).not.toContain("measurably cheaper");
+		expect(out).not.toContain("Written to:");
+	});
 });

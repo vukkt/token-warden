@@ -215,11 +215,11 @@ describe("select main() orchestration", () => {
 		const topUpCalls = runSuiteMock.mock.calls.filter((c) =>
 			(c[3] as { label: string }).label.endsWith("-topup"),
 		);
-		// One uniform pass over the whole 7-task sql suite — not N single-task
-		// allocation calls.
+		// One uniform pass over the whole 8-task sql suite — not N single-task
+		// allocation calls. (sql-08 joined the suite in v0.40.0.)
 		expect(topUpCalls).toHaveLength(1);
 		const firstTopUp = topUpCalls[0] as unknown[];
-		expect((firstTopUp[2] as unknown[]).length).toBe(7);
+		expect((firstTopUp[2] as unknown[]).length).toBe(8);
 	});
 
 	it("marks the decision line ', WEIGHTED' when any suite task carries a weight", () => {
@@ -305,6 +305,94 @@ describe("select main() orchestration", () => {
 		} finally {
 			db.close();
 		}
+	});
+
+	it("prints the re-audit wording on an abort and leaves the rule untouched", () => {
+		const id = insertCandidate("An established rule due for re-audit.");
+		const db = openDb();
+		try {
+			decideRule(db, id, "active", 500, "earned once", "2026-01-01T00:00:00Z");
+		} finally {
+			db.close();
+		}
+		// The without-rule (audit) pass dies environmentally; the baseline is fine.
+		runSuiteMock.mockImplementation(
+			(
+				_db: unknown,
+				_agent: unknown,
+				tasks: Array<{ id: string }>,
+				options: { runs: number; label: string },
+			): TaskSummary[] => {
+				const dead = options.label.startsWith("audit-");
+				return tasks.map((t) => ({
+					taskId: t.id,
+					results: Array.from({ length: options.runs }, (_, i) => ({
+						sessionId: `${options.label}-${t.id}-${i}`,
+						tokens: dead ? 0 : 1000,
+						completed: !dead,
+					})),
+					meanCompletedTokens: dead ? 0 : 1000,
+					highVariance: false,
+					weight: 1,
+				}));
+			},
+		);
+
+		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
+
+		const out = output();
+		expect(out).toContain("ABORTED: environment failure");
+		expect(out).toContain(
+			"the active rule and its probation state are unchanged",
+		);
+		expect(out).not.toContain("remains queued as a candidate");
+		expect(process.exitCode).toBe(1);
+		process.exitCode = 0;
+		const reopened = openDb();
+		try {
+			const rule = getRuleById(reopened, id);
+			expect(rule?.status).toBe("active");
+			expect(rule?.probation).toBe(0);
+		} finally {
+			reopened.close();
+		}
+	});
+
+	it("marks a decision line ', COMPLETION-DROP' when the with-rule side loses runs", () => {
+		const id = insertCandidate("Skip the slow verification step.");
+		// With the rule, one run per task fails while burning real tokens (a rule
+		// effect, not an environment death), so the completed-runs-only mean is
+		// flattered by survivorship — reported, never gated.
+		runSuiteMock.mockImplementation(
+			(
+				_db: unknown,
+				_agent: unknown,
+				tasks: Array<{ id: string }>,
+				options: { runs: number; label: string },
+			): TaskSummary[] => {
+				const withRule = options.label.startsWith("candidate-");
+				return tasks.map((t) => {
+					const results = Array.from({ length: options.runs }, (_, i) => ({
+						sessionId: `${options.label}-${t.id}-${i}`,
+						tokens: withRule && i > 0 ? 40_000 : withRule ? 400 : 1000,
+						completed: !(withRule && i > 0),
+					}));
+					return {
+						taskId: t.id,
+						results,
+						meanCompletedTokens: withRule ? 400 : 1000,
+						highVariance: false,
+						weight: 1,
+					};
+				});
+			},
+		);
+
+		main({ agent: "sql", runs: 2, topUp: 0, uniformTopUp: false });
+
+		const out = output();
+		expect(out).toContain(`[candidate] rule ${id} → ACTIVE`);
+		expect(out).toContain(", COMPLETION-DROP");
 	});
 
 	it("puts an active rule on probation at its first sub-threshold re-audit", () => {

@@ -1,5 +1,9 @@
 # Spec: anytime-valid confidence sequences as a retention-policy column
 
+**Status: TESTED AND REJECTED in v0.36.0** — the bar/SE ratio is binding, so a
+dead rule never exits (~492 cycles vs two-strike's 5.9). Two-strike retention
+stays. Kept for provenance; do not implement.
+
 ## Why
 Two-strike retention is calibrated but ad hoc. The principled tool for
 "repeatedly test accumulating measurements without inflating error" is an

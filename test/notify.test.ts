@@ -1,6 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	insertRule,
@@ -9,7 +11,20 @@ import {
 	upsertRun,
 	type WardenDb,
 } from "../src/db.js";
-import { planAutoSelect, sessionStart } from "../src/notify.js";
+import {
+	planAutoSelect,
+	sessionStart,
+	spawnAutoSelect,
+} from "../src/notify.js";
+
+/** Keep the real child_process (the fail-open smoke test spawns tsx) but make
+ * `spawn` observable, so the auto-select guard can be tested without ever
+ * forking a real benchmark. */
+const spawnMock = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn() })));
+vi.mock("node:child_process", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:child_process")>()),
+	spawn: spawnMock,
+}));
 
 const NOW = Date.parse("2026-06-29T12:00:00.000Z");
 const counts = (pending: Record<string, number>) =>
@@ -51,6 +66,54 @@ describe("planAutoSelect", () => {
 		expect(
 			planAutoSelect(true, counts({ sql: 2 }), "not-a-date", NOW).agent,
 		).toBe("sql");
+	});
+});
+
+describe("spawnAutoSelect", () => {
+	beforeEach(() => {
+		spawnMock.mockClear();
+	});
+
+	it("spawns the selector detached for a valid agent", () => {
+		spawnAutoSelect("sql");
+		expect(spawnMock).toHaveBeenCalledTimes(1);
+		const [cmd, argv] = spawnMock.mock.calls[0] as unknown as [
+			string,
+			string[],
+		];
+		expect(cmd).toBe("npx");
+		expect(argv.slice(-2)).toEqual(["--agent", "sql"]);
+	});
+
+	it("refuses a name that could be read as a flag or a path", () => {
+		for (const agent of ["../../evil", "-rf", "sql; rm -rf /", "", "a b"]) {
+			spawnAutoSelect(agent);
+		}
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("notify.ts fails open (subprocess)", () => {
+	it("exits 0 and prints nothing when the DB file is corrupt", () => {
+		const dir = mkdtempSync(join(tmpdir(), "warden-notify-open-"));
+		try {
+			const dbPath = join(dir, "warden.db");
+			writeFileSync(dbPath, "this is not a sqlite database");
+			const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+			const result = spawnSync(
+				join(root, "node_modules", ".bin", "tsx"),
+				[join(root, "src", "notify.ts")],
+				{
+					encoding: "utf8",
+					env: { ...process.env, TOKEN_WARDEN_DB: dbPath },
+					timeout: 60_000,
+				},
+			);
+			expect(result.status).toBe(0);
+			expect(result.stdout.trim()).toBe("");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

@@ -15,6 +15,17 @@ import {
 } from "../src/attribute.js";
 import type { RawToolEvent } from "../src/types.js";
 
+/** True when the rendered report carries any control character other than the
+ * newlines that separate its rows. Scanned by code point: a regex literal
+ * containing control characters is what the lint rule forbids in source. */
+function hasControlBeyondNewlines(text: string): boolean {
+	return [...text].some((c) => {
+		if (c === "\n") return false;
+		const n = c.codePointAt(0) ?? 0;
+		return n <= 0x1f || (n >= 0x7f && n <= 0x9f);
+	});
+}
+
 function event(over: Partial<RawToolEvent>): RawToolEvent {
 	return {
 		name: "Read",
@@ -241,6 +252,63 @@ describe("renderers", () => {
 
 	it("renders an empty rollup with a friendly message", () => {
 		expect(renderRollup([], "all agents")).toContain("No tool costs recorded");
+	});
+
+	it("neutralizes a hostile tool name instead of letting it forge rows", () => {
+		// Tool and MCP server names come from the transcript, i.e. from
+		// whatever the model called — untrusted text on its way to a terminal.
+		const esc = String.fromCharCode(0x1b);
+		const rlo = String.fromCharCode(0x202e);
+		const hostile = `${esc}[2Kmcp__evil__pwn\n  (builtin) | Read`;
+		const report = attributeTranscript(
+			JSON.stringify({
+				type: "assistant",
+				uuid: "a1",
+				message: {
+					id: "m",
+					usage: {},
+					content: [
+						{ type: "tool_use", id: "t1", name: hostile, input: { f: 1 } },
+						{
+							type: "tool_use",
+							id: "t2",
+							name: `mcp__${rlo}srv__tool`,
+							input: {},
+						},
+					],
+				},
+			}),
+		);
+		// The report itself keeps the raw name: attribution keys must not be
+		// rewritten, only what is printed is sanitized.
+		expect(report.costs.some((c) => c.label.includes(esc))).toBe(true);
+
+		const text = renderTranscriptAttribution(report);
+		expect(hasControlBeyondNewlines(text)).toBe(false);
+		expect(text).not.toContain(rlo);
+		// One row per cost, no forged extras: header block plus two rows.
+		const rows = text.split("\n").filter((l) => l.includes(" | "));
+		expect(rows).toHaveLength(report.costs.length + 1);
+	});
+
+	it("neutralizes hostile rollup rows from the database", () => {
+		const esc = String.fromCharCode(0x1b);
+		const text = renderRollup(
+			[
+				{
+					kind: "mcp",
+					grp: `${esc}[31mgithub\nFAKE`,
+					label: `create${String.fromCharCode(0x200b)}_issue\r\nrow`,
+					sessions: 3,
+					calls: 9,
+					inputChars: 400,
+					resultChars: 1600,
+				},
+			],
+			"all agents",
+		);
+		expect(hasControlBeyondNewlines(text)).toBe(false);
+		expect(text.split("\n").filter((l) => l.includes(" | "))).toHaveLength(2);
 	});
 
 	it("renders rollup rows", () => {

@@ -24,7 +24,7 @@ sessions and applied to future ones; past work is never redone.
             |  one row per session in SQLite; if cost > rolling p75, spawn the distiller
             v
   [2] DISTILL  (src/distill.ts)
-            |  one cheap-model call over the waste trace -> 0-2 strict-JSON candidate rules
+            |  one model call (sonnet by default) over the waste trace -> 0-2 candidate rules
             v
   [3] BENCH    (src/bench.ts)
             |  golden suite on a frozen fixture, run with vs. without the candidate
@@ -51,11 +51,15 @@ output) overwrites the agent's `MEMORY.md`, which the agent reads next session.
 | `Stop` / `SubagentStop` hooks | `hooks/hooks.json` -> `src/collect.ts` | Record session cost; trigger distillation |
 | `SessionStart` hook | `src/notify.ts` | One-line nudge when candidates are pending (silent otherwise) |
 | `PreToolUse` hook (`SendMessage`) | `src/gate.ts` | Inter-agent approval gate (fails open) |
-| 10 slash commands | `commands/*.md` | `/warden-status`, `/warden-select`, `/warden-receipt`, etc. |
+| 20 slash commands | `commands/*.md` | `/warden-status`, `/warden-select`, `/warden-receipt`, etc. |
 | 4 bundled subagents | `agents/{frontend,backend,sql,testing}.md` | The only agents with golden suites, so the only ones whose rules can be measured |
 
-Work done on the main thread or under a custom agent is cost-measured but never
-distilled: with no golden suite, a rule for it could not be benchmarked.
+Work done on the main thread is cost-measured but never distilled: with no
+golden suite, a rule for it could not be benchmarked. A bring-your-own agent
+registered under `TOKEN_WARDEN_AGENTS_DIR` is a first-class agent — since
+v0.36.0 the distiller gates on `knownAgents()` (`registry.ts`), not on the
+bundled four, so a custom agent with a golden suite distills and benchmarks
+exactly like `sql` or `backend`.
 
 ## Module map (`src/`)
 
@@ -63,7 +67,7 @@ distilled: with no golden suite, a rule for it could not be benchmarked.
 | --- | --- |
 | `collect.ts` | Stop/SubagentStop entry; parse transcript, write a `runs` row, trigger distillation/alerts |
 | `transcript.ts` | Streaming JSONL parser: usage (deduped by message id), tool/skill/MCP footprints |
-| `distill.ts` | p75 trigger, one cheap-model call, strict-JSON candidate rules, trigram dedupe |
+| `distill.ts` | p75 trigger, one model call (sonnet default, best-of-K), strict-JSON candidate rules, trigram dedupe |
 | `bench.ts` | Golden-suite runner on the frozen fixture; `runSuite`, baselines, suite hash |
 | `select.ts` | Variance-aware keep/evict verdict, round-robin re-audit, compile `MEMORY.md` |
 | `compare.ts` | Shared A/B comparison rendering (used by model/prompt benchmarking) |
@@ -80,7 +84,8 @@ distilled: with no golden suite, a rule for it could not be benchmarked.
 ## Data model (`~/.token-warden/warden.db`, SQLite)
 
 Seven tables, managed by an append-only `MIGRATIONS` array keyed on
-`PRAGMA user_version` (currently 9 migrations); migrations are never edited or
+`PRAGMA user_version` (currently 16 migrations; `MIGRATION_COUNT` in `src/db.ts` is
+the authoritative count); migrations are never edited or
 reordered, only appended.
 
 | Table | Holds |
@@ -102,8 +107,12 @@ invocations the distiller and benchmark make, and no telemetry.
   Claude's own `usage` counters (`input + output + cache_creation + cache_read`)
   read from the transcript, deduplicated by API message id so streamed blocks of
   one message are counted once (`transcript.ts`).
-- **The one formula** is context rent: `Math.ceil(body.length / 4)`
-  (`distill.ts`) — a rough characters-per-token estimate of a rule's prompt cost.
+- **Context rent** starts as `Math.ceil(body.length / 4)` (`distill.ts`) — a
+  rough characters-per-token estimate of a rule's prompt cost. The gate compares
+  against `effectiveRent` (`select.ts`), which is cache-aware: it prices in the
+  one-time cache re-prefill a ruleset change forces, so the 2x bar gets harder,
+  never easier. Promotion needs the saving to clear that bar by `z` standard
+  errors (`WARDEN_CONFIDENCE_Z`, default 2).
 - **Design constants** (chosen, not derived): the `2x` keep threshold, the `p75`
   distill trigger with a 5-run minimum, the default `3` runs per task, the `0.85`
   trigram dedupe cutoff, the `>25%` high-variance flag, and the `10%`
@@ -126,7 +135,7 @@ invocations the distiller and benchmark make, and no telemetry.
 
 ## Testing and CI
 
-The hot path carries no runtime dependencies beyond `better-sqlite3`; inputs
+The hot path carries no runtime dependencies beyond `better-sqlite3` and `zod`; inputs
 from models and transcripts are schema-validated (`zod`) and sanitized at the
 boundary. The suite (`vitest`) holds the line at a ratcheted coverage floor, and
 a staged GitHub pipeline gates every change: `quality` (lint, typecheck, `knip`

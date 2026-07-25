@@ -1,5 +1,8 @@
 # Spec: distribution-weighted golden suites
 
+**Status: SHIPPED in v0.37.0**, with the effective-DoF correction added after
+calibration rejected the first cut.
+
 ## Why
 Every task currently counts equally in a verdict, so a rule protecting a rare
 but expensive production case is diluted by common cheap tasks. Weighting the

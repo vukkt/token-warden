@@ -17,6 +17,17 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getActiveRules, openDb } from "./db.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
+import type { RuleId } from "./types.js";
+
+/**
+ * INVARIANT (enforced by test/contradict.test.ts "cannot evict"): this module
+ * imports exactly two things from `db.js` — `openDb` and `getActiveRules` —
+ * and both are reads. It owns no path that writes a `rules` row, and the
+ * lexical check is best-effort by construction (a shared-topic heuristic, not
+ * evidence), so it must never be able to act on its own output. Removing a
+ * rule stays the exclusive privilege of a measured fixture verdict. If a
+ * future change needs a `db.js` mutator here, that test fails first.
+ */
 
 const STOPWORDS = new Set([
 	"a",
@@ -98,7 +109,9 @@ const ANTONYMS: readonly [string, string][] = [
 ];
 
 export interface Contradiction {
-	ruleId: number;
+	/** Branded so a rule id can never be silently crossed with a run id, a
+	 * ruleset version, or a token count on its way into a report. */
+	ruleId: RuleId;
 	ruleBody: string;
 	conflictingLine: string;
 	reason: string;
@@ -175,7 +188,7 @@ export function findContradictions(
 			}
 			if (reason) {
 				found.push({
-					ruleId: rule.id,
+					ruleId: rule.id as RuleId,
 					ruleBody: rule.body,
 					conflictingLine: line.text,
 					reason,

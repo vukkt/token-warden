@@ -49,6 +49,12 @@ const fixtureDir = join(pluginRoot, "benchmarks", "fixture");
 const CLAUDE_TIMEOUT_MS = 15 * 60 * 1000;
 const CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_TURNS = 60;
+/** Captured stdout/stderr cap for BOTH benchmark subprocesses. Exceeding a
+ * spawnSync maxBuffer kills the child and returns status=null with an ENOBUFS
+ * error, which the success-check path used to read as "the task failed" — an
+ * infrastructure limit silently recorded as a measurement. Both spawns now
+ * share the same generous cap and both check for a non-run. */
+const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 /** Two same-config runs differing by more than this fraction of their mean
  * get a variance warning in the output (LLM variance is real). Shared with
  * /warden-health's per-task variance ranking so "noisy" means one thing. */
@@ -138,6 +144,90 @@ export interface GoldenTask {
 	weight: number;
 }
 
+/** A golden task's `id` and `agent` are pasted straight into filesystem paths
+ * (`mkdtemp(warden-bench-<id>-…)`, `.claude/agents/<agent>.md`,
+ * `.claude/agent-memory/<agent>/`) and into the `runs.task_hash` key. Task files
+ * are model- or user-authored (TOKEN_WARDEN_BENCHMARKS_DIR), so a value
+ * containing a separator or `..` would write outside the temp workdir. Restrict
+ * both to a filename-safe slug: leading alphanumeric, then `[A-Za-z0-9._-]`.
+ * Every bundled task id ("sql-01") and agent ("sql") already matches. */
+const SAFE_PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** Crash early on a task field that is not safe to build a path from. */
+export function assertSafePathSegment(
+	value: string,
+	field: string,
+	source: string,
+): void {
+	if (!SAFE_PATH_SEGMENT.test(value)) {
+		throw new Error(
+			`${source}: "${field}" must be a filename-safe slug ` +
+				`(alphanumeric, then [A-Za-z0-9._-], max 64 chars) — got "${value}"`,
+		);
+	}
+}
+
+/** Longest accepted `success_check` / `prompt`. Bundled tasks sit well under
+ * this; the cap exists so a pathological suite file cannot build a multi-megabyte
+ * argv or shell command. */
+const MAX_TASK_FIELD_CHARS = 4000;
+
+/** True if the value contains a C0 control (tab and newline included), DEL, or
+ * a C1 control. A golden task field is a single-line frontmatter value, so any
+ * of these is either a malformed file or an attempt to smuggle structure past a
+ * reviewer. Written as a code-point scan rather than a regex so the source never
+ * carries the bytes it guards against. */
+function hasControlChar(value: string): boolean {
+	for (let i = 0; i < value.length; i++) {
+		const code = value.charCodeAt(i);
+		if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
+	}
+	return false;
+}
+
+/** The `success_check` is executed as `bash -c <value>` inside the throwaway
+ * fixture copy, so it is arbitrary shell BY DESIGN — that is the contract a
+ * golden suite needs. What is validated here is only that it is a single,
+ * bounded, control-character-free line: a suite from TOKEN_WARDEN_BENCHMARKS_DIR
+ * is user- or model-authored, and a reviewer reading the file must see the same
+ * bytes bash will run. Anyone pointing that variable at untrusted content is
+ * granting code execution regardless; see SECURITY.md. */
+export function assertSafeSuccessCheck(value: string, source: string): void {
+	if (value.length > MAX_TASK_FIELD_CHARS) {
+		throw new Error(
+			`${source}: "success_check" exceeds ${MAX_TASK_FIELD_CHARS} characters`,
+		);
+	}
+	if (hasControlChar(value)) {
+		throw new Error(
+			`${source}: "success_check" must not contain control characters`,
+		);
+	}
+}
+
+/** The prompt is passed as the value of `-p` to the benchmarked `claude`.
+ * `-p`/`--print` takes an OPTIONAL value, so a prompt beginning with `-` is
+ * parsed by the child CLI as a new flag rather than as the prompt — which would
+ * let a suite file change the child's permission mode and defeat the scoped
+ * `acceptEdits` invocation the whole benchmark depends on. Reject it at the
+ * parse chokepoint rather than trusting argv ordering. */
+export function assertSafePrompt(value: string, source: string): void {
+	if (value.length > MAX_TASK_FIELD_CHARS) {
+		throw new Error(
+			`${source}: "prompt" exceeds ${MAX_TASK_FIELD_CHARS} characters`,
+		);
+	}
+	if (hasControlChar(value)) {
+		throw new Error(`${source}: "prompt" must not contain control characters`);
+	}
+	if (value.startsWith("-")) {
+		throw new Error(
+			`${source}: "prompt" must not start with "-" — it would be read as a ` +
+				`flag by the benchmarked CLI rather than as the prompt`,
+		);
+	}
+}
+
 /** Parse the single-line `key: "value"` frontmatter of a golden task file. */
 export function parseGoldenTask(text: string, file: string): GoldenTask {
 	const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -159,6 +249,12 @@ export function parseGoldenTask(text: string, file: string): GoldenTask {
 	for (const key of required) {
 		if (!fields.get(key)) throw new Error(`${file}: missing "${key}"`);
 	}
+	// Both fields become path segments downstream; validate at the parse
+	// chokepoint so nothing further along has to trust them.
+	assertSafePathSegment(fields.get("id") as string, "id", file);
+	assertSafePathSegment(fields.get("agent") as string, "agent", file);
+	assertSafeSuccessCheck(fields.get("success_check") as string, file);
+	assertSafePrompt(fields.get("prompt") as string, file);
 	// Optional distribution weight: absent -> 1. A present value must parse to a
 	// positive finite number; 0, negative, NaN and non-numeric strings throw so a
 	// typo can never silently zero out a task's contribution to the verdict.
@@ -200,6 +296,15 @@ export function loadGoldenTasks(agent: string): GoldenTask[] {
 	const files = readdirSync(dir)
 		.filter((name) => /^golden-\d+\.md$/.test(name))
 		.sort();
+	// A directory with no golden-NN.md files used to yield an empty suite, and
+	// an empty suite runs zero benchmark runs and produces an empty summary
+	// list — from which the selector would happily build a verdict about a rule
+	// nothing measured. Say so instead of measuring nothing quietly.
+	if (files.length === 0) {
+		throw new Error(
+			`no golden tasks for agent "${agent}": ${dir} contains no golden-NN.md files`,
+		);
+	}
 	return files.map((name) =>
 		parseGoldenTask(readFileSync(join(dir, name), "utf8"), join(dir, name)),
 	);
@@ -255,13 +360,18 @@ export function totalTokens(parsed: {
 /** Fixture files that must never reach the agent's working copy. */
 const COPY_EXCLUDES = new Set(["node_modules", "BUGS.md", ".git"]);
 
+/** Copy predicate for the frozen fixture: excluded names and any `*.db` file
+ * stay behind (node_modules is symlinked instead of copied; BUGS.md would hand
+ * the agent the answers; a stray .db is state, not fixture). */
+export function shouldCopyFixtureEntry(source: string): boolean {
+	const name = basename(source);
+	return !COPY_EXCLUDES.has(name) && !name.endsWith(".db");
+}
+
 function copyFixture(dest: string): void {
 	cpSync(fixtureDir, dest, {
 		recursive: true,
-		filter: (source) => {
-			const name = basename(source);
-			return !COPY_EXCLUDES.has(name) && !name.endsWith(".db");
-		},
+		filter: shouldCopyFixtureEntry,
 	});
 	symlinkSync(
 		join(fixtureDir, "node_modules"),
@@ -279,8 +389,93 @@ function ensureFixtureDeps(): void {
 		timeout: CHECK_TIMEOUT_MS,
 	});
 	if (result.status !== 0) {
-		throw new Error("fixture npm install failed");
+		// status is also null when npm is missing or the install timed out;
+		// carry the reason rather than a bare "failed".
+		const why = result.error
+			? `: ${result.error.message}`
+			: result.signal
+				? ` (killed by ${result.signal})`
+				: ` (exit ${result.status})`;
+		throw new Error(`fixture npm install failed${why}`);
 	}
+}
+
+/**
+ * Temp fixture copies that exist right now.
+ *
+ * `runOnce` removes its own directory in a `finally`, which covers return,
+ * throw and the spawn timeout — but a SIGINT/SIGTERM landing during a
+ * 15-minute `claude` run unwinds no `finally` at all, so an interrupted burn
+ * would leave one full fixture copy per run behind in $TMPDIR. The registry
+ * exists so the signal and exit handlers can sweep whatever is still live.
+ */
+const liveWorkDirs = new Set<string>();
+
+/** Track a temp fixture copy so an interrupt can still remove it. */
+export function registerWorkDir(dir: string): void {
+	liveWorkDirs.add(dir);
+}
+
+/** Remove one tracked temp fixture copy (the normal `finally` path). */
+export function releaseWorkDir(dir: string): void {
+	liveWorkDirs.delete(dir);
+	rmSync(dir, { recursive: true, force: true });
+}
+
+/** Remove every still-live temp fixture copy; returns how many were removed.
+ * Never throws: it runs from signal/exit handlers, where a throw would mask
+ * the cause of the shutdown. */
+export function cleanupWorkDirs(): number {
+	let removed = 0;
+	for (const dir of [...liveWorkDirs]) {
+		liveWorkDirs.delete(dir);
+		try {
+			rmSync(dir, { recursive: true, force: true });
+			removed++;
+		} catch {
+			// Best effort: one undeletable directory must not stop the sweep.
+		}
+	}
+	return removed;
+}
+
+/** Signals that should sweep temp fixture copies before the process dies. */
+const CLEANUP_SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+let uninstallWorkDirCleanup: (() => void) | null = null;
+
+/**
+ * Install the interrupt/exit sweep for temp fixture copies. Idempotent —
+ * repeated calls return the same uninstall function and add no listeners.
+ *
+ * The signal handlers deliberately re-raise after cleaning up: an interrupted
+ * benchmark must still exit as "killed by <signal>", never as a clean exit
+ * that a caller could mistake for a completed pass.
+ */
+export function installWorkDirCleanup(): () => void {
+	if (uninstallWorkDirCleanup) return uninstallWorkDirCleanup;
+	const onExit = (): void => {
+		cleanupWorkDirs();
+	};
+	const handlers = new Map<NodeJS.Signals, () => void>();
+	for (const signal of CLEANUP_SIGNALS) {
+		const handler = (): void => {
+			cleanupWorkDirs();
+			process.removeListener(signal, handler);
+			process.kill(process.pid, signal);
+		};
+		handlers.set(signal, handler);
+		process.on(signal, handler);
+	}
+	process.on("exit", onExit);
+	uninstallWorkDirCleanup = (): void => {
+		process.removeListener("exit", onExit);
+		for (const [signal, handler] of handlers) {
+			process.removeListener(signal, handler);
+		}
+		uninstallWorkDirCleanup = null;
+	};
+	return uninstallWorkDirCleanup;
 }
 
 export interface AgentDefinition {
@@ -328,12 +523,18 @@ const BENCH_PERMISSIONS = {
 	},
 };
 
-function installAgent(
+/** Materialize the agent definition, scoped permissions, and compiled
+ * MEMORY.md inside a temp fixture copy. `agent` is a path segment, so it is
+ * asserted safe here too — this is the last point before it becomes a
+ * filename, and `installAgent` is reachable from callers that never went
+ * through `parseGoldenTask`. */
+export function installAgent(
 	workDir: string,
 	agent: string,
 	definition: AgentDefinition,
 	rules: RuleRow[],
 ): void {
+	assertSafePathSegment(agent, "agent", "installAgent");
 	const claudeDir = join(workDir, ".claude");
 	const agentsDir = join(claudeDir, "agents");
 	mkdirSync(agentsDir, { recursive: true });
@@ -349,8 +550,13 @@ function installAgent(
 	}
 }
 
-function findTranscript(sessionId: string): string | null {
-	const projectsDir = join(homedir(), ".claude", "projects");
+/** Locate the JSONL transcript the spawned `claude` wrote for `sessionId`.
+ * `projectsDir` is injectable so the lookup is testable without a real
+ * ~/.claude tree; production always uses the default. */
+export function findTranscript(
+	sessionId: string,
+	projectsDir: string = join(homedir(), ".claude", "projects"),
+): string | null {
 	if (!existsSync(projectsDir)) return null;
 	for (const entry of readdirSync(projectsDir)) {
 		const candidate = join(projectsDir, entry, `${sessionId}.jsonl`);
@@ -382,39 +588,107 @@ export interface RunResult {
  * the run's own. TOKEN_WARDEN_NO_DISTILL serves the same hermeticity goal for
  * the Stop hook.
  */
-function benchChildEnv(): NodeJS.ProcessEnv {
+/** Session-identity variables stripped from the benchmark child's environment.
+ * Exported for the hermeticity test: this list IS the fix for the 30.4M-token
+ * false baseline, so a silent shortening of it must fail a test. */
+export const SESSION_ENV_KEYS = [
+	"CLAUDECODE",
+	"CLAUDE_CODE_SESSION_ID",
+	"CLAUDE_CODE_REMOTE_SESSION_ID",
+	"CLAUDE_CODE_CHILD_SESSION",
+	"CLAUDE_CODE_ENTRYPOINT",
+	"CLAUDE_CODE_SESSION_INGRESS_TOKEN_FILE",
+	"CLAUDE_SESSION_INGRESS_TOKEN_FILE",
+] as const;
+
+export function benchChildEnv(): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		TOKEN_WARDEN_NO_DISTILL: "1",
 	};
-	for (const key of [
-		"CLAUDECODE",
-		"CLAUDE_CODE_SESSION_ID",
-		"CLAUDE_CODE_REMOTE_SESSION_ID",
-		"CLAUDE_CODE_CHILD_SESSION",
-		"CLAUDE_CODE_ENTRYPOINT",
-		"CLAUDE_CODE_SESSION_INGRESS_TOKEN_FILE",
-		"CLAUDE_SESSION_INGRESS_TOKEN_FILE",
-	]) {
+	for (const key of SESSION_ENV_KEYS) {
 		delete env[key];
 	}
 	return env;
 }
 
-function runOnce(
+/** The subset of `spawnSync`'s contract `runOnce` depends on. Narrowing it to
+ * an injectable function is what makes the run path testable without spawning
+ * a real `claude`; `defaultRunOnceDeps.spawn` is `spawnSync` verbatim. */
+export interface SpawnResult {
+	status: number | null;
+	signal?: NodeJS.Signals | null;
+	stdout: string;
+	stderr: string;
+	error?: Error;
+}
+
+export interface BenchSpawnOptions {
+	cwd: string;
+	encoding: "utf8";
+	timeout: number;
+	maxBuffer: number;
+	env?: NodeJS.ProcessEnv;
+}
+
+export type SpawnFn = (
+	command: string,
+	args: string[],
+	options: BenchSpawnOptions,
+) => SpawnResult;
+
+/** Every side effect `runOnce` performs, injectable so the orchestration
+ * (argv construction, output parsing, failure classification, persistence,
+ * temp-dir disposal) can be tested without processes or a real fixture. */
+export interface RunOnceDeps {
+	spawn: SpawnFn;
+	makeWorkDir: (task: GoldenTask) => string;
+	disposeWorkDir: (dir: string) => void;
+	copyFixture: (dest: string) => void;
+	installAgent: (
+		workDir: string,
+		agent: string,
+		definition: AgentDefinition,
+		rules: RuleRow[],
+	) => void;
+	findTranscript: (sessionId: string) => string | null;
+	readTranscript: (path: string) => string;
+	now: () => string;
+}
+
+export const defaultRunOnceDeps: RunOnceDeps = {
+	spawn: (command, args, options) => spawnSync(command, args, options),
+	makeWorkDir: (task) => {
+		// Installed here rather than at import time: only a real run creates a
+		// temp copy, so only a real run needs the interrupt sweep.
+		installWorkDirCleanup();
+		const dir = mkdtempSync(join(tmpdir(), `warden-bench-${task.id}-`));
+		registerWorkDir(dir);
+		return dir;
+	},
+	disposeWorkDir: releaseWorkDir,
+	copyFixture,
+	installAgent,
+	findTranscript: (sessionId) => findTranscript(sessionId),
+	readTranscript: (path) => readFileSync(path, "utf8"),
+	now: () => new Date().toISOString(),
+};
+
+export function runOnce(
 	db: WardenDb,
 	task: GoldenTask,
 	definition: AgentDefinition,
 	rules: RuleRow[],
 	options: SuiteOptions,
+	deps: RunOnceDeps = defaultRunOnceDeps,
 ): RunResult {
-	const workDir = mkdtempSync(join(tmpdir(), `warden-bench-${task.id}-`));
+	const workDir = deps.makeWorkDir(task);
 	try {
-		copyFixture(workDir);
-		installAgent(workDir, task.agent, definition, rules);
+		deps.copyFixture(workDir);
+		deps.installAgent(workDir, task.agent, definition, rules);
 
 		const model = options.model ?? definition.model;
-		const claude = spawnSync(
+		const claude = deps.spawn(
 			"claude",
 			[
 				"-p",
@@ -434,7 +708,7 @@ function runOnce(
 				cwd: workDir,
 				encoding: "utf8",
 				timeout: CLAUDE_TIMEOUT_MS,
-				maxBuffer: 64 * 1024 * 1024,
+				maxBuffer: MAX_OUTPUT_BYTES,
 				// Hermetic child session: no distiller off golden runs, and no
 				// binding to a parent Claude Code session (see benchChildEnv).
 				env: benchChildEnv(),
@@ -460,20 +734,41 @@ function runOnce(
 			);
 		}
 
-		const check = spawnSync("bash", ["-c", task.successCheck], {
+		const check = deps.spawn("bash", ["-c", task.successCheck], {
 			cwd: workDir,
 			encoding: "utf8",
 			timeout: CHECK_TIMEOUT_MS,
+			maxBuffer: MAX_OUTPUT_BYTES,
 		});
+		// BUG FIX (2026-07): the success check's own failure to RUN used to be
+		// recorded as the task failing. `bash` unavailable, the 5-minute check
+		// timeout, and an output overrun all yield status===null (plus an
+		// error), and `check.status === 0` quietly turned every one of them into
+		// completed=false — an infrastructure failure entering the corpus as a
+		// measurement, and (because the run burned real tokens) one that
+		// isEnvironmentFailure cannot catch downstream. A check that did not run
+		// produced no evidence: throw, so runSuite records a RUN-ERROR instead.
+		// A genuine check failure always exits non-zero WITH a status.
+		if (check.error) {
+			throw new Error(
+				`success check for ${task.id} could not run: ${check.error.message}`,
+			);
+		}
+		if (check.status === null) {
+			throw new Error(
+				`success check for ${task.id} was killed before it could report` +
+					` (signal ${check.signal ?? "unknown"}; timeout ${CHECK_TIMEOUT_MS}ms)`,
+			);
+		}
 		const completed = check.status === 0;
 
-		const transcriptPath = findTranscript(sessionId);
+		const transcriptPath = deps.findTranscript(sessionId);
 		if (!transcriptPath) {
 			throw new Error(`transcript not found for session ${sessionId}`);
 		}
-		const parsed = parseTranscript(readFileSync(transcriptPath, "utf8"));
+		const parsed = parseTranscript(deps.readTranscript(transcriptPath));
 		const tokens = totalTokens(parsed);
-		const ts = new Date().toISOString();
+		const ts = deps.now();
 
 		upsertRun(db, {
 			agent: task.agent,
@@ -507,7 +802,10 @@ function runOnce(
 			fileRereads: parsed.fileRereads,
 		};
 	} finally {
-		rmSync(workDir, { recursive: true, force: true });
+		// Every exit path — return, throw, spawn timeout — drops the fixture
+		// copy. Interrupts unwind no finally at all; installWorkDirCleanup
+		// covers those.
+		deps.disposeWorkDir(workDir);
 	}
 }
 
@@ -634,6 +932,21 @@ export function runSuite(
 	options: SuiteOptions,
 	single: typeof runOnce = runOnce,
 ): TaskSummary[] {
+	// Design by contract. Both of these used to return an empty or partial
+	// summary list that reads downstream exactly like a legitimately measured
+	// pass — the selector cannot tell "no evidence" from "no difference", so an
+	// empty pass is a silent path to a verdict about an unmeasured rule.
+	if (tasks.length === 0) {
+		throw new Error(
+			`runSuite [${options.label}]: no golden tasks for agent "${agent}" —` +
+				" a verdict cannot be built from an empty suite",
+		);
+	}
+	if (!Number.isInteger(options.runs) || options.runs < 1) {
+		throw new Error(
+			`runSuite [${options.label}]: runs must be a positive integer (got ${options.runs})`,
+		);
+	}
 	// Fixture deps are only needed by the real runner; an injected fake
 	// (tests) must not trigger an npm install.
 	if (single === runOnce) ensureFixtureDeps();

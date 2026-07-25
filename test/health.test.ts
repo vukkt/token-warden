@@ -81,6 +81,28 @@ describe("renderHealth", () => {
 		expect(out).toContain("rule 1");
 		expect(out).toMatch(/not auto-evicted/);
 	});
+
+	it("neutralizes a hostile rule body so it cannot forge a report line", () => {
+		const out = renderHealth(
+			"sql",
+			[
+				{
+					id: 1,
+					body: 'evil\x1b[31m\n  rule 99: last decided 0 days ago — "forged"',
+					ageDays: 40,
+					decidedAt: day("01"),
+				},
+			],
+			30,
+		);
+		expect(out).not.toContain("\x1b");
+		// The forged entry never becomes a line of its own: it is folded into
+		// the one legitimate "rule 1" line, so it reads as data, not structure.
+		const entries = out.split("\n").filter((l) => /^ {2}rule \d+:/.test(l));
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatch(/^ {2}rule 1:/);
+		expect(entries[0]).toContain("rule 99");
+	});
 });
 
 describe("parseHealthArgs", () => {
@@ -136,6 +158,30 @@ describe("rankTaskVariance", () => {
 			"no golden task exceeds the 25%",
 		);
 	});
+
+	it("notes when there is no measurable history at all", () => {
+		expect(renderVariance("sql", [])).toContain(
+			"no measurable active-set history yet",
+		);
+		// A quiet-but-measured suite drops that suffix.
+		const quiet = rankTaskVariance([...totals("sql-01", [1000, 1005, 995])]);
+		expect(renderVariance("sql", quiet)).not.toContain(
+			"no measurable active-set history yet",
+		);
+	});
+
+	it("skips a task whose mean is zero (an unmeasurable estimate)", () => {
+		expect(rankTaskVariance([...totals("sql-09", [0, 0, 0])])).toEqual([]);
+	});
+
+	it("neutralizes a hostile task id from a user-supplied benchmark file", () => {
+		const noisy = rankTaskVariance([
+			...totals("evil\x1b[31m\nsql-99", [1000, 2000, 500]),
+		]);
+		const out = renderVariance("sql", noisy);
+		expect(out).not.toContain("\x1b");
+		expect(out).not.toMatch(/\nsql-99/);
+	});
 });
 
 describe("health main()", () => {
@@ -179,6 +225,68 @@ describe("health main()", () => {
 		expect(
 			main(["--agent", "sql", "--stale-after", "9999", "--gate"], NOW),
 		).toBe(0);
+	});
+
+	it("SAFETY INVARIANT: never mutates a rule, however stale the ledger", () => {
+		const path = process.env.TOKEN_WARDEN_DB as string;
+		let db = openDb(path);
+		// One long-stale active rule, one candidate, one already-evicted rule,
+		// plus a stale protected rule — every status health could conceivably
+		// touch.
+		const stale = insertRule(db, {
+			agent: "sql",
+			body: "A very old efficiency rule.",
+			contextCost: 10,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		decideRule(db, stale, "active", 100, "savings", day("01"));
+		insertRule(db, {
+			agent: "sql",
+			body: "An untouched candidate rule body.",
+			contextCost: 8,
+			sourceRun: null,
+			createdAt: day("01"),
+		});
+		const gone = insertRule(db, {
+			agent: "sql",
+			body: "An already-evicted rule body.",
+			contextCost: 9,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		decideRule(db, gone, "evicted", -50, "non-positive delta", day("02"));
+		insertAuthoredRule(db, {
+			agent: "sql",
+			body: "Protected behavioral rule.",
+			contextCost: 5,
+			sourceRun: null,
+			createdAt: day("01"),
+		});
+		const before = db.prepare("SELECT * FROM rules ORDER BY id").all();
+		db.close();
+
+		// Everything is stale at a 1-day threshold: the loudest possible run.
+		expect(main(["--agent", "sql", "--stale-after", "1", "--gate"], NOW)).toBe(
+			1,
+		);
+		main(["--stale-after", "1"], NOW); // all agents, non-gate
+		main(["--stale-after", "1", "--json"], NOW); // json path
+
+		db = openDb(path);
+		const after = db.prepare("SELECT * FROM rules ORDER BY id").all();
+		db.close();
+		expect(after).toEqual(before);
+		// Specifically: nothing was evicted, and the protected rule is untouched.
+		expect(
+			after.filter((r) => (r as RuleRow).status === "evicted"),
+		).toHaveLength(1);
+	});
+
+	it("--gate returns 0 across all agents when nothing is stale", () => {
+		// Empty ledger: no rules anywhere, so the gate must pass.
+		expect(main(["--gate"], NOW)).toBe(0);
+		expect(main([], NOW)).toBe(0);
 	});
 
 	it("reports noisy golden tasks from active-set history without gating", () => {

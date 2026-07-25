@@ -100,7 +100,21 @@ export function taskNoiseFromReplicates(
 		const variance = sampleVariance(totals);
 		if (variance === null) continue;
 		const prev = bestPerTask.get(taskId);
-		if (prev === undefined || totals.length > prev.n) {
+		// Deterministic, conservative tie-break. More replicates wins (better
+		// estimated noise); at EQUAL replicate counts the LARGER variance wins.
+		// Without an explicit tie-break the winner was whichever group the row
+		// order happened to insert first, so the same history in a different
+		// order produced a different plan — goldenReplicateRuns orders by
+		// (task_hash, ruleset_version, ts) but NOT by model, so two same-size
+		// groups differing only by model are decided by which model ran first.
+		// Taking the larger variance never understates the SE, matching this
+		// module's deliberately conservative stance; understating it is exactly
+		// the failure the under-characterized-variance warning below guards.
+		if (
+			prev === undefined ||
+			totals.length > prev.n ||
+			(totals.length === prev.n && variance > prev.variance)
+		) {
 			bestPerTask.set(taskId, { taskId, n: totals.length, variance });
 		}
 	}
@@ -118,8 +132,24 @@ export function seAt(runsPerSide: number, noises: TaskNoise[]): number {
 	if (noises.length < 1) {
 		throw new Error("seAt: need at least one task variance");
 	}
-	if (runsPerSide < 1) {
-		throw new Error("seAt: runsPerSide must be >= 1");
+	// `runsPerSide < 1` alone lets NaN through (every NaN comparison is false),
+	// which would return a silent NaN SE and print a NaN plan. Every caller
+	// already passes a validated integer, so this is unreachable today — it
+	// keeps the function total at its exported boundary rather than changing
+	// any result.
+	if (!Number.isFinite(runsPerSide) || runsPerSide < 1) {
+		throw new Error("seAt: runsPerSide must be a finite number >= 1");
+	}
+	// A negative or non-finite variance would make Math.sqrt return NaN. The
+	// two-pass `sampleVariance` this module feeds on cannot produce one (it
+	// sums squared deviations), so this only guards hand-built TaskNoise from
+	// the exported API; it is a loud error instead of a silent NaN plan.
+	for (const t of noises) {
+		if (!Number.isFinite(t.variance) || t.variance < 0) {
+			throw new Error(
+				`seAt: task ${t.taskId} has a non-finite or negative variance`,
+			);
+		}
 	}
 	const k = noises.length;
 	const sum = noises.reduce(
@@ -173,6 +203,14 @@ export function powerAt(
 ): number {
 	const bar = 2 * effectiveRent(rent);
 	const se = seAt(runsPerSide, noises);
+	// Zero measured noise (every recorded replicate of every task identical):
+	// the estimate is exact, so the gate collapses to `delta >= bar` and power
+	// is a step function. The normal-CDF form evaluates 0/0 = NaN at exactly
+	// trueSaving == bar, which reached the report as "achieved power: NaN%".
+	// The strict-inequality limits are UNCHANGED — (+/-Infinity) - z already
+	// mapped to 1 and 0 — so only the NaN at the boundary becomes its correct
+	// value: the gate's own comparison is `>=`, hence power 1.
+	if (se === 0) return trueSaving >= bar ? 1 : 0;
 	return normalCdf((trueSaving - bar) / se - confidenceZ());
 }
 

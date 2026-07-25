@@ -246,8 +246,10 @@ describe("bench main() orchestration", () => {
 		} finally {
 			dbRead.close();
 		}
-		// 7 golden sql tasks × 1 result × 500 tokens from the stub.
-		expect(benchTokens).toBe(3500);
+		// 8 golden sql tasks × 1 result × 500 tokens from the stub.
+		// (sql-08 joined the suite as the non-degenerate replacement for sql-01,
+		// whose check passes on the pristine fixture; sql-01 stays frozen.)
+		expect(benchTokens).toBe(4000);
 	});
 
 	it("fails fast on Windows, where the fixture-copy benchmark cannot run", () => {

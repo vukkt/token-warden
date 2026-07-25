@@ -12,7 +12,7 @@
  * error fails OPEN (no output, exit 0 → normal permission flow) and is
  * logged to gate.log next to the DB; the gate must never break a session.
  */
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
@@ -33,11 +33,22 @@ const NAME_CHARS = 60;
  * hostile teammate message must not bloat the ledger. Applied identically
  * at insert and approve time so the pending-row match still works. */
 const STORED_BODY_CHARS = 2000;
+/** Rotate gate.log past this size, keeping one generation. Every gated message
+ * writes a line, so an unrotated log grows without bound in the user's
+ * ~/.token-warden directory. */
+const LOG_MAX_BYTES = 1024 * 1024;
 
 function logLine(message: string): void {
 	try {
 		const logPath = join(dirname(defaultDbPath()), "gate.log");
 		mkdirSync(dirname(logPath), { recursive: true });
+		try {
+			if (statSync(logPath).size > LOG_MAX_BYTES) {
+				renameSync(logPath, `${logPath}.1`);
+			}
+		} catch {
+			// No log yet (or rotation raced another hook): just append.
+		}
 		appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
 	} catch {
 		// Logging must never take the gate down.
@@ -63,6 +74,11 @@ function firstString(
 	keys: string[],
 ): string | null {
 	for (const key of keys) {
+		// Own properties only: a payload carrying a `__proto__` object must not
+		// be able to answer for `message`/`recipient` through the prototype
+		// chain and conjure a gated message the tool never sent. (zod's record
+		// parser already drops `__proto__`; this is the belt to that braces.)
+		if (!Object.hasOwn(input, key)) continue;
 		const value = input[key];
 		if (typeof value === "string" && value.trim() !== "") return value;
 	}
@@ -139,6 +155,13 @@ async function readStdin(): Promise<string> {
 	return Buffer.concat(chunks).toString("utf8");
 }
 
+/**
+ * Hook body. Deliberately NOT self-catching: the CLI shim below is the single
+ * fail-open boundary (log the detail, exit 0), so every throw in here — bad
+ * JSON on stdin, an unopenable or corrupt DB, a failed insert — reaches the
+ * same place and produces the same outcome: no stdout, exit 0, normal
+ * permission flow. Tests assert that at the process level.
+ */
 export async function main(): Promise<void> {
 	const isPost = process.argv.includes("--post");
 	const message = extractMessage(JSON.parse(await readStdin()));

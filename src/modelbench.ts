@@ -20,6 +20,7 @@
  */
 import { pathToFileURL } from "node:url";
 import {
+	type AgentDefinition,
 	assertPosixPlatform,
 	type GoldenTask,
 	loadAgentDefinition,
@@ -122,7 +123,15 @@ function benchOne(
 	agent: string,
 	args: ModelbenchArgs,
 ): { comparison: Comparison; benchTokens: number } {
-	const baselineModel = args.baseline ?? loadAgentDefinition(agent).model;
+	// CONTROL ARM: everything that is NOT the varied dimension is resolved
+	// exactly once, here, and then shared by reference with both arms and with
+	// every top-up pass. Resolving inside the per-pass closure would let the
+	// agent definition, the active rule set, the suite, or the ruleset version
+	// drift between the baseline pass and the candidate pass (a `/warden-*`
+	// command or an editor save landing mid-benchmark is enough), and a
+	// two-variable A/B measures nothing.
+	const definition: AgentDefinition = loadAgentDefinition(agent);
+	const baselineModel = args.baseline ?? definition.model;
 	if (args.model === baselineModel) {
 		throw new Error(
 			`--model and baseline are both "${baselineModel}" — nothing to compare`,
@@ -135,15 +144,19 @@ function benchOne(
 		if (tasks.length === 0) throw new Error(`no task with id ${args.task}`);
 	}
 	const rules: RuleRow[] = getActiveRules(db, agent);
+	const rulesetVersion = getRulesetVersion(db, agent);
 
 	const runModel = (model: string, label: string): TaskSummary[] =>
 		runSuite(db, agent, tasks, {
 			rules,
 			runs: args.runs,
 			recordBaselines: false,
-			rulesetVersion: getRulesetVersion(db, agent),
+			rulesetVersion,
 			label,
 			config: "modelbench",
+			// Pin the prompt: both arms run the definition read above, so the
+			// model is provably the only thing that differs between them.
+			definitionOverride: definition,
 			model,
 		});
 

@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	afterEach,
 	beforeEach,
@@ -138,6 +139,47 @@ describe("confirmAgent verdict matrix", () => {
 		expect(out).toContain("expected savings ~3,000 tok/run");
 		expect(out).toContain("production: IMPROVED");
 		expect(out).toContain("verdict: CORROBORATED");
+	});
+});
+
+describe("confirm.ts is structurally incapable of changing a rule", () => {
+	// Same invariant as cohort.ts: a contradiction recommends a fixture
+	// re-audit, so this module must have no path to a rule's status.
+	const source = readFileSync(
+		fileURLToPath(new URL("../src/confirm.ts", import.meta.url)),
+		"utf8",
+	);
+
+	it("imports only read-only db helpers", () => {
+		const block = source.match(/import\s*\{([^}]*)\}\s*from\s*"\.\/db\.js"/s);
+		const imported = (block?.[1] ?? "")
+			.split(",")
+			.map((s) => s.replace(/\btype\b/, "").trim())
+			.filter(Boolean);
+		expect(new Set(imported)).toEqual(
+			new Set(["getActiveRules", "latestReceipts", "openDb", "ReceiptRow"]),
+		);
+	});
+
+	it("references no rule-mutating helper and writes no SQL", () => {
+		for (const name of [
+			"insertRule",
+			"decideRule",
+			"recordReceipt",
+			"setRuleProbation",
+			"setRuleProtected",
+			"bumpRulesetVersion",
+			"compileMemory",
+		]) {
+			expect(source, `confirm.ts must not reference ${name}`).not.toContain(
+				name,
+			);
+		}
+		const code = source
+			.replace(/\/\*[\s\S]*?\*\//g, "")
+			.replace(/\/\/.*$/gm, "");
+		expect(code).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP)\s+\w/i);
+		expect(code).not.toMatch(/db\.(exec|prepare|run)\b/);
 	});
 });
 

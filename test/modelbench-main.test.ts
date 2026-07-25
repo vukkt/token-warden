@@ -23,6 +23,7 @@ vi.mock("../src/bench.js", async (importOriginal) => {
 	return { ...actual, runSuite: vi.fn() };
 });
 
+import type { SuiteOptions } from "../src/bench.js";
 import { runSuite, type TaskSummary } from "../src/bench.js";
 import { openDb, upsertRun } from "../src/db.js";
 import { main } from "../src/modelbench.js";
@@ -323,6 +324,83 @@ describe("modelbench main() orchestration", () => {
 		expect(out).toContain("NOT a safe change for the regressed categories");
 		// One combined meta-cost line for the sweep, not one per agent.
 		expect(out.match(/Meta-cost:/g)).toHaveLength(1);
+	});
+
+	// ---- CONTROL ARM: the two sides must differ in exactly one variable ----
+
+	it("varies ONLY the model: prompt, rules, ruleset version and suite are identical across arms", () => {
+		// Within-noise so topUp actually spends a second pass on both sides.
+		wireRunSuite(
+			"haiku",
+			{ "sql-01": 1000, "sql-02": 1000, "sql-03": 1000 },
+			{ "sql-01": 1010, "sql-02": 980, "sql-03": 1030 },
+		);
+
+		main({
+			agent: "sql",
+			model: "haiku",
+			baseline: null,
+			runs: 2,
+			topUp: 1,
+			task: null,
+		});
+
+		const calls = runSuiteMock.mock.calls;
+		expect(calls.length).toBeGreaterThanOrEqual(2);
+		const opts = calls.map((c) => c[3] as SuiteOptions);
+		const first = opts[0] as SuiteOptions;
+		for (const o of opts) {
+			// Rules, ruleset version and run budget are resolved once and shared.
+			expect(o.rules).toBe(first.rules);
+			expect(o.rulesetVersion).toBe(first.rulesetVersion);
+			expect(o.runs).toBe(first.runs);
+			expect(o.config).toBe("modelbench");
+			expect(o.recordBaselines).toBe(false);
+			// The prompt is PINNED: one definition object, shared by both arms and
+			// by every top-up pass, so it cannot be re-read mid-benchmark and
+			// become a second varied dimension.
+			expect(o.definitionOverride).toBe(first.definitionOverride);
+			expect(o.definitionOverride).toBeDefined();
+		}
+		// Same suite array object for every pass — no per-arm filtering drift.
+		for (const c of calls) expect(c[2]).toBe(calls[0]?.[2]);
+
+		// The one thing that does differ, and only that.
+		expect(new Set(opts.map((o) => o.model))).toEqual(
+			new Set(["sonnet", "haiku"]),
+		);
+	});
+
+	it("--agent all keeps each agent's own prompt pinned to its own arms", () => {
+		wireRunSuite("haiku", {}, {});
+		main({
+			agent: "all",
+			model: "haiku",
+			baseline: null,
+			runs: 1,
+			topUp: 0,
+			task: null,
+		});
+
+		// Group the pass options by the agent they were run for; within an agent
+		// both arms must share one definition object, and different agents must
+		// NOT share one (each suite is benched against its own prompt).
+		const byAgent = new Map<string, SuiteOptions[]>();
+		for (const call of runSuiteMock.mock.calls) {
+			const agent = call[1] as string;
+			byAgent.set(agent, [
+				...(byAgent.get(agent) ?? []),
+				call[3] as SuiteOptions,
+			]);
+		}
+		expect(byAgent.size).toBe(4);
+		const perAgentDefinitions = new Set<unknown>();
+		for (const opts of byAgent.values()) {
+			expect(opts.length).toBe(2);
+			expect(opts[0]?.definitionOverride).toBe(opts[1]?.definitionOverride);
+			perAgentDefinitions.add(opts[0]?.definitionOverride);
+		}
+		expect(perAgentDefinitions.size).toBe(4);
 	});
 
 	it("--agent all throws when every baseline already matches the candidate", () => {

@@ -5,7 +5,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && { [ -d node_modules ] || npm install --no-audit --no-fund --silent; } && npx tsx src/collect.ts",
+						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && { [ -f node_modules/.warden-deps-ok ] || { npm ci --no-audit --no-fund --silent && touch node_modules/.warden-deps-ok; }; } && ./node_modules/.bin/tsx src/collect.ts || true",
 						"timeout": 120
 					}
 				]
@@ -16,7 +16,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && [ -d node_modules ] && npx tsx src/collect.ts || true",
+						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && [ -f node_modules/.warden-deps-ok ] && ./node_modules/.bin/tsx src/collect.ts || true",
 						"timeout": 30
 					}
 				]
@@ -24,10 +24,11 @@
 		],
 		"SessionStart": [
 			{
+				"matcher": "startup|resume",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && [ -d node_modules ] && npx tsx src/notify.ts || true",
+						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && [ -f node_modules/.warden-deps-ok ] && ./node_modules/.bin/tsx src/notify.ts || true",
 						"timeout": 10
 					}
 				]
@@ -39,7 +40,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && npx tsx src/gate.ts",
+						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && [ -f node_modules/.warden-deps-ok ] && ./node_modules/.bin/tsx src/gate.ts || true",
 						"timeout": 10
 					}
 				]
@@ -51,7 +52,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && npx tsx src/gate.ts --post",
+						"command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && [ -f node_modules/.warden-deps-ok ] && ./node_modules/.bin/tsx src/gate.ts --post || true",
 						"timeout": 10
 					}
 				]

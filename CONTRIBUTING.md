@@ -56,6 +56,17 @@ A pull request must be green through `validate`.
 The `release` job validates the tag against the manifests and publishes the
 release automatically — no manual `gh release create` needed.
 
+**Two traps, both of which have bitten this repo (see the v0.39.0 recovery
+commits `0c557aa` and `156b0cb`):**
+
+- **Stage the version bump in the commit you actually push.** A bump left
+  unstaged during a merge ships the old version, and the `release` job then
+  fails the tag-vs-manifest equality check.
+- **Never put `[skip ci]` on the commit a tag will point at.** It suppresses the
+  tag-triggered `release` run entirely, and recovering means moving the tag onto
+  a non-skip commit. `[skip ci]` is fine on text-only commits that no tag
+  references.
+
 ## Configuration
 
 token-warden needs no configuration for normal use. The full surface is a small
@@ -73,7 +84,8 @@ set of environment variables, read at process start; all are optional.
 | `TOKEN_WARDEN_NO_ALERTS` | unset | Set to `1` to suppress the real-time cost-anomaly message on an expensive session. |
 | `TOKEN_WARDEN_AUTO_SELECT` | unset | Set to `1` to opt in to scheduled selection: the SessionStart hook spawns `/warden-select` in the background for the agent with the most pending candidates, at most once per 24h. Off by default — selection spends real benchmark tokens. |
 | `WARDEN_SESSIONS_PER_WEEK` | `20` | Sessions-per-week estimate used to amortize a rule's context rent against its measured savings. |
-| `WARDEN_CONFIDENCE_Z` | `2` | Standard-error multiple a candidate must clear the 2×-rent bar by to be promoted (~95% one-sided). `validation/calibration.ts` shows the old `1` gave a ~16% false-positive rate; `2` drops it to ~2.5% at the cost of power. Lower toward 1 to trade precision for power. Clamped to ≥ 1. |
+| `WARDEN_CONFIDENCE_Z` | `2` | Standard-error multiple a candidate must clear the 2×-rent bar by to be promoted (~95% one-sided). `validation/calibration.ts` shows the old `1` gave a ~16% false-positive rate; `2` drops it to ~2.5% **in that synthetic harness** — but v0.35.0's empirical A/A harness measured **8.8% [7.9, 9.7]** on real recorded `sql` runs at runs=2 (see [FINDINGS.md](FINDINGS.md)), so treat ~2.5% as a floor, not the operating rate. Lower toward 1 to trade precision for power. **A value below 1, non-numeric, or blank is rejected and falls back to the default 2** — it is not clamped upward to 1, so `0.5` yields `2` (stricter), not `1`. |
+| `TOKEN_WARDEN_HOOK_BUDGET_MS` | `2000` | Watchdog budget for the `Stop`/`SubagentStop` collector; past this it abandons work and exits 0. Lower only for testing. Note the watchdog covers the async portion (stdin, transcript streaming); a synchronous SQLite call blocking on `busy_timeout` cannot be preempted by it. |
 | `TOKEN_WARDEN_PRICE_INPUT` / `_OUTPUT` / `_CACHE_WRITE` / `_CACHE_READ` | public Anthropic rates | Per-1M-token prices used by `/warden-cost` to translate token savings into dollars. Set any subset to apply your own rates; unset cache prices default to 1.25×/0.1× of input. |
 
 ## Design invariants (don't break these)

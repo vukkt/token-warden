@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	assessAgentCohorts,
@@ -96,6 +97,15 @@ describe("assessCohorts", () => {
 		);
 		expect(a.verdict).toBe("no-change");
 		expect(a.confident).toBe(false);
+	});
+
+	it("reports an unknown percentage against a zero baseline", () => {
+		// A percentage of zero is undefined. Reporting it as 0 would read as
+		// "no relative change", which is a different and false claim.
+		const a = assessCohorts([stat(0, 8, 0, 0), stat(1, 8, 5_000, 0)], 5);
+		expect(a.delta).toBe(-5_000);
+		expect(a.pctDelta).toBeNull();
+		expect(renderCohort("sql", null, a)).toContain("n/a");
 	});
 });
 
@@ -241,6 +251,83 @@ describe("cohortGovernance", () => {
 	it("only a regression recommends re-audit (the eviction trigger)", () => {
 		expect(a("improved").action).not.toBe("re-audit");
 		expect(a("no-change").action).not.toBe("re-audit");
+	});
+
+	it("never yields a rule-status action for any verdict", () => {
+		// The whole action vocabulary is advisory. If a future change adds an
+		// "evict"/"admit"-shaped action, this fails before it can ship.
+		const actions = (
+			["improved", "regressed", "no-change", "insufficient-data"] as const
+		).map((v) => a(v).action);
+		expect(new Set(actions)).toEqual(
+			new Set(["corroborated", "re-audit", "no-signal", "insufficient-data"]),
+		);
+		for (const action of actions) {
+			expect(action).not.toMatch(/evict|admit|activate|keep|remove|delete/i);
+		}
+	});
+});
+
+/**
+ * The observational invariant, enforced structurally rather than by hoping.
+ * cohort.ts is a production *signal*; the fixture benchmark is the only
+ * authority that admits or evicts a rule. Asserting it against the source text
+ * means importing a mutating helper fails the suite, instead of quietly giving
+ * an un-task-controlled comparison the power to change memory.
+ */
+describe("cohort.ts is structurally incapable of changing a rule", () => {
+	const source = readFileSync(
+		fileURLToPath(new URL("../src/cohort.ts", import.meta.url)),
+		"utf8",
+	);
+
+	it("imports only read-only db helpers", () => {
+		const block = source.match(/import\s*\{([^}]*)\}\s*from\s*"\.\/db\.js"/s);
+		expect(block).not.toBeNull();
+		const imported = (block?.[1] ?? "")
+			.split(",")
+			.map((s) => s.replace(/\btype\b/, "").trim())
+			.filter(Boolean);
+		expect(imported.length).toBeGreaterThan(0);
+		// An explicit allowlist: a SELECT and the connection opener, nothing else.
+		expect(new Set(imported)).toEqual(
+			new Set([
+				"openDb",
+				"realWorkTotalsByVersion",
+				"VersionedTotal",
+				"WardenDb",
+			]),
+		);
+	});
+
+	it("references no rule-mutating helper and writes no SQL", () => {
+		const forbidden = [
+			"insertRule",
+			"insertAuthoredRule",
+			"decideRule",
+			"recordReceipt",
+			"recordBaseline",
+			"recordToolCosts",
+			"setRuleScope",
+			"setRuleProbation",
+			"setRuleProtected",
+			"bumpRulesetVersion",
+			"insertQuestion",
+			"upsertRun",
+			"compileMemory",
+		];
+		for (const name of forbidden) {
+			expect(source, `cohort.ts must not reference ${name}`).not.toContain(
+				name,
+			);
+		}
+		// No hand-rolled write path either. Comments are stripped first so that
+		// prose ("a confident drop is improved") cannot trip the SQL check.
+		const code = source
+			.replace(/\/\*[\s\S]*?\*\//g, "")
+			.replace(/\/\/.*$/gm, "");
+		expect(code).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP)\s+\w/i);
+		expect(code).not.toMatch(/db\.(exec|prepare|run)\b/);
 	});
 });
 

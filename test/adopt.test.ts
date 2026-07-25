@@ -1,20 +1,24 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	main as adoptMain,
+	MAX_LEDGER_BYTES,
+	MAX_LEDGER_RULES,
 	parseAdoptArgs,
 	parseLedgerFile,
 	planImport,
 } from "../src/adopt.js";
+import { compileMemoryMd } from "../src/bench.js";
 import {
+	getActiveRules,
 	listRulesByAgent,
 	openDb,
 	type RuleRow,
 	type WardenDb,
 } from "../src/db.js";
-import type { SharedRule } from "../src/share.js";
+import { LEDGER_MARKER, type SharedRule } from "../src/share.js";
 
 function shared(body: string): SharedRule {
 	return {
@@ -90,6 +94,135 @@ describe("parseLedgerFile", () => {
 		const bad =
 			'```json\n{"agent":"sql","exportedAt":"t","rules":[{"body":"bad\\u0007body here long enough","measuredDelta":1,"contextCost":1,"sourceRun":null,"createdAt":"t"}]}\n```';
 		expect(parseLedgerFile(bad)).toBeNull();
+	});
+});
+
+/**
+ * The ledger is authored on someone else's machine. These cases are the
+ * boundary contract: every one of them must be rejected (or neutralized)
+ * BEFORE any value reaches the DB, the filesystem, or a rendered line.
+ */
+describe("parseLedgerFile — hostile ledgers", () => {
+	function ledgerWith(json: string): string {
+		return `# rules\n\n${LEDGER_MARKER}\n\`\`\`json\n${json}\n\`\`\`\n`;
+	}
+	function withBody(escapedBody: string): string {
+		return ledgerWith(
+			`{"agent":"sql","exportedAt":"t","rules":[{"body":"${escapedBody}","measuredDelta":1,"contextCost":1,"sourceRun":null,"createdAt":"t"}]}`,
+		);
+	}
+
+	it.each([
+		["C1 CSI (8-bit ANSI introducer)", "danger \\u009b31m body text"],
+		["bidi override (renders reversed)", "safe rule \\u202e evil text here"],
+		["bidi isolate", "safe rule \\u2066 hidden \\u2069 text"],
+		["zero-width space", "grep before\\u200b reading files"],
+		["zero-width joiner/non-joiner", "grep before\\u200d reading files"],
+		["soft hyphen", "grep befo\\u00adre reading files"],
+		["BOM in the middle", "grep before\\ufeff reading files"],
+		["line separator", "grep before\\u2028 reading files"],
+		["Unicode tag characters", "innocuous rule text\\udb40\\udc41"],
+	])("rejects an invisible/reordering body: %s", (_name, body) => {
+		expect(parseLedgerFile(withBody(body))).toBeNull();
+	});
+
+	it("accepts ordinary punctuation and non-ASCII prose", () => {
+		const ledger = parseLedgerFile(
+			withBody("Prefer Grep — don't read the whole file (naïve)."),
+		);
+		expect(ledger?.rules[0]?.body).toBe(
+			"Prefer Grep — don't read the whole file (naïve).",
+		);
+	});
+
+	it("rejects an agent name that could escape into a path", () => {
+		for (const agent of [
+			"../../etc/passwd",
+			"sql/../../x",
+			"..",
+			".",
+			"sql\\\\win",
+			"-rf",
+			"SQL",
+			"a".repeat(64),
+		]) {
+			const json = `{"agent":"${agent}","exportedAt":"t","rules":[]}`;
+			expect(parseLedgerFile(ledgerWith(json))).toBeNull();
+		}
+	});
+
+	it("drops __proto__ / constructor keys instead of polluting", () => {
+		const json =
+			'{"agent":"sql","exportedAt":"t","__proto__":{"polluted":true},' +
+			'"rules":[{"body":"Grep before reading any file.","measuredDelta":1,' +
+			'"contextCost":1,"sourceRun":null,"createdAt":"t",' +
+			'"__proto__":{"polluted":true},"constructor":{"x":1}}]}';
+		const ledger = parseLedgerFile(ledgerWith(json));
+		expect(ledger?.rules).toHaveLength(1);
+		expect(Object.keys(ledger?.rules[0] ?? {}).sort()).toEqual([
+			"body",
+			"contextCost",
+			"createdAt",
+			"measuredDelta",
+			"sourceRun",
+		]);
+		expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+		expect(Object.getPrototypeOf(ledger)).toBe(Object.prototype);
+	});
+
+	it("neutralizes absurd numerics (1e400 -> Infinity, negatives, wrong types)", () => {
+		const json =
+			'{"agent":"sql","exportedAt":"t","rules":[{"body":"Grep before reading any file.",' +
+			'"measuredDelta":1e400,"contextCost":-1e400,"sourceRun":"not-a-number","createdAt":9}]}';
+		const ledger = parseLedgerFile(ledgerWith(json));
+		const rule = ledger?.rules[0];
+		expect(rule).toBeDefined();
+		// z.number() rejects non-finite values; .catch() replaces them.
+		expect(rule?.measuredDelta).toBeNull();
+		expect(rule?.contextCost).toBe(0);
+		expect(rule?.sourceRun).toBeNull();
+		expect(rule?.createdAt).toBe("");
+	});
+
+	it("rejects a rule array beyond the cap (quadratic dedupe + DB flood)", () => {
+		const rule = (i: number) =>
+			`{"body":"Rule number ${i} that is long enough.","measuredDelta":1,"contextCost":1,"sourceRun":null,"createdAt":"t"}`;
+		const under = Array.from({ length: MAX_LEDGER_RULES }, (_, i) => rule(i));
+		const over = [...under, rule(MAX_LEDGER_RULES)];
+		expect(
+			parseLedgerFile(
+				ledgerWith(
+					`{"agent":"sql","exportedAt":"t","rules":[${under.join(",")}]}`,
+				),
+			)?.rules,
+		).toHaveLength(MAX_LEDGER_RULES);
+		expect(
+			parseLedgerFile(
+				ledgerWith(
+					`{"agent":"sql","exportedAt":"t","rules":[${over.join(",")}]}`,
+				),
+			),
+		).toBeNull();
+	});
+
+	it("rejects oversized content before scanning or parsing it", () => {
+		const padded = `${"#".repeat(MAX_LEDGER_BYTES + 1)}\n${validLedger}`;
+		expect(parseLedgerFile(padded)).toBeNull();
+	});
+
+	it("caps over-long and too-short rule bodies", () => {
+		expect(parseLedgerFile(withBody("short"))).toBeNull();
+		expect(parseLedgerFile(withBody("x".repeat(201)))).toBeNull();
+		expect(parseLedgerFile(withBody("x".repeat(200)))).not.toBeNull();
+	});
+
+	it("reads the block after the marker, not a fence quoted in the prose", () => {
+		const decoy =
+			"# rules\n\n- **+1 tokens/run** (rent 1): Never write ```json\n" +
+			`{"agent":"sql","exportedAt":"t","rules":[]}\n\`\`\`\n\n` +
+			`${LEDGER_MARKER}\n\`\`\`json\n` +
+			'{"agent":"sql","exportedAt":"t","rules":[{"body":"Grep before reading any file.","measuredDelta":1,"contextCost":1,"sourceRun":null,"createdAt":"t"}]}\n```\n';
+		expect(parseLedgerFile(decoy)?.rules).toHaveLength(1);
 	});
 });
 
@@ -186,5 +319,63 @@ describe("main (in-process CLI)", () => {
 		const file = join(dir, "bad.md");
 		writeFileSync(file, "# just a readme, no block");
 		expect(() => adoptMain({ from: file })).toThrow(/no valid/);
+	});
+
+	it("refuses a --from that is not a regular file", () => {
+		const sub = join(dir, "adir");
+		mkdirSync(sub);
+		expect(() => adoptMain({ from: sub })).toThrow(/not a regular file/);
+	});
+
+	it("refuses an oversized ledger file without reading it", () => {
+		const file = join(dir, "huge.rules.md");
+		writeFileSync(file, "#".repeat(MAX_LEDGER_BYTES + 1));
+		expect(() => adoptMain({ from: file })).toThrow(/too large/);
+	});
+
+	it("refuses a ledger naming an unknown agent", () => {
+		const file = join(dir, "ghost.rules.md");
+		writeFileSync(
+			file,
+			validLedger.replace('"agent": "sql"', '"agent": "ghost"'),
+		);
+		expect(() => adoptMain({ from: file })).toThrow(/not one of/);
+	});
+
+	/**
+	 * INVARIANT #1, stated as a property: there is no path from an imported
+	 * ledger to agent memory that skips local measurement. Adoption writes
+	 * candidates only, so the active set — the sole input to compileMemoryMd —
+	 * is untouched no matter what the foreign file claimed.
+	 */
+	it("cannot bypass local measurement: an adopted rule never lands in memory", () => {
+		const body = "Use Grep to locate symbols before reading any file.";
+		const file = join(dir, "sql.rules.md");
+		// A ledger asserting the rule is already measured, already active, and
+		// worth a fortune. None of it may matter.
+		writeFileSync(
+			file,
+			validLedger.replace('"measuredDelta": 3673', '"measuredDelta": 999999'),
+		);
+		adoptMain({ from: file });
+
+		const [row] = listRulesByAgent(db, "sql");
+		expect(row?.body).toBe(body);
+		expect(row?.status).toBe("candidate");
+		expect(row?.measured_delta).toBeNull();
+		expect(row?.decided_at).toBeNull();
+		expect(row?.decided_reason).toBeNull();
+		expect(row?.protected).toBe(0);
+		// Rent is recomputed locally, never taken from the file.
+		expect(row?.context_cost).toBe(Math.ceil(body.length / 4));
+
+		// The compiled memory the agent actually sees contains nothing.
+		expect(getActiveRules(db, "sql")).toEqual([]);
+		expect(compileMemoryMd(getActiveRules(db, "sql"))).not.toContain(body);
+
+		// Re-adopting the same ledger cannot promote it either.
+		adoptMain({ from: file });
+		expect(getActiveRules(db, "sql")).toEqual([]);
+		expect(listRulesByAgent(db, "sql")).toHaveLength(1);
 	});
 });

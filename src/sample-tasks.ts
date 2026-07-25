@@ -19,15 +19,82 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { trigramSimilarity } from "./distill.js";
 import { assertKnownAgent } from "./registry.js";
+import { displayText } from "./sanitize.js";
 
 /** Two prompts within this trigram similarity are treated as the same task. */
 const DEDUP_THRESHOLD = 0.6;
 /** Prompts shorter than this are noise (acks, one-word follow-ups). */
 const MIN_PROMPT_CHARS = 24;
+/** Hard cap on a drafted prompt, applied after redaction. */
+const MAX_PROMPT_CHARS = 600;
+
+/**
+ * Credential shapes that turn up pasted into real prompts. Each is replaced
+ * wholesale with `[REDACTED]`; a false positive costs a human one edit in a
+ * review stub, a false negative writes a live secret into a file the user is
+ * being invited to commit into `benchmarks/`.
+ */
+const SECRET_PATTERNS: readonly RegExp[] = [
+	// Anthropic / OpenAI / Stripe style `sk-...`, `sk-ant-...`, `rk_live_...`.
+	/\b(?:sk|rk|pk)[-_](?:[A-Za-z0-9]+[-_])*[A-Za-z0-9]{16,}\b/g,
+	// GitHub tokens (classic, fine-grained, app, OAuth, refresh).
+	/\bgh[pousr]_[A-Za-z0-9]{16,}\b/g,
+	/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+	// AWS access key ids and Google API keys.
+	/\bAKIA[0-9A-Z]{16}\b/g,
+	/\bAIza[0-9A-Za-z_-]{30,}\b/g,
+	// Slack tokens.
+	/\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g,
+	// JSON Web Tokens.
+	/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+	// `Authorization: Bearer <blob>` and private-key PEM headers.
+	/\bBearer\s+[A-Za-z0-9._-]{16,}/gi,
+	// `api_key: v`, `token=v`, `secret=v`, `DB_PASSWORD=v`. The surrounding
+	// `[A-Za-z0-9_.-]*` deliberately absorbs prefixes and suffixes (`DB_`,
+	// `_VALUE`) so a namespaced env-var name still trips the match.
+	/[A-Za-z0-9_.-]*(?:api[-_]?key|access[-_]?token|auth[-_]?token|secret|password|passwd|pwd|token)[A-Za-z0-9_]*\s*[:=]\s*["']?[^\s"',;]{8,}/gi,
+	/-----BEGIN[A-Z ]*PRIVATE KEY-----/g,
+];
+
+/**
+ * Strip identifying and secret material out of a real user prompt before it is
+ * written to disk.
+ *
+ * These prompts come verbatim out of the user's OWN session transcripts, and
+ * the drafts land under `benchmarks/<agent>/drafts/` — a path inside the
+ * user's repo that they are explicitly told to review and promote, i.e. a path
+ * that gets committed and pushed. Without this step, `--from ~/.claude/projects`
+ * would happily copy `/Users/<real name>/...`, a pasted API key, or a
+ * colleague's email address straight into version control.
+ *
+ * Home directories collapse to `~` rather than being redacted: the shape of the
+ * path is useful context for writing a golden task, the username is not.
+ */
+export function redactSensitive(text: string): string {
+	let out = text;
+	for (const pattern of SECRET_PATTERNS) {
+		out = out.replace(pattern, "[REDACTED]");
+	}
+	// This machine's actual home directory first (it may not match the generic
+	// shapes below, e.g. a relocated $HOME), then the conventional layouts.
+	const home = homedir();
+	if (home && home !== "/") {
+		out = out.split(home).join("~");
+	}
+	out = out.replace(/\/(?:Users|home)\/[^/\s"']+/g, "~");
+	out = out.replace(/\/(?:var\/)?root\b/g, "~");
+	// Email addresses identify the user and their colleagues.
+	out = out.replace(
+		/\b[^\s@,;<>"']+@[^\s@,;<>"']+\.[A-Za-z]{2,}\b/g,
+		"[EMAIL]",
+	);
+	return out;
+}
 
 export interface TaskDraft {
 	prompt: string;
@@ -99,6 +166,27 @@ export function extractTaskDrafts(
 	return drafts;
 }
 
+/**
+ * Turn a raw transcript prompt into a value that is safe to write inside a
+ * double-quoted frontmatter scalar: neutralized (ANSI/control characters
+ * stripped, whitespace collapsed), redacted, then made quote- and
+ * backslash-safe, and only then clamped.
+ *
+ * Redaction happens BEFORE the length clamp so a secret can never survive by
+ * being cut in half. Backslashes become `/` because the value is emitted
+ * between double quotes: a trailing `\` would escape the closing quote and
+ * leave the whole file unparseable, and these drafts are Windows-path noise at
+ * worst — a human rewrites the prompt during review anyway.
+ */
+export function sanitizeDraftPrompt(prompt: string): string {
+	const neutral = displayText(prompt, MAX_PROMPT_CHARS * 4);
+	return redactSensitive(neutral)
+		.replace(/"/g, "'")
+		.replace(/\\/g, "/")
+		.slice(0, MAX_PROMPT_CHARS)
+		.trim();
+}
+
 /** Render a draft as a golden-task file with the success check left for a human
  * to write — never auto-frozen. */
 export function renderDraft(
@@ -107,16 +195,21 @@ export function renderDraft(
 	draft: TaskDraft,
 ): string {
 	const id = `${agent}-draft-${String(index).padStart(2, "0")}`;
-	const safePrompt = draft.prompt.replace(/"/g, "'").slice(0, 600);
 	return [
 		"---",
 		`id: "${id}"`,
 		`agent: "${agent}"`,
-		`prompt: "${safePrompt}"`,
+		`prompt: "${sanitizeDraftPrompt(draft.prompt)}"`,
 		'success_check: "TODO — write a deterministic check, then move out of drafts/ to freeze"',
 		"---",
 		"",
-		`<!-- Drafted from real session ${draft.sourceSession}. Review before adding to the frozen suite. -->`,
+		"<!-- UNVERIFIED DRAFT — NOT part of the golden suite. -->",
+		`<!-- Sampled from real session ${draft.sourceSession}; the prompt is machine-extracted and only`,
+		"     best-effort redacted (home paths -> ~, credential-shaped strings -> [REDACTED], addresses",
+		"     -> [EMAIL]). Re-read it for anything private before this file goes anywhere. -->",
+		"<!-- To promote: write a deterministic success_check, delete this banner, and move the file up",
+		`     into benchmarks/${agent}/ as golden-NN.md. Loading only ever picks up golden-NN.md, so a`,
+		"     draft left here can never enter a measurement by accident. -->",
 		"",
 	].join("\n");
 }

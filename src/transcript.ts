@@ -321,12 +321,21 @@ export function parseTranscript(jsonlText: string): ParsedRun {
  */
 export async function parseTranscriptFile(path: string): Promise<ParsedRun> {
 	const accumulator = new TranscriptAccumulator();
+	const stream = createReadStream(path, { encoding: "utf8" });
 	const lines = createInterface({
-		input: createReadStream(path, { encoding: "utf8" }),
+		input: stream,
 		crlfDelay: Number.POSITIVE_INFINITY,
 	});
-	for await (const line of lines) {
-		accumulator.feedLine(line);
+	try {
+		for await (const line of lines) {
+			accumulator.feedLine(line);
+		}
+	} finally {
+		// A rejected read (missing file, EISDIR, a mid-read unlink on a
+		// platform that fails it) leaves the interface holding an open handle;
+		// release it on every exit path, not just the happy one.
+		lines.close();
+		stream.destroy();
 	}
 	return accumulator.finish();
 }

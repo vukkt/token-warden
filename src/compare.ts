@@ -14,6 +14,7 @@
  * dollars.
  */
 import {
+	isEnvironmentFailure,
 	metaCost,
 	type RunResult,
 	realWorkTokensLast7Days,
@@ -63,6 +64,11 @@ interface TaskComparison {
 	 * when none did. Advisory only. */
 	baselineDurationMean: number | null;
 	candidateDurationMean: number | null;
+	/** The candidate side has no completed run and every run failed burning
+	 * ~0 tokens — a quota death / API outage, not a capability regression.
+	 * Uses the same discriminator `assessDelta` applies, so this per-task face
+	 * can never drift from `Comparison.environmentFailure`. */
+	candidateEnvironmentFailure: boolean;
 }
 
 export interface Comparison {
@@ -97,6 +103,18 @@ export interface Comparison {
 }
 
 const processingOf = (r: RunDatum): number => r.processingTokens;
+
+/** The environment-failure discriminator applied to comparison data. Runs it
+ * on the PROCESSING-token measure — exactly what `processingSummary` feeds
+ * `assessDelta` — so a task's per-task classification always agrees with the
+ * `Comparison.environmentFailure` flag derived from the same runs. */
+function isEnvFailureRun(r: RunDatum): boolean {
+	return isEnvironmentFailure({
+		sessionId: "",
+		tokens: r.processingTokens,
+		completed: r.completed,
+	});
+}
 
 function mean(values: number[]): number {
 	if (values.length === 0) return 0;
@@ -168,7 +186,6 @@ export function compareConfigs(
 	const candidateByTask = new Map(candidate.map((m) => [m.taskId, m]));
 
 	const perTask: TaskComparison[] = [];
-	let comparableTasks = 0;
 	for (const base of baseline) {
 		const cand = candidateByTask.get(base.taskId);
 		if (!cand) continue;
@@ -188,14 +205,22 @@ export function compareConfigs(
 			pct: pctChange(candProc, baseProc),
 			baselineDurationMean: completedDurationMean(base.runs),
 			candidateDurationMean: completedDurationMean(cand.runs),
+			// `every` over a non-empty run list already implies no completed run
+			// (isEnvironmentFailure requires !completed).
+			candidateEnvironmentFailure:
+				cand.runs.length > 0 && cand.runs.every(isEnvFailureRun),
 		});
-		if (
-			base.runs.some((r) => r.completed) &&
-			cand.runs.some((r) => r.completed)
-		) {
-			comparableTasks++;
-		}
 	}
+
+	// Tasks with at least one completed run on BOTH sides — the only tasks that
+	// carry information about the change. `baselineCompleted > 0` is exactly
+	// `base.runs.some(r => r.completed)`, so this is the same set the old
+	// in-loop counter produced; deriving it here keeps one definition of
+	// "comparable" instead of two that can drift.
+	const comparable = perTask.filter(
+		(t) => t.baselineCompleted > 0 && t.candidateCompleted > 0,
+	);
+	const comparableTasks = comparable.length;
 
 	const assessment: DeltaAssessment = assessDelta(
 		baseline.map(processingSummary),
@@ -203,11 +228,18 @@ export function compareConfigs(
 		0,
 	);
 
-	const overallBaseProc = mean(
-		perTask.map((t) => t.baselineProcessingMean).filter((n) => n > 0),
-	);
+	// Both means MUST range over the SAME tasks. Filtering each side
+	// independently on `> 0` let a task that only one side completed enter one
+	// mean but not the other, so the reported percentage compared incomparable
+	// task sets — a baseline that failed one task printed "+126.7% ... cheaper
+	// for this workload", contradicting a `delta` that was correct. It also
+	// conflated a genuine zero-token mean with "no data", because
+	// `completedMean` returns the same 0 for both. Restricting to tasks
+	// completed on both sides fixes both: the percentage now describes exactly
+	// the tasks `assessDelta` scored.
+	const overallBaseProc = mean(comparable.map((t) => t.baselineProcessingMean));
 	const overallCandProc = mean(
-		perTask.map((t) => t.candidateProcessingMean).filter((n) => n > 0),
+		comparable.map((t) => t.candidateProcessingMean),
 	);
 
 	return {
@@ -309,11 +341,34 @@ export function formatComparison(cmp: Comparison): string {
 	return lines.join("\n");
 }
 
-/** Task ids the candidate failed but the baseline completed — the per-task
- * face of `Comparison.regression`. */
+/** Task ids the candidate genuinely failed while the baseline completed them —
+ * the per-task face of `Comparison.regression`. Tasks whose candidate side
+ * merely died with ~0 tokens are EXCLUDED: a quota death is not evidence about
+ * the change. Without that exclusion this disagreed with `Comparison.regression`
+ * (which has always used the token-spend discriminator), letting the category
+ * roll-up print "REGRESSED — t2" and "No category regressed" together. */
 export function regressedTaskIds(cmp: Comparison): string[] {
 	return cmp.perTask
-		.filter((t) => t.baselineCompleted > 0 && t.candidateCompleted === 0)
+		.filter(
+			(t) =>
+				t.baselineCompleted > 0 &&
+				t.candidateCompleted === 0 &&
+				!t.candidateEnvironmentFailure,
+		)
+		.map((t) => t.taskId);
+}
+
+/** Task ids the baseline completed but whose candidate side produced only
+ * ~0-token failures (quota exhausted, API outage). These say nothing about the
+ * change and must never be reported as regressions. */
+export function environmentFailedTaskIds(cmp: Comparison): string[] {
+	return cmp.perTask
+		.filter(
+			(t) =>
+				t.baselineCompleted > 0 &&
+				t.candidateCompleted === 0 &&
+				t.candidateEnvironmentFailure,
+		)
 		.map((t) => t.taskId);
 }
 
@@ -325,23 +380,45 @@ export function regressedTaskIds(cmp: Comparison): string[] {
  */
 export function formatCategoryRegressions(comparisons: Comparison[]): string {
 	const lines = ["Regression by category:"];
+	const envDead = (cmp: Comparison): boolean =>
+		cmp.environmentFailure || environmentFailedTaskIds(cmp).length > 0;
 	for (const cmp of comparisons) {
 		const regressed = regressedTaskIds(cmp);
+		const envFailed = environmentFailedTaskIds(cmp);
 		if (regressed.length > 0) {
 			lines.push(`  ${cmp.subject}: REGRESSED — ${regressed.join(", ")}`);
 		} else if (cmp.regression) {
 			// Defensive: the flag can only be set by a regressed task, but never
 			// report "none" when the verdict says otherwise.
 			lines.push(`  ${cmp.subject}: REGRESSED`);
+		} else if (envDead(cmp)) {
+			// A quota death is not a completion result in either direction — this
+			// category simply was not measured.
+			lines.push(
+				`  ${cmp.subject}: NO VERDICT (environment failure` +
+					`${envFailed.length > 0 ? ` — ${envFailed.join(", ")}` : ""})`,
+			);
 		} else {
 			lines.push(`  ${cmp.subject}: none`);
 		}
 	}
-	lines.push(
-		comparisons.some((c) => c.regression)
-			? "NOT a safe change for the regressed categories, regardless of tokens."
-			: "No category regressed — the change is completion-safe across all suites.",
-	);
+	if (comparisons.some((c) => c.regression)) {
+		lines.push(
+			"NOT a safe change for the regressed categories, regardless of tokens.",
+		);
+	} else if (comparisons.some(envDead)) {
+		// "Completion-safe across all suites" would be a claim the measurement
+		// never earned: the environment died before those tasks were judged.
+		lines.push(
+			"No category regressed, but some suites died on environment failures" +
+				" (quota exhausted?) — completion safety is UNPROVEN there;" +
+				" re-run on a healthy environment before relying on this.",
+		);
+	} else {
+		lines.push(
+			"No category regressed — the change is completion-safe across all suites.",
+		);
+	}
 	return lines.join("\n");
 }
 

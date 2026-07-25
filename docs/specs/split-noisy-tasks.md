@@ -1,5 +1,8 @@
 # Spec: split the noisy golden tasks (sql-02, testing-02)
 
+**Status: SHIPPED in v0.36.0** (sql-06/07, testing-05/06; frozen originals
+untouched).
+
 ## Why
 /warden-health's variance ranking and the empirical calibration both show the
 suites' noisiest tasks bury real savings: sql's minimum detectable saving is

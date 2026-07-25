@@ -21,14 +21,25 @@ export interface Price {
 	cacheRead: number;
 }
 
+/** Cache-write is 1.25× the input rate at the 5-minute TTL. */
+export const CACHE_WRITE_MULTIPLIER = 1.25;
+/** Cache-read is 0.1× the input rate. */
+export const CACHE_READ_MULTIPLIER = 0.1;
+
 /** Build a Price from a base input/output pair using the standard cache
  * multipliers (write 1.25×, read 0.1× of input). */
 function priced(input: number, output: number): Price {
-	return { input, output, cacheWrite: input * 1.25, cacheRead: input * 0.1 };
+	return {
+		input,
+		output,
+		cacheWrite: input * CACHE_WRITE_MULTIPLIER,
+		cacheRead: input * CACHE_READ_MULTIPLIER,
+	};
 }
 
 /** Public per-1M-token rates by model id (and friendly alias). */
 export const DEFAULT_PRICES: Record<string, Price> = {
+	"claude-opus-5": priced(5, 25),
 	"claude-opus-4-8": priced(5, 25),
 	"claude-opus-4-7": priced(5, 25),
 	"claude-opus-4-6": priced(5, 25),
@@ -39,6 +50,7 @@ export const DEFAULT_PRICES: Record<string, Price> = {
 	"claude-sonnet-4-6": priced(3, 15),
 	"claude-haiku-4-5": priced(1, 5),
 	"claude-fable-5": priced(10, 50),
+	"claude-mythos-5": priced(10, 50),
 	opus: priced(5, 25),
 	sonnet: priced(3, 15),
 	haiku: priced(1, 5),
@@ -54,12 +66,26 @@ export const DEFAULT_MODEL = "sonnet";
  * cache fields default to the 1.25×/0.1× multipliers of the resolved input.
  */
 export function priceFor(model?: string | null): Price {
+	// Own-property check, not a truthiness check. DEFAULT_PRICES is an object
+	// literal, so `DEFAULT_PRICES["constructor"]` (or "toString", "valueOf",
+	// "__proto__", "hasOwnProperty") resolves through Object.prototype to a
+	// truthy FUNCTION — it would sail past a `?? default` / `if (!base)` guard
+	// and leave base.input undefined, NaN-ing every downstream dollar figure.
+	// Reachable since v0.36.0: the model string is whatever a user wrote in a
+	// bring-your-own-agent .md file.
 	const base =
-		(model && DEFAULT_PRICES[model]) ?? DEFAULT_PRICES[DEFAULT_MODEL];
+		model && Object.hasOwn(DEFAULT_PRICES, model)
+			? DEFAULT_PRICES[model]
+			: DEFAULT_PRICES[DEFAULT_MODEL];
 	if (!base) throw new Error("no default price configured");
+	// An override must parse to a finite, non-negative number. Everything else
+	// falls back to the rate card rather than poisoning every downstream figure:
+	// Number("junk") is NaN and NaN silently propagates through the whole
+	// dollar report, and Number("") is 0 — so a bare `export VAR=` would
+	// otherwise price the entire workload at zero.
 	const envNum = (name: string): number | null => {
 		const raw = process.env[name];
-		if (raw === undefined) return null;
+		if (raw === undefined || raw.trim() === "") return null;
 		const n = Number(raw);
 		return Number.isFinite(n) && n >= 0 ? n : null;
 	};
@@ -67,8 +93,11 @@ export function priceFor(model?: string | null): Price {
 	return {
 		input,
 		output: envNum("TOKEN_WARDEN_PRICE_OUTPUT") ?? base.output,
-		cacheWrite: envNum("TOKEN_WARDEN_PRICE_CACHE_WRITE") ?? input * 1.25,
-		cacheRead: envNum("TOKEN_WARDEN_PRICE_CACHE_READ") ?? input * 0.1,
+		cacheWrite:
+			envNum("TOKEN_WARDEN_PRICE_CACHE_WRITE") ??
+			input * CACHE_WRITE_MULTIPLIER,
+		cacheRead:
+			envNum("TOKEN_WARDEN_PRICE_CACHE_READ") ?? input * CACHE_READ_MULTIPLIER,
 	};
 }
 
@@ -91,13 +120,15 @@ export function dollarsForTokens(t: TokenBreakdown, price: Price): number {
 }
 
 /** Blended $/token implied by a workload's actual token-type mix. Returns the
- * input rate (per token) when the breakdown has no tokens, so callers always get
- * a usable, conservative number. */
+ * input rate (per token) when the breakdown has no usable tokens, so callers
+ * always get a usable, conservative number — a zero, negative, or non-finite
+ * total would otherwise divide into Infinity or NaN and silently poison every
+ * figure derived from it. */
 export function blendedDollarsPerToken(
 	t: TokenBreakdown,
 	price: Price,
 ): number {
 	const total = t.input + t.output + t.cacheCreation + t.cacheRead;
-	if (total === 0) return price.input / 1_000_000;
+	if (!Number.isFinite(total) || total <= 0) return price.input / 1_000_000;
 	return dollarsForTokens(t, price) / total;
 }

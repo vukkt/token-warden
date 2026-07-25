@@ -623,7 +623,7 @@ work: reduce golden-suite variance further (add quieter task files; baselines
 stay frozen). Dollar translation shipped in v0.26.0 as a reporting lens
 (`/warden-cost`, savings priced at the agent's real token mix) with the
 keep/evict gate deliberately kept in tokens (see DECISIONS.md); the remaining
-token-spending experiments — best-of-K distillation, rule-body compression,
+token-spending experiments — best-of-K distillation and
 out-of-fixture confirmation — are catalogued in
 [docs/audit-2026-07.md](docs/audit-2026-07.md).
 

@@ -62,7 +62,37 @@ describe("normalCdf", () => {
 			expect(Math.abs(normalCdf(-x) - (1 - normalCdf(x)))).toBeLessThan(1e-9);
 		}
 	});
+
+	it("is total at the infinities and stays a probability everywhere", () => {
+		expect(normalCdf(Number.POSITIVE_INFINITY)).toBe(1);
+		expect(normalCdf(Number.NEGATIVE_INFINITY)).toBe(0);
+		const rand = lcg(31);
+		for (let trial = 0; trial < 2000; trial++) {
+			const p = normalCdf((rand() - 0.5) * 80);
+			expect(p).toBeGreaterThanOrEqual(0);
+			expect(p).toBeLessThanOrEqual(1);
+		}
+	});
+
+	it("is monotone non-decreasing", () => {
+		let prev = normalCdf(-12);
+		for (let x = -12; x <= 12; x += 0.05) {
+			const p = normalCdf(x);
+			expect(p).toBeGreaterThanOrEqual(prev);
+			prev = p;
+		}
+	});
 });
+
+/** Deterministic LCG so the property sweeps below are reproducible — a
+ * flaky statistical test is worse than no test. */
+function lcg(seed: number): () => number {
+	let s = seed;
+	return () => {
+		s = (s * 1103515245 + 12345) % 2147483648;
+		return s / 2147483648;
+	};
+}
 
 describe("taskNoiseFromReplicates", () => {
 	it("keeps the largest identical-configuration group per task", () => {
@@ -92,6 +122,65 @@ describe("taskNoiseFromReplicates", () => {
 		];
 		expect(taskNoiseFromReplicates(rows)).toEqual([]);
 	});
+
+	it("breaks an equal-size tie on the LARGER variance (conservative)", () => {
+		// Two same-size groups for one task, differing only by model. The plan
+		// must never understate the SE, so the noisier group wins.
+		const rows = [
+			replicate("t", 0, "sonnet", 100),
+			replicate("t", 0, "sonnet", 110),
+			replicate("t", 0, "haiku", 1000),
+			replicate("t", 0, "haiku", 2000),
+		];
+		expect(taskNoiseFromReplicates(rows)).toEqual([
+			{ taskId: "t", n: 2, variance: 500_000 },
+		]);
+	});
+
+	it("is PERMUTATION-INVARIANT — row order cannot change the plan", () => {
+		// goldenReplicateRuns orders by (task_hash, ruleset_version, ts) but NOT
+		// by model, so two equal-size groups differing only by model arrive in
+		// whichever order the runs happened to execute. Without a deterministic
+		// tie-break that swung this example's variance between 50 and 500,000
+		// (a 100x SE swing) on identical data.
+		const rows = [
+			replicate("t", 0, "sonnet", 100),
+			replicate("t", 0, "sonnet", 110),
+			replicate("t", 0, "haiku", 1000),
+			replicate("t", 0, "haiku", 2000),
+			replicate("u", 1, "sonnet", 50),
+			replicate("u", 1, "sonnet", 70),
+		];
+		const canonical = taskNoiseFromReplicates(rows);
+		const rand = lcg(4242);
+		for (let trial = 0; trial < 200; trial++) {
+			const shuffled = [...rows];
+			for (let i = shuffled.length - 1; i > 0; i--) {
+				const j = Math.floor(rand() * (i + 1));
+				[shuffled[i], shuffled[j]] = [
+					shuffled[j] as GoldenReplicateRun,
+					shuffled[i] as GoldenReplicateRun,
+				];
+			}
+			expect(taskNoiseFromReplicates(shuffled)).toEqual(canonical);
+		}
+	});
+
+	it("never reports a negative variance (sum of squared deviations)", () => {
+		const rand = lcg(99);
+		for (let trial = 0; trial < 300; trial++) {
+			// Large offsets with a small spread: the regime where a naive
+			// one-pass sum-of-squares variance loses all precision and can even
+			// go negative. The two-pass estimator must stay >= 0 and finite.
+			const offset = 10 ** Math.floor(rand() * 13);
+			const rows = Array.from({ length: 4 }, () =>
+				replicate("t", 0, "sonnet", offset + Math.round(rand() * 10)),
+			);
+			const [noise] = taskNoiseFromReplicates(rows);
+			expect(noise?.variance).toBeGreaterThanOrEqual(0);
+			expect(Number.isFinite(noise?.variance ?? Number.NaN)).toBe(true);
+		}
+	});
 });
 
 describe("seAt", () => {
@@ -102,6 +191,70 @@ describe("seAt", () => {
 	it("rejects empty noises and non-positive run counts", () => {
 		expect(() => seAt(2, [])).toThrow(/at least one task/);
 		expect(() => seAt(0, NOISES)).toThrow(/runsPerSide/);
+	});
+
+	it("rejects NaN/Infinity run counts instead of returning a NaN SE", () => {
+		// `runsPerSide < 1` alone lets NaN through (all NaN comparisons are
+		// false), which silently produced a NaN plan.
+		expect(() => seAt(Number.NaN, NOISES)).toThrow(/runsPerSide/);
+		expect(() => seAt(Number.POSITIVE_INFINITY, NOISES)).toThrow(/runsPerSide/);
+	});
+
+	it("rejects a negative or non-finite variance instead of sqrt-ing to NaN", () => {
+		expect(() => seAt(2, [{ taskId: "bad", n: 2, variance: -1 }])).toThrow(
+			/negative variance/,
+		);
+		expect(() =>
+			seAt(2, [{ taskId: "bad", n: 2, variance: Number.NaN }]),
+		).toThrow(/negative variance/);
+	});
+
+	it("matches the closed form sqrt(2*sum(var)/(n*K^2)) exactly", () => {
+		const rand = lcg(7);
+		for (let trial = 0; trial < 500; trial++) {
+			const noises: TaskNoise[] = Array.from(
+				{ length: 1 + Math.floor(rand() * 6) },
+				(_, i) => ({
+					taskId: `t${i}`,
+					n: 3,
+					variance: rand() ** 3 * 1e9,
+				}),
+			);
+			const n = 1 + Math.floor(rand() * 200);
+			const k = noises.length;
+			const expected = Math.sqrt(
+				(2 * noises.reduce((a, t) => a + t.variance, 0)) / (n * k * k),
+			);
+			expect(seAt(n, noises)).toBeCloseTo(expected, 9);
+		}
+	});
+
+	it("shrinks exactly as 1/sqrt(n) for every run-count pair", () => {
+		const rand = lcg(11);
+		const noises: TaskNoise[] = Array.from({ length: 4 }, (_, i) => ({
+			taskId: `t${i}`,
+			n: 3,
+			variance: 1 + rand() * 1e6,
+		}));
+		for (let a = 1; a < 40; a++) {
+			for (let b = a; b < 40; b++) {
+				const ratio = seAt(a, noises) / seAt(b, noises);
+				expect(ratio).toBeCloseTo(Math.sqrt(b / a), 9);
+			}
+		}
+	});
+
+	it("is non-negative and finite for every valid input (never NaN)", () => {
+		const rand = lcg(13);
+		for (let trial = 0; trial < 500; trial++) {
+			const noises: TaskNoise[] = Array.from(
+				{ length: 1 + Math.floor(rand() * 5) },
+				(_, i) => ({ taskId: `t${i}`, n: 2, variance: rand() ** 4 * 1e12 }),
+			);
+			const se = seAt(1 + Math.floor(rand() * 500), noises);
+			expect(se).toBeGreaterThanOrEqual(0);
+			expect(Number.isFinite(se)).toBe(true);
+		}
 	});
 });
 
@@ -141,6 +294,136 @@ describe("minDetectableSaving / requiredRunsPerSide / powerAt", () => {
 	it("powerAt the MDS@80 is ~80%", () => {
 		const d = minDetectableSaving(4, NOISES, RENT, Z_POWER_80);
 		expect(Math.abs(powerAt(4, d, NOISES, RENT) - 0.8)).toBeLessThan(0.01);
+	});
+
+	it("MDS is monotone decreasing in n across randomized suites", () => {
+		const rand = lcg(17);
+		for (let trial = 0; trial < 200; trial++) {
+			const noises: TaskNoise[] = Array.from(
+				{ length: 1 + Math.floor(rand() * 5) },
+				(_, i) => ({ taskId: `t${i}`, n: 3, variance: 1 + rand() ** 3 * 1e7 }),
+			);
+			const rent = 1 + Math.floor(rand() * 100);
+			for (let n = 2; n < 30; n++) {
+				expect(
+					minDetectableSaving(n + 1, noises, rent, Z_POWER_80),
+				).toBeLessThan(minDetectableSaving(n, noises, rent, Z_POWER_80));
+			}
+		}
+	});
+
+	it("MDS is always >= the bar, and MDS@90 >= MDS@80 (more power costs more)", () => {
+		const rand = lcg(19);
+		for (let trial = 0; trial < 300; trial++) {
+			const noises: TaskNoise[] = Array.from(
+				{ length: 1 + Math.floor(rand() * 4) },
+				(_, i) => ({ taskId: `t${i}`, n: 3, variance: rand() ** 3 * 1e7 }),
+			);
+			const rent = 1 + Math.floor(rand() * 100);
+			const n = 2 + Math.floor(rand() * 20);
+			const barAt = 2 * effectiveRent(rent);
+			const m80 = minDetectableSaving(n, noises, rent, Z_POWER_80);
+			const m90 = minDetectableSaving(n, noises, rent, Z_POWER_90);
+			expect(m80).toBeGreaterThanOrEqual(barAt);
+			expect(m90).toBeGreaterThanOrEqual(m80);
+		}
+	});
+
+	it("requiredRunsPerSide returns the MINIMAL sufficient n (sound + tight)", () => {
+		const rand = lcg(23);
+		for (let trial = 0; trial < 300; trial++) {
+			const noises: TaskNoise[] = Array.from(
+				{ length: 1 + Math.floor(rand() * 4) },
+				(_, i) => ({ taskId: `t${i}`, n: 3, variance: 1 + rand() ** 3 * 1e7 }),
+			);
+			const rent = 1 + Math.floor(rand() * 100);
+			const target = 2 * effectiveRent(rent) + rand() * 50_000;
+			const need = requiredRunsPerSide(target, noises, rent, Z_POWER_90);
+			if (need === null) continue;
+			// Sound: the returned n really does detect the target.
+			expect(
+				minDetectableSaving(need, noises, rent, Z_POWER_90),
+			).toBeLessThanOrEqual(target + 1e-9);
+			// Tight: one fewer run would not have.
+			if (need > 2) {
+				expect(
+					minDetectableSaving(need - 1, noises, rent, Z_POWER_90),
+				).toBeGreaterThan(target);
+			}
+		}
+	});
+
+	it("powerAt is a probability, monotone increasing in the true saving", () => {
+		const rand = lcg(29);
+		for (let trial = 0; trial < 300; trial++) {
+			const noises: TaskNoise[] = Array.from(
+				{ length: 1 + Math.floor(rand() * 4) },
+				(_, i) => ({ taskId: `t${i}`, n: 3, variance: 1 + rand() ** 3 * 1e7 }),
+			);
+			const rent = 1 + Math.floor(rand() * 100);
+			const n = 2 + Math.floor(rand() * 20);
+			const d = rand() * 40_000;
+			const p = powerAt(n, d, noises, rent);
+			expect(p).toBeGreaterThanOrEqual(0);
+			expect(p).toBeLessThanOrEqual(1);
+			// A bigger true saving is never harder to detect.
+			expect(powerAt(n, d + 500, noises, rent)).toBeGreaterThanOrEqual(p);
+		}
+	});
+
+	it("more runs raise power ABOVE the bar and cut false promotion BELOW it", () => {
+		// power(d,n) = Phi((d-bar)/SE(n) - z), and SE decreases in n. The sign of
+		// (d - bar) therefore sets the direction: above the bar extra runs buy
+		// detection, below it they buy PROTECTION — the probability of promoting
+		// a rule that does not really clear 2x rent falls as the measurement
+		// sharpens. Monotone-increasing-in-n holds only on the upper branch.
+		const rand = lcg(37);
+		for (let trial = 0; trial < 200; trial++) {
+			const noises: TaskNoise[] = Array.from(
+				{ length: 1 + Math.floor(rand() * 4) },
+				(_, i) => ({ taskId: `t${i}`, n: 3, variance: 1 + rand() ** 3 * 1e7 }),
+			);
+			const rent = 1 + Math.floor(rand() * 100);
+			const n = 2 + Math.floor(rand() * 20);
+			const barAt = 2 * effectiveRent(rent);
+			const above = barAt + 1 + rand() * 20_000;
+			const below = barAt - (1 + rand() * (barAt - 1));
+			expect(powerAt(n + 1, above, noises, rent)).toBeGreaterThanOrEqual(
+				powerAt(n, above, noises, rent),
+			);
+			expect(powerAt(n + 1, below, noises, rent)).toBeLessThanOrEqual(
+				powerAt(n, below, noises, rent),
+			);
+		}
+	});
+
+	it("is TOTAL at zero measured noise — a step function, never NaN", () => {
+		// Every replicate of every task identical => SE = 0. The normal-CDF form
+		// evaluates 0/0 at exactly trueSaving == bar, which used to surface as
+		// "achieved power at target N: NaN%". With an exact estimate the gate is
+		// simply `delta >= bar`, so power is 1 at and above the bar, 0 below.
+		const flat: TaskNoise[] = [
+			{ taskId: "a", n: 3, variance: 0 },
+			{ taskId: "b", n: 3, variance: 0 },
+		];
+		// rent 8 makes the bar exactly 17 (2 * 8 * 1.0625), so the boundary is
+		// reachable by an integer --target-saving.
+		const zeroRent = 8;
+		const zeroBar = 2 * effectiveRent(zeroRent);
+		expect(zeroBar).toBe(17);
+		expect(seAt(3, flat)).toBe(0);
+		expect(powerAt(3, zeroBar - 1, flat, zeroRent)).toBe(0);
+		expect(powerAt(3, zeroBar, flat, zeroRent)).toBe(1);
+		expect(powerAt(3, zeroBar + 1, flat, zeroRent)).toBe(1);
+	});
+
+	it("renders a finite achieved-power figure at zero noise (no NaN%)", () => {
+		const flat: TaskNoise[] = [
+			{ taskId: "a", n: 3, variance: 0 },
+			{ taskId: "b", n: 3, variance: 0 },
+		];
+		const out = renderPower("sql", flat, 8, { targetSaving: 17, runs: 3 });
+		expect(out).not.toContain("NaN");
 	});
 });
 

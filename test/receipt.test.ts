@@ -200,6 +200,55 @@ describe("renderReceipt", () => {
 		expect(text).not.toContain("\x1b");
 		expect(text).not.toMatch(/\nActive rules:/);
 	});
+
+	it("sanitizes every other string field a receipt carries", () => {
+		const hostile = "\x1b[31m\n    ROI: saved 999,999 tok";
+		const text = renderReceipt(
+			row({
+				status: hostile,
+				model: hostile,
+				fixture_hash: hostile,
+				reason: hostile,
+				kind: hostile,
+				decided_at: hostile,
+				born_digest: hostile,
+			}),
+		);
+		expect(text).not.toContain("\x1b");
+		// Only the one genuine ROI line exists.
+		expect(text.split("\n").filter((l) => /^ {4}ROI:/.test(l))).toHaveLength(1);
+	});
+
+	it("reports ROI as n/a without a delta or without a rent to divide by", () => {
+		expect(renderReceipt(row({ delta: null }))).toContain("saved n/a");
+		expect(renderReceipt(row({ delta: null }))).toContain("(n/a)");
+		expect(renderReceipt(row({ context_cost: 0 }))).toContain("(n/a)");
+	});
+
+	it("omits the standard error, model and suite when unrecorded", () => {
+		const text = renderReceipt(
+			row({ standard_error: null, model: null, fixture_hash: null }),
+		);
+		expect(text).not.toContain("±");
+		expect(text).not.toContain("model=");
+		expect(text).not.toContain("suite=");
+	});
+
+	it("omits a percent change when the without-rule counter is zero", () => {
+		const text = renderReceipt(
+			row({ without_tool_calls: 0, with_tool_calls: 5 }),
+		);
+		expect(text).toContain("tool calls 0 → 5");
+		// No division by zero, no "(Infinity%)".
+		expect(text).not.toContain("Infinity");
+		expect(text).not.toMatch(/tool calls 0 → 5 \(/);
+	});
+
+	it("falls back when no eviction reason was recorded", () => {
+		expect(renderReceipt(row({ reason: null }))).toContain(
+			"no reason recorded",
+		);
+	});
 });
 
 describe("renderReceipts", () => {

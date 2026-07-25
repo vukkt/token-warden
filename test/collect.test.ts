@@ -203,6 +203,84 @@ describe("collect.ts Stop hook", () => {
 	});
 });
 
+/**
+ * Fail-open is the hook's headline promise, so it is asserted end to end on
+ * the real subprocess: whatever breaks, the exit status is 0 and the reason
+ * lands in collect.log. A non-zero exit here is a broken user session.
+ */
+describe("collect.ts fail-open guarantees", () => {
+	it("exits 0 and skips when the transcript path is a directory", () => {
+		const asDir = join(dir, "transcript-dir");
+		mkdirSync(asDir, { recursive: true });
+		const result = runCollect(payload({ transcript_path: asDir }));
+		expect(result.status).toBe(0);
+		expect(logContents()).toContain("not a regular file");
+	});
+
+	it("exits 0 when the database cannot be opened or written", () => {
+		// A directory where the DB file should be: every write path fails.
+		const blocked = join(dir, "blocked.db");
+		mkdirSync(blocked, { recursive: true });
+		const result = spawnSync(tsxBin, [collectScript], {
+			input: payload(),
+			encoding: "utf8",
+			env: {
+				...process.env,
+				TOKEN_WARDEN_DB: blocked,
+				TOKEN_WARDEN_NO_DISTILL: "1",
+				TOKEN_WARDEN_NO_ALERTS: "1",
+			},
+			timeout: 30_000,
+		});
+		expect(result.status).toBe(0);
+	});
+
+	it("exits 0 without a payload at all (stdin closed immediately)", () => {
+		const result = runCollect("");
+		expect(result.status).toBe(0);
+		expect(logContents()).toContain("collect error");
+	});
+
+	it("refuses a FIFO transcript instead of wedging in open()", () => {
+		// A FIFO with no writer blocks open() forever. That block is NOT
+		// escapable from inside the process — verified: the watchdog timer
+		// fires but process.exit() itself then waits on the stuck threadpool
+		// thread. The stat() guard is what keeps this fast and exit-0.
+		const fifo = join(dir, "wedged.fifo");
+		const made = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
+		if (made.status !== 0) return; // no mkfifo here; nothing to assert
+
+		const started = Date.now();
+		const result = runCollect(payload({ transcript_path: fifo }));
+		expect(result.status).toBe(0);
+		expect(Date.now() - started).toBeLessThan(20_000);
+		expect(logContents()).toContain("not a regular file");
+		const db = openDb(dbPath);
+		try {
+			expect(getRunBySession(db, "collect-test-1")).toBeUndefined();
+		} finally {
+			db.close();
+		}
+	});
+
+	it("enforces its own runtime budget and still exits 0", () => {
+		// Budget 0 is due before the first poll phase, so the watchdog always
+		// wins the race against reading stdin: a deterministic exercise of the
+		// abort path the 2s cap uses in production.
+		const result = runCollect(payload(), {
+			TOKEN_WARDEN_HOOK_BUDGET_MS: "0",
+		});
+		expect(result.status).toBe(0);
+		expect(logContents()).toContain("hook budget of 0ms exceeded");
+		const db = openDb(dbPath);
+		try {
+			expect(getRunBySession(db, "collect-test-1")).toBeUndefined();
+		} finally {
+			db.close();
+		}
+	});
+});
+
 describe("detectAnomaly", () => {
 	it("flags a session at or above the multiple of the recent median", () => {
 		const priors = [1000, 1000, 1000, 1000, 1000];

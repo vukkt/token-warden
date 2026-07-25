@@ -77,6 +77,56 @@ describe("computeRuleCost", () => {
 		expect(c.breakEvenSessions).toBe(67); // ceil(1.98 / 0.02994)
 	});
 
+	it("treats a null/NaN/negative receipt figure as zero tokens, not NaN", () => {
+		const price = priceFor("claude-sonnet-4-6");
+		const receipt = {
+			rule_id: 3,
+			body: "A protected rule with no measured delta.",
+			model: "claude-sonnet-4-6",
+			delta: null,
+			context_cost: Number.NaN,
+			runs: 2,
+			with_tokens: 1000,
+			without_tokens: 1000,
+		} as unknown as Parameters<typeof computeRuleCost>[0];
+		const c = computeRuleCost(receipt, price, 3 / 1_000_000, 20);
+		expect(c.deltaTokens).toBe(0);
+		expect(c.rentTokens).toBe(0);
+		for (const n of [
+			c.rentDollars,
+			c.savingsDollars,
+			c.netDollars,
+			c.weeklyDollars,
+			c.discoveryDollars,
+		]) {
+			expect(Number.isFinite(n)).toBe(true);
+		}
+		// Nothing earned and nothing owed is not a rule that "breaks even".
+		expect(c.breakEvenSessions).toBeNull();
+	});
+
+	it("prices a rule whose agent declares a prototype-key model name", () => {
+		// A bring-your-own agent .md saying `model: constructor` used to resolve
+		// through Object.prototype and print "$NaN" across /warden-cost and every
+		// selector advisory line. It must fall back to the default tier instead.
+		const price = priceFor("constructor");
+		const receipt = {
+			rule_id: 4,
+			body: "Grep before reading.",
+			model: "constructor",
+			delta: 10_000,
+			context_cost: 20,
+			runs: 6,
+			with_tokens: 50_000,
+			without_tokens: 60_000,
+		} as Parameters<typeof computeRuleCost>[0];
+		const c = computeRuleCost(receipt, price, 3 / 1_000_000, 20);
+		expect(c.savingsDollars).toBeCloseTo(0.03, 6);
+		expect(c.rentDollars).toBeCloseTo(0.00006, 8);
+		expect(c.breakEvenSessions).toBe(67);
+		expect(renderCosts("sql", [c], 20)).not.toContain("NaN");
+	});
+
 	it("reports no break-even when the rule is net-negative", () => {
 		const price = priceFor("claude-sonnet-4-6");
 		const receipt = {
@@ -238,10 +288,42 @@ describe("renderCosts / parseCostArgs", () => {
 		expect(renderCosts("sql", [])).toMatch(/no active rules/);
 	});
 
+	it("says a net-negative rule never breaks even", () => {
+		const out = renderCosts(
+			"sql",
+			[
+				{
+					ruleId: 2,
+					body: "y",
+					model: "claude-sonnet-4-6",
+					rentTokens: 1_000_000,
+					deltaTokens: 1,
+					rentDollars: 3,
+					savingsDollars: 0.000003,
+					netDollars: -3,
+					weeklyDollars: -60,
+					discoveryDollars: 0.01,
+					breakEvenSessions: null,
+				},
+			],
+			20,
+		);
+		expect(out).toContain("never (net");
+		expect(out).toContain("priced at 20 sessions/week");
+	});
+
 	it("parses --agent and --json, rejects a bad agent", () => {
 		expect(parseCostArgs(["--json"]).json).toBe(true);
 		expect(parseCostArgs(["--agent", "sql"]).agent).toBe("sql");
 		expect(() => parseCostArgs(["--agent", "nope"])).toThrow(/--agent/);
+	});
+
+	it("rejects an unknown flag and a non-numeric duration", () => {
+		expect(() => parseCostArgs(["--nope"])).toThrow(/unknown flag/);
+		expect(() => parseCostArgs(["--months", "many"])).toThrow(/positive/);
+		expect(() => parseCostArgs(["--sessions-per-week", "0"])).toThrow(
+			/positive/,
+		);
 	});
 
 	it("parses projection flags (--project, --months, --sessions-per-week)", () => {
@@ -275,6 +357,49 @@ describe("renderCosts / parseCostArgs", () => {
 		expect(out).toContain("NET benefit: $0.78");
 		expect(out).toContain("WITHOUT plugin: $5.46");
 		expect(out).toContain("14.3% cheaper");
+	});
+
+	it("renders a projection with no active rules", () => {
+		const out = renderProjection({
+			agent: "sql",
+			weeks: 13,
+			sessionsPerWeek: 20,
+			horizonSessions: 260,
+			rules: 0,
+			netPerSession: 0,
+			grossSavings: 0,
+			operatingCost: 0,
+			netBenefit: 0,
+			breakEvenSessions: null,
+			baselineCost: null,
+			withPluginCost: null,
+			pctSaved: null,
+		});
+		expect(out).toContain("no active rules to project.");
+		// No break-even or with/without lines when there is nothing to project.
+		expect(out).not.toContain("breaks even");
+		expect(out).not.toContain("WITHOUT plugin");
+	});
+
+	it("renders an unknown percentage rather than a fake zero", () => {
+		// A zero baseline makes "% cheaper" undefined; it must not read as 0.0%.
+		const out = renderProjection({
+			agent: "sql",
+			weeks: 13,
+			sessionsPerWeek: 20,
+			horizonSessions: 260,
+			rules: 1,
+			netPerSession: 0.004,
+			grossSavings: 1.07,
+			operatingCost: 0.27,
+			netBenefit: 0.78,
+			breakEvenSessions: null,
+			baselineCost: 0,
+			withPluginCost: 0.27,
+			pctSaved: null,
+		});
+		expect(out).toContain("—");
+		expect(out).not.toContain("0.0% cheaper");
 	});
 });
 

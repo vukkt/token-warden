@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseLedgerFile } from "../src/adopt.js";
 import {
 	decideRule,
 	insertRule,
@@ -17,6 +18,7 @@ import {
 	main as shareMain,
 	toSharedLedger,
 } from "../src/share.js";
+import { verifyLedgerContent } from "../src/verify-ledger.js";
 
 function rule(overrides: Partial<RuleRow> = {}): RuleRow {
 	return {
@@ -120,6 +122,27 @@ describe("formatLedger", () => {
 		expect(empty).toContain("_No active rules yet._");
 		const json = empty.split("```json\n")[1]?.split("\n```")[0] ?? "";
 		expect((JSON.parse(json) as SharedLedger).rules).toEqual([]);
+	});
+
+	/** share -> adopt is the whole feature. Whatever formatLedger writes must
+	 * survive the importer's hostile-input schema, including bodies that quote
+	 * a markdown fence. */
+	it("round-trips through the importer's parser", () => {
+		const tricky = toSharedLedger(
+			"sql",
+			[
+				rule(),
+				rule({ id: 2, body: "Do not paste a whole file into a ```json" }),
+				rule({ id: 3, body: 'Quote "identifiers" and escape \\ backslashes.' }),
+			],
+			"2026-06-15T00:00:00Z",
+		);
+		const parsed = parseLedgerFile(formatLedger(tricky));
+		expect(parsed?.agent).toBe("sql");
+		expect(parsed?.rules.map((r) => r.body)).toEqual(
+			tricky.rules.map((r) => r.body),
+		);
+		expect(verifyLedgerContent("t.md", formatLedger(tricky)).ok).toBe(true);
 	});
 
 	it("renders n/a for a null measured delta", () => {

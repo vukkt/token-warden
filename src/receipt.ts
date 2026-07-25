@@ -13,6 +13,12 @@
  * Read-only. The verdict itself is made by the selector; this only renders the
  * snapshot the selector recorded. Receipts are the natural payload for sharing a
  * rule — "my delta is evidence, not authority for your repo."
+ *
+ * SECURITY — a receipt is the payload people paste to each other, so it is the
+ * most likely of these reports to render text from somewhere else. Every string
+ * field goes through `displayText`; only numbers and booleans are interpolated
+ * raw. `--json` is safe by construction (JSON.stringify escapes control
+ * characters), so the sanitizer is applied on the human-rendered path.
  */
 import { pathToFileURL } from "node:url";
 import {
@@ -67,7 +73,7 @@ export function renderReceipt(
 		? ` · suite=${displayText(r.fixture_hash, 16)}`
 		: "";
 	return [
-		`  rule #${r.rule_id} [${r.status}]  "${displayText(r.body)}"`,
+		`  rule #${r.rule_id} [${displayText(r.status, 16)}]  "${displayText(r.body)}"`,
 		`    ROI: saved ${saved}${se}${dollars} vs rent ${fmt(r.context_cost)} (${roi(r.delta, r.context_cost)})` +
 			` · measured over ${r.runs} run(s)${model}${fixture}`,
 		`    quality: tasks passed ${r.tasks_passed_without}/${r.tasks_total} → ${r.tasks_passed_with}/${r.tasks_total}` +

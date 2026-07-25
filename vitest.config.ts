@@ -13,14 +13,17 @@ export default defineConfig({
 			// real subprocesses in e2e checks, not under vitest, so the harness
 			// can't count them; the pure logic they wrap is unit-tested directly.
 			exclude: ["src/**/*.d.ts"],
-			// Ratchet floor — CI fails if coverage regresses below this. Raised
-			// as tests are added; measured 95.0/93.9/97.2/84.3 at v0.33.0, floored
-			// just beneath so a refactor has headroom but a regression fails.
+			// Ratchet floor — CI fails if coverage regresses below this. Raised as
+			// tests are added; measured at v0.40.0 (1001 tests) as
+			// lines 97.91 / statements 97.14 / functions 97.56 / branches 90.09,
+			// floored ~1pt beneath each so a refactor has headroom but a
+			// regression fails. Keep this comment's metric order matching the
+			// keys below, and re-stamp both whenever the floor moves.
 			thresholds: {
-				lines: 94,
-				statements: 93,
-				functions: 96,
-				branches: 83,
+				lines: 97,
+				statements: 96,
+				functions: 97,
+				branches: 89,
 			},
 		},
 	},

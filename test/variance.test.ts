@@ -10,11 +10,23 @@ import {
 	assessDelta,
 	betweenTaskDofInflation,
 	mergeSummaries,
+	pooledVariance,
 	type RunAllocation,
 	type SuiteRunner,
+	sampleVariance,
 	selectForAgent,
 	withinTaskDofInflation,
 } from "../src/select.js";
+
+/** Deterministic LCG so the property sweeps below are reproducible — a flaky
+ * statistical test is worse than no test. */
+function lcg(seed: number): () => number {
+	let s = seed;
+	return () => {
+		s = (s * 1103515245 + 12345) % 2147483648;
+		return s / 2147483648;
+	};
+}
 
 function summary(
 	taskId: string,
@@ -42,6 +54,295 @@ function summary(
 		weight,
 	};
 }
+
+describe("variance estimators: numerical robustness (regression pins)", () => {
+	it("sampleVariance is NEVER negative and never NaN on finite input", () => {
+		const rand = lcg(101);
+		for (let trial = 0; trial < 1000; trial++) {
+			const offset = 10 ** Math.floor(rand() * 13);
+			const xs = Array.from(
+				{ length: 2 + Math.floor(rand() * 6) },
+				() => offset + Math.round(rand() * 100),
+			);
+			const v = sampleVariance(xs) as number;
+			expect(v).toBeGreaterThanOrEqual(0);
+			expect(Number.isFinite(v)).toBe(true);
+		}
+	});
+
+	it("stays EXACT at large offsets where a naive one-pass form collapses", () => {
+		// The shipped estimator is two-pass (mean first, then squared
+		// deviations). The textbook one-pass shortcut sum(x^2) - sum(x)^2/n
+		// suffers catastrophic cancellation: at an offset of 1e9 it returns 0 for
+		// data with real spread. This pins the two-pass form so nobody
+		// "optimizes" it into the unstable one.
+		const naiveOnePass = (xs: number[]): number => {
+			const n = xs.length;
+			const s = xs.reduce((a, b) => a + b, 0);
+			const s2 = xs.reduce((a, b) => a + b * b, 0);
+			return (s2 - (s * s) / n) / (n - 1);
+		};
+		const exact = 5 / 3; // variance of {1,2,3,4}
+		for (const offset of [0, 1e6, 1e9, 1e12]) {
+			const xs = [offset + 1, offset + 2, offset + 3, offset + 4];
+			expect(sampleVariance(xs)).toBeCloseTo(exact, 9);
+		}
+		// Demonstrate the failure the pin protects against.
+		expect(naiveOnePass([1e9 + 1, 1e9 + 2, 1e9 + 3, 1e9 + 4])).toBe(0);
+	});
+
+	it("is shift-invariant: adding a constant does not change the variance", () => {
+		const rand = lcg(103);
+		for (let trial = 0; trial < 300; trial++) {
+			const xs = Array.from({ length: 2 + Math.floor(rand() * 5) }, () =>
+				Math.round(rand() * 5000),
+			);
+			const shifted = xs.map((x) => x + 1e6);
+			expect(sampleVariance(shifted)).toBeCloseTo(
+				sampleVariance(xs) as number,
+				6,
+			);
+		}
+	});
+
+	it("pooledVariance is non-negative and lies within the per-vector range", () => {
+		const rand = lcg(107);
+		for (let trial = 0; trial < 300; trial++) {
+			const vectors = Array.from({ length: 2 + Math.floor(rand() * 3) }, () =>
+				Array.from({ length: 2 + Math.floor(rand() * 4) }, () =>
+					Math.round(rand() * 5000),
+				),
+			);
+			const pooled = pooledVariance(vectors) as number;
+			const each = vectors.map((v) => sampleVariance(v) as number);
+			expect(pooled).toBeGreaterThanOrEqual(0);
+			// A DoF-weighted average must sit inside the range it averages over.
+			expect(pooled).toBeGreaterThanOrEqual(Math.min(...each) - 1e-6);
+			expect(pooled).toBeLessThanOrEqual(Math.max(...each) + 1e-6);
+		}
+	});
+
+	it("returns null (not a sentinel number) when variance is unestimable", () => {
+		expect(sampleVariance([])).toBeNull();
+		expect(sampleVariance([42])).toBeNull();
+		expect(pooledVariance([])).toBeNull();
+		expect(pooledVariance([[1], [2]])).toBeNull();
+		// All-identical samples: zero variance is a real answer, not "unknown".
+		expect(sampleVariance([7, 7, 7])).toBe(0);
+	});
+});
+
+describe("assessDelta SE matches an independent closed-form reimplementation", () => {
+	/** Var(weighted mean) = sum_i w_i^2 (s2_wo,i/n + s2_w,i/n) / (sum_i w_i)^2,
+	 * written from the docstring rather than the code, so agreement is real
+	 * evidence and not a tautology. */
+	function closedFormSE(
+		pairs: { wo: number[]; w: number[]; weight: number }[],
+	): number {
+		const total = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+		const svar = (xs: number[]) => {
+			const m = total(xs) / xs.length;
+			return total(xs.map((x) => (x - m) ** 2)) / (xs.length - 1);
+		};
+		let acc = 0;
+		let sumW = 0;
+		for (const p of pairs) {
+			acc +=
+				p.weight ** 2 * (svar(p.wo) / p.wo.length + svar(p.w) / p.w.length);
+			sumW += p.weight;
+		}
+		return Math.sqrt(acc / sumW ** 2);
+	}
+
+	it("agrees to floating-point tolerance over randomized weighted suites", () => {
+		const rand = lcg(109);
+		for (let trial = 0; trial < 200; trial++) {
+			const pairs = Array.from(
+				{ length: 2 + Math.floor(rand() * 4) },
+				(_, i) => ({
+					id: `t${i}`,
+					// >= 2 runs per side keeps this in the within-task regime the
+					// closed form describes (no pooled-variance fallback).
+					wo: Array.from({ length: 2 + Math.floor(rand() * 3) }, () =>
+						Math.round(1000 + rand() * 5000),
+					),
+					w: Array.from({ length: 2 + Math.floor(rand() * 3) }, () =>
+						Math.round(1000 + rand() * 5000),
+					),
+					weight: 1 + Math.floor(rand() * 4),
+				}),
+			);
+			const without = pairs.map((p) => summary(p.id, p.wo, true, p.weight));
+			const withRule = pairs.map((p) => summary(p.id, p.w, true, p.weight));
+			const a = assessDelta(without, withRule, 25);
+			expect(a.standardErrorBasis).toBe("within-task");
+			expect(a.standardError as number).toBeCloseTo(closedFormSE(pairs), 9);
+		}
+	});
+
+	it("never produces a negative or NaN standard error", () => {
+		const rand = lcg(113);
+		for (let trial = 0; trial < 300; trial++) {
+			const pairs = Array.from(
+				{ length: 1 + Math.floor(rand() * 4) },
+				(_, i) => ({
+					id: `t${i}`,
+					wo: Array.from({ length: 1 + Math.floor(rand() * 4) }, () =>
+						Math.round(rand() * 100_000),
+					),
+					w: Array.from({ length: 1 + Math.floor(rand() * 4) }, () =>
+						Math.round(rand() * 100_000),
+					),
+					weight: 1 + Math.floor(rand() * 5),
+				}),
+			);
+			const a = assessDelta(
+				pairs.map((p) => summary(p.id, p.wo, true, p.weight)),
+				pairs.map((p) => summary(p.id, p.w, true, p.weight)),
+				25,
+			);
+			if (a.standardError !== null) {
+				expect(a.standardError).toBeGreaterThanOrEqual(0);
+				expect(Number.isFinite(a.standardError)).toBe(true);
+			}
+			if (a.delta !== null) expect(Number.isFinite(a.delta)).toBe(true);
+		}
+	});
+});
+
+describe("effective-DoF inflation is a tighten-only factor (property)", () => {
+	it("withinTaskDofInflation is always >= 1 over randomized weights", () => {
+		const rand = lcg(127);
+		for (let trial = 0; trial < 300; trial++) {
+			const k = 2 + Math.floor(rand() * 5);
+			const pairs = Array.from({ length: k }, () => ({
+				without: Array.from({ length: 2 + Math.floor(rand() * 3) }, () =>
+					Math.round(1000 + rand() * 4000),
+				),
+				with: Array.from({ length: 2 + Math.floor(rand() * 3) }, () =>
+					Math.round(1000 + rand() * 4000),
+				),
+			}));
+			const weights = Array.from(
+				{ length: k },
+				() => 1 + Math.floor(rand() * 9),
+			);
+			const f = withinTaskDofInflation(pairs, weights, 2);
+			expect(f).toBeGreaterThanOrEqual(1);
+			expect(Number.isFinite(f)).toBe(true);
+		}
+	});
+
+	it("betweenTaskDofInflation is always >= 1 over randomized weights", () => {
+		const rand = lcg(131);
+		for (let trial = 0; trial < 500; trial++) {
+			const weights = Array.from(
+				{ length: 2 + Math.floor(rand() * 6) },
+				() => 1 + Math.floor(rand() * 9),
+			);
+			const f = betweenTaskDofInflation(weights, 2);
+			expect(f).toBeGreaterThanOrEqual(1);
+			expect(Number.isFinite(f)).toBe(true);
+		}
+	});
+
+	it("is EXACTLY 1 for every uniform weight value (bit-identical unweighted)", () => {
+		const rand = lcg(137);
+		const pairs = Array.from({ length: 4 }, () => ({
+			without: Array.from({ length: 3 }, () =>
+				Math.round(1000 + rand() * 4000),
+			),
+			with: Array.from({ length: 3 }, () => Math.round(1000 + rand() * 4000)),
+		}));
+		for (const w of [1, 2, 3, 7, 11, 100, 9999]) {
+			expect(withinTaskDofInflation(pairs, Array(4).fill(w), 2)).toBe(1);
+			expect(betweenTaskDofInflation(Array(4).fill(w), 2)).toBe(1);
+		}
+	});
+
+	it("is total on degenerate shapes (no tasks, one task)", () => {
+		expect(withinTaskDofInflation([], [], 2)).toBe(1);
+		expect(betweenTaskDofInflation([], 2)).toBe(1);
+		expect(betweenTaskDofInflation([5], 2)).toBe(1);
+	});
+});
+
+describe("uniform weights reproduce the unweighted verdict (property)", () => {
+	/** Randomized uniform-weight suites, replayed at several weight values. */
+	function sweep(
+		weights: number[],
+		check: (
+			weighted: ReturnType<typeof assessDelta>,
+			base: ReturnType<typeof assessDelta>,
+		) => void,
+	): void {
+		const rand = lcg(139);
+		for (let trial = 0; trial < 100; trial++) {
+			const pairs = Array.from(
+				{ length: 2 + Math.floor(rand() * 3) },
+				(_, i) => ({
+					id: `t${i}`,
+					wo: Array.from({ length: 2 + Math.floor(rand() * 3) }, () =>
+						Math.round(1000 + rand() * 4000),
+					),
+					w: Array.from({ length: 2 + Math.floor(rand() * 3) }, () =>
+						Math.round(1000 + rand() * 4000),
+					),
+				}),
+			);
+			const base = assessDelta(
+				pairs.map((p) => summary(p.id, p.wo)),
+				pairs.map((p) => summary(p.id, p.w)),
+				25,
+			);
+			for (const w of weights) {
+				check(
+					assessDelta(
+						pairs.map((p) => summary(p.id, p.wo, true, w)),
+						pairs.map((p) => summary(p.id, p.w, true, w)),
+						25,
+					),
+					base,
+				);
+			}
+		}
+	}
+
+	it("is BIT-IDENTICAL at power-of-two uniform weights (incl. the shipped w=1)", () => {
+		// withinTaskSE evaluates sqrt( sum_i w^2 * term_i / (sum_i w)^2 ). The w^2
+		// cancels algebraically, and in binary floating point it also cancels
+		// EXACTLY when w^2 is a power of two (pure exponent scaling, no mantissa
+		// rounding). The bundled suites are frozen at w=1, so the shipped path is
+		// exactly bit-identical — that is the guarantee that actually matters.
+		sweep([1, 2, 4, 8, 16], (weighted, base) => {
+			expect(weighted.delta).toBe(base.delta);
+			expect(weighted.standardError).toBe(base.standardError);
+			expect(weighted.standardErrorBasis).toBe(base.standardErrorBasis);
+			expect(weighted.uncertain).toBe(base.uncertain);
+			expect(weighted.robustDelta).toBe(base.robustDelta);
+			expect(weighted.tailRisk).toBe(base.tailRisk);
+		});
+	});
+
+	it("agrees to 1 ULP at non-power-of-two uniform weights, never flipping a verdict", () => {
+		// At w = 5, 7, 13, 1000 the w^2 scaling is not exact, so the SE can differ
+		// in the last bit (measured max relative error 2.3e-16 over 24,000 random
+		// comparisons; ~19% of fixtures show a 1-ULP difference). The point
+		// estimate and every verdict boolean are unaffected. Documented here so
+		// the "identical for ANY uniform weight" claim is not read as stronger
+		// than the arithmetic supports.
+		sweep([5, 7, 13, 1000], (weighted, base) => {
+			expect(weighted.delta).toBe(base.delta);
+			expect(weighted.uncertain).toBe(base.uncertain);
+			expect(weighted.robustDelta).toBe(base.robustDelta);
+			expect(weighted.tailRisk).toBe(base.tailRisk);
+			expect(weighted.standardErrorBasis).toBe(base.standardErrorBasis);
+			const a = weighted.standardError as number;
+			const b = base.standardError as number;
+			expect(Math.abs(a - b) / b).toBeLessThan(1e-15);
+		});
+	});
+});
 
 describe("assessDelta", () => {
 	const baseline = [

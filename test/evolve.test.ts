@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { checkProposal, parseEvolveArgs } from "../src/evolve.js";
+import {
+	buildProposalPrompt,
+	checkProposal,
+	parseEvolveArgs,
+	stripFence,
+} from "../src/evolve.js";
 
 const ORIGINAL = `---
 name: sql
@@ -108,5 +113,48 @@ ok`;
 		const check = checkProposal(ORIGINAL, proposed);
 		expect(check.ok).toBe(false);
 		expect(check.reason).toContain("body too short");
+	});
+
+	it("checks for control characters BEFORE quoting anything into the reason", () => {
+		// The reason string is logged. A proposal that both smuggles an escape
+		// sequence and changes a protected field must be caught by the escape
+		// check first, so no control character is ever embedded in a log line.
+		const proposed = `${ORIGINAL.replace("model: sonnet", "model: opus\x1b[2J")}`;
+		const check = checkProposal(ORIGINAL, proposed);
+		expect(check.ok).toBe(false);
+		expect(check.reason).toContain("control");
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: asserting none leaked
+		expect(check.reason).not.toMatch(/[\x00-\x1f]/);
+	});
+});
+
+describe("buildProposalPrompt", () => {
+	it("names the agent, includes the definition, and pins the frontmatter", () => {
+		const prompt = buildProposalPrompt("sql", ORIGINAL);
+		expect(prompt).toContain('subagent named "sql"');
+		expect(prompt).toContain(ORIGINAL);
+		expect(prompt).toContain("byte-for-byte identical");
+		// The instruction that keeps this a token edit, not a scope edit.
+		expect(prompt).toMatch(/FEWER tokens/);
+		expect(prompt).toMatch(
+			/do not remove any capability, instruction, or guard/,
+		);
+		expect(prompt).toMatch(/no code fence/);
+	});
+
+	it("is pure — same inputs give the same prompt", () => {
+		expect(buildProposalPrompt("sql", ORIGINAL)).toBe(
+			buildProposalPrompt("sql", ORIGINAL),
+		);
+	});
+});
+
+describe("stripFence", () => {
+	it("removes a markdown fence the model wrapped its answer in", () => {
+		expect(stripFence("```markdown\n---\nname: sql\n---\nbody\n```")).toBe(
+			"---\nname: sql\n---\nbody",
+		);
+		expect(stripFence("```\nplain\n```")).toBe("plain");
+		expect(stripFence("  no fence here  ")).toBe("no fence here");
 	});
 });

@@ -5,7 +5,7 @@
  *
  * Spawned detached by collect.ts when a run's total tokens exceed the
  * agent's rolling p75 (minimum 5 prior runs). One headless model call
- * (DISTILL_MODEL, default sonnet),
+ * (distillModel(), default sonnet),
  * strict-JSON output, zod-validated; invalid output is logged and dropped —
  * never retried (spec §3.1). Candidates land in SQLite with
  * context_cost = ceil(len/4); near-duplicates (>0.85 trigram similarity to
@@ -49,12 +49,20 @@ const ROLLING_WINDOW = 50;
 const MAX_DIGEST_CHARS = 8000;
 const DISTILL_TIMEOUT_MS = 2 * 60 * 1000;
 /**
- * Model for distillation. Defaults to sonnet: candidate quality is the loop's
- * bottleneck (haiku proposed narrow, low-impact rules — see FINDINGS.md), and a
- * better rule is worth far more than the extra cost of an infrequent call.
- * Override with TOKEN_WARDEN_DISTILL_MODEL=haiku to economize.
+ * Model for proposing rules — used by the distiller and by the compression
+ * rewriter. Defaults to sonnet: candidate quality is the loop's bottleneck
+ * (haiku proposed narrow, low-impact rules — see FINDINGS.md), and a better
+ * rule is worth far more than the extra cost of an infrequent call. Override
+ * with TOKEN_WARDEN_DISTILL_MODEL=haiku to economize.
+ *
+ * Read per call, not frozen at module load: every other config value in the
+ * repo is read per call, and a module-level const silently ignores any
+ * process.env set after import — which made the override untestable and made
+ * import order decide the model.
  */
-const DISTILL_MODEL = process.env.TOKEN_WARDEN_DISTILL_MODEL ?? "sonnet";
+export function distillModel(): string {
+	return process.env.TOKEN_WARDEN_DISTILL_MODEL ?? "sonnet";
+}
 /** Hard ceiling on samples per distillation and on candidates inserted per
  * batch — the selector measures at most 3 candidates per invocation, so
  * proposing more than 3 would only queue unmeasured rules. */
@@ -152,22 +160,95 @@ export function trigramSimilarity(a: string, b: string): number {
 	return intersection / (gramsA.size + gramsB.size - intersection);
 }
 
-const rulesSchema = z
-	.array(
-		z.object({
-			// Single printable line: control characters (including newlines)
-			// are rejected so a rule body can never fake structure in the
-			// compiled MEMORY.md or the status report.
-			body: z
-				.string()
-				.trim()
-				.min(10)
-				.max(200)
-				// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control chars is the point
-				.regex(/^[^\x00-\x1f\x7f]+$/),
-		}),
-	)
-	.max(2);
+/** Shortest and longest acceptable rule body, in characters. The floor keeps
+ * a truncated fragment from becoming a rule; the ceiling bounds rent. */
+export const MIN_RULE_BODY_CHARS = 10;
+export const MAX_RULE_BODY_CHARS = 200;
+
+/**
+ * Code-point ranges (inclusive) a rule body must never contain.
+ *
+ * A body is rendered into the compiled MEMORY.md that goes into the agent's
+ * prompt, into log lines, into the status report, and back into this very
+ * prompt as feedback. So anything that can fake structure, hide its real
+ * content, or corrupt on write is rejected at the boundary rather than
+ * sanitized: a rule the model cannot state in plain printable text is not a
+ * rule worth spending a benchmark on.
+ *
+ * Expressed as numeric ranges rather than a regex literal on purpose — the
+ * characters guarded against are exactly the ones that would be invisible,
+ * or unrepresentable, in this source file.
+ */
+const FORBIDDEN_BODY_RANGES: readonly (readonly [number, number])[] = [
+	// C0 controls: newline (a body must stay one line), tab, ANSI ESC.
+	[0x00, 0x1f],
+	// DEL plus the C1 control block.
+	[0x7f, 0x9f],
+	// Zero-width space/non-joiner/joiner and the LTR/RTL marks.
+	[0x200b, 0x200f],
+	// LINE SEPARATOR / PARAGRAPH SEPARATOR: real line terminators to JS and
+	// to many renderers, so they fake structure exactly as a newline would.
+	[0x2028, 0x2029],
+	// Bidi embeddings and overrides, and bidi isolates (Trojan Source): the
+	// rule a human reviews in the status report would differ from the rule
+	// the agent is actually given.
+	[0x202a, 0x202e],
+	[0x2066, 0x2069],
+	// Surrogate code units. Unpaired ones corrupt when written to MEMORY.md;
+	// paired ones are astral-plane characters, which for a one-sentence
+	// English efficiency rule means emoji — banned project-wide.
+	[0xd800, 0xdfff],
+	// ZERO WIDTH NO-BREAK SPACE / BOM: invisible, and it inflates rent.
+	[0xfeff, 0xfeff],
+	// REPLACEMENT CHARACTER: the reply was not valid UTF-8, so the text is
+	// already corrupt and must not become a rule.
+	[0xfffd, 0xfffd],
+];
+
+/** True when `body` contains any character a rule body may not carry. */
+export function hasForbiddenChar(body: string): boolean {
+	for (let i = 0; i < body.length; i++) {
+		const code = body.charCodeAt(i);
+		for (const [low, high] of FORBIDDEN_BODY_RANGES) {
+			if (code >= low && code <= high) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * The single definition of a well-formed rule body: one trimmed, printable,
+ * length-bounded line. Shared with the compression rewriter so the two
+ * proposal paths can never drift on what counts as a valid rule.
+ */
+export const ruleBodySchema = z
+	.string()
+	.trim()
+	.min(MIN_RULE_BODY_CHARS)
+	.max(MAX_RULE_BODY_CHARS)
+	.refine((body) => !hasForbiddenChar(body), {
+		message:
+			"rule body must be a single printable line (no control, zero-width, bidi, or astral characters)",
+	});
+
+const rulesSchema = z.array(z.object({ body: ruleBodySchema })).max(2);
+
+/**
+ * Hard ceiling on a model reply we are willing to run JSON.parse and two
+ * regex passes over. The largest valid reply is two 200-character bodies, so
+ * anything at this scale is garbage (or a 16 MB stdout buffer) and parsing it
+ * only burns CPU on untrusted input.
+ */
+export const MAX_MODEL_REPLY_CHARS = 64_000;
+
+/** Strip a stray markdown code fence the model wrapped its JSON in. The fence
+ * is tolerated; nothing inside it is. */
+export function stripJsonFence(text: string): string {
+	return text
+		.trim()
+		.replace(/^```(?:json)?\s*/i, "")
+		.replace(/\s*```$/, "");
+}
 
 /**
  * Parse the model's reply into rules. Strict: must be a JSON array of 0–2
@@ -176,18 +257,67 @@ const rulesSchema = z
  * retries.
  */
 export function parseRulesJson(text: string): { body: string }[] | null {
-	const stripped = text
-		.trim()
-		.replace(/^```(?:json)?\s*/i, "")
-		.replace(/\s*```$/, "");
+	if (text.length > MAX_MODEL_REPLY_CHARS) return null;
 	let raw: unknown;
 	try {
-		raw = JSON.parse(stripped);
+		raw = JSON.parse(stripJsonFence(text));
 	} catch {
 		return null;
 	}
 	const result = rulesSchema.safeParse(raw);
 	return result.success ? result.data : null;
+}
+
+/** The `claude -p --output-format json` envelope, validated at the boundary.
+ * Unknown fields are tolerated (the CLI adds them over time); the shape we
+ * depend on is not. */
+const claudeEnvelopeSchema = z.looseObject({
+	result: z.string().optional(),
+	is_error: z.boolean().optional(),
+});
+
+export type EnvelopeParse =
+	| { ok: true; result: string }
+	| { ok: false; reason: string };
+
+/**
+ * Validate a headless `claude` stdout envelope and extract its `result` text.
+ *
+ * Every caller previously did `JSON.parse(stdout).result`, which crashes on a
+ * bare `null`/`true`/`"str"` payload (all valid JSON) and silently treats the
+ * CLI's own error envelope as a model answer. Failing closed with a reason is
+ * the contract: the callers log it and drop the sample, never retry.
+ */
+export function parseClaudeEnvelope(stdout: string | undefined): EnvelopeParse {
+	if (typeof stdout !== "string" || stdout.trim() === "") {
+		return { ok: false, reason: "stdout was empty" };
+	}
+	if (stdout.length > MAX_MODEL_REPLY_CHARS) {
+		return {
+			ok: false,
+			reason: `stdout was ${stdout.length} chars, over the ${MAX_MODEL_REPLY_CHARS} cap`,
+		};
+	}
+	let raw: unknown;
+	try {
+		raw = JSON.parse(stdout);
+	} catch {
+		return {
+			ok: false,
+			reason: `stdout was not JSON. head: ${stdout.slice(0, 200)}`,
+		};
+	}
+	const envelope = claudeEnvelopeSchema.safeParse(raw);
+	if (!envelope.success) {
+		return { ok: false, reason: "stdout JSON was not a result envelope" };
+	}
+	if (envelope.data.is_error === true) {
+		return {
+			ok: false,
+			reason: `claude reported an error: ${(envelope.data.result ?? "").slice(0, 200)}`,
+		};
+	}
+	return { ok: true, result: envelope.data.result ?? "" };
 }
 
 export function contextCost(body: string): number {
@@ -372,7 +502,7 @@ export function distill(args: DistillArgs): void {
 					"-p",
 					prompt,
 					"--model",
-					DISTILL_MODEL,
+					distillModel(),
 					"--max-turns",
 					"1",
 					"--output-format",
@@ -399,19 +529,17 @@ export function distill(args: DistillArgs): void {
 				);
 				continue;
 			}
-			let output: { result?: string };
-			try {
-				output = JSON.parse(claude.stdout) as { result?: string };
-			} catch {
+			const envelope = parseClaudeEnvelope(claude.stdout);
+			if (!envelope.ok) {
 				logLine(
-					`run ${run.id}: sample ${sample}/${k} stdout was not JSON; dropping sample. head: ${claude.stdout.slice(0, 200)}`,
+					`run ${run.id}: sample ${sample}/${k} ${envelope.reason}; dropping sample.`,
 				);
 				continue;
 			}
-			const rules = parseRulesJson(output.result ?? "");
+			const rules = parseRulesJson(envelope.result);
 			if (rules === null) {
 				logLine(
-					`run ${run.id}: sample ${sample}/${k} returned invalid rules JSON; dropping (never retried). head: ${(output.result ?? "").slice(0, 200)}`,
+					`run ${run.id}: sample ${sample}/${k} returned invalid rules JSON; dropping (never retried). head: ${envelope.result.slice(0, 200)}`,
 				);
 				continue;
 			}

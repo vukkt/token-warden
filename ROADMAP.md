@@ -11,12 +11,16 @@ measured survivors persist).
 
 ## 1. The central open question
 
-The engine is validated end-to-end on real tokens (~9.3M spent; see
+The engine is validated end-to-end on real tokens (~9.3M in the 2026-06 burn,
+roughly 28M cumulative across every recorded burn since; see
 FINDINGS.md): collection, benchmarking, selection, eviction, and the safety
 gate all behave as designed. What real-token validation has *not* yet shown is
 that real-world workloads contain catchable, generalizable headroom — the
-shipped agents are already optimized by design, so surviving rules have so far
-come from deliberately naive positive controls.
+shipped agents are already optimized by design, so the large surviving effects
+have so far come from deliberately naive positive controls. Two rules did clear
+the bar on the shipped `sql` agent (+622 and +5,731 tok/run), but both were
+distilled from golden-suite runs; no rule distilled from day-to-day work has yet
+survived the gate.
 
 - **Production dogfood window.** Run the full loop against day-to-day work for
   a sustained window, then compare the fixture verdict with the production
@@ -36,10 +40,15 @@ what remains is running the experiments and recording their results:
   measured comparison itself — success metric: surviving-rule tokens/run per
   bench token spent, K=3 vs K=1 (batches share a `source_run`, so survival
   by batch is queryable from receipts).
-- **Rule-body compression A/B.** Shipped: `/warden-compress` rewrites a
-  measured rule at half the characters and queues it as a candidate. Open:
-  run it on the surviving rules and record whether deltas hold at the lower
-  rent.
+- **Rule-body compression A/B — CLOSED as unconfirmable (2026-07-10).** Shipped:
+  `/warden-compress` rewrites a measured rule at half the characters and queues
+  it as a swap candidate. The experiment itself is closed, not open: three real
+  burns (~16M tokens plus ~1.6M characterization) were each killed by quota
+  exhaustion, and the effect sits below the `sql` suite's derailment-noise floor
+  at any run count the available quota windows can hold (see FINDINGS.md).
+  Re-open only after per-run suite cost and tail variance come down, or on an
+  environment with larger windows. **Do not re-run it as-is** — that is a fourth
+  ~16M-token burn with the same expected outcome.
 - **Out-of-fixture confirmation.** Shipped: `/warden-confirm` joins fixture
   receipts with the production cohort verdict per agent (corroborated /
   contradicted / unconfirmed), `--gate` for CI. Open: the dogfood window that
@@ -47,11 +56,40 @@ what remains is running the experiments and recording their results:
 
 ## 3. Engine improvements
 
+- **Extract the shared modules (deferred from v0.40.0).** The v0.40.0 audit found
+  the same knowledge duplicated across many sites: the `invokedDirectly` CLI shim
+  25x, `openDb`/`finally db.close()` 23x, hand-rolled `parse*Args` 20x, `mean`/
+  `median`/sum-reduce in 6 modules, `sessionsPerWeek()` defined twice (it feeds
+  both the keep/evict bar and the dollar projection, so the two copies must agree
+  by construction), and number formatters under one name with two different
+  rounding contracts. The target shape is `src/stats.ts` (estimators shared by
+  `select.ts` and `compare.ts`), `src/format.ts`, `src/rules.ts` (`contextCost`,
+  `trigramSimilarity`, `ruleBodySchema` — today `distill.ts` is a hub only
+  because four modules import text helpers from it), `src/memory.ts`
+  (`compileActiveMemory`, the single writer of agent memory), and `src/cli.ts`.
+  Deliberately held back from v0.40.0: the extractions are cross-cutting by
+  nature and would have collided with the per-file ownership that kept that pass
+  conflict-free. Keep the four fail-open hook entrypoints on a separate
+  `runHook()` boundary — their exit-0 contract is different knowledge from the
+  CLI shim's, and merging the two would be a regression.
+
 - **Cut golden-suite variance further.** Real runs varied >25%, burying modest
   savings under noise. Shipped in v0.34.0: `/warden-health` now ranks golden
-  tasks by run-to-run variance so the noisiest are named with evidence. Open:
-  actually splitting them (`testing-02` at ~150k tokens/run, `sql-02`) — by
-  *adding* task files, never editing frozen ones (invariant #4).
+  tasks by run-to-run variance so the noisiest are named with evidence. Also
+  shipped in v0.36.0: the splits themselves — `sql-06`/`sql-07` and
+  `testing-05`/`testing-06`, added as new files with the frozen originals
+  untouched. Open: cutting per-run cost and tail variance further, which
+  FINDINGS.md now names as the binding constraint on every future burn — nothing
+  below the derailment-noise floor is measurable until it moves.
+- **Retire degenerate golden checks by addition.** Shipped in v0.40.0: `sql-08`
+  replaces `sql-01`, whose `success_check` passes on the pristine fixture (it
+  greps for `create index` and `user_id`, both already present), making it unable
+  to detect a regression *and* invisible to the environment-failure discriminator
+  (a quota-dead run on it records `completed = true`). `sql-01` is left
+  byte-identical so its frozen `run1_tokens` and every published comparison stay
+  valid — the same add-don't-edit remedy used for the noisy-task splits. Open:
+  audit the remaining 19 checks for the same vacuity (`sql-05`'s guard also
+  passes pristine and leans entirely on its trailing `npx vitest run`).
 - **Distribution-weighted / production-sampled suites.** Shipped in v0.37.0:
   a golden task carries `weight: N` and the verdict estimators weight the mean,
   SE, and top-up accordingly, with an effective-DoF confidence correction so

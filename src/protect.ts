@@ -12,6 +12,15 @@
  * other, but are exempt from token-based eviction: only a human removes them.
  * This is the boundary that keeps the selector from ever deleting a constraint a
  * developer authored on purpose.
+ *
+ * SAFETY INVARIANT — the exemption is enforced in SQL, not in report code: the
+ * selector picks its re-audit target with `oldestDecidedActiveRule`, whose
+ * WHERE clause carries `protected = 0`. A protected rule is therefore never
+ * even measured, so no verdict can ever evict it. This module only sets the
+ * flag; it never decides a rule's fate.
+ *
+ * SECURITY — listed rule bodies are model-generated, so they are rendered
+ * through `displayText` and cannot forge a listing row or an ANSI sequence.
  */
 import { pathToFileURL } from "node:url";
 import {
@@ -22,8 +31,9 @@ import {
 	setRuleProtected,
 	type WardenDb,
 } from "./db.js";
-import { contextCost } from "./distill.js";
+import { contextCost, ruleBodySchema } from "./distill.js";
 import { assertKnownAgent } from "./registry.js";
+import { displayText } from "./sanitize.js";
 import { compileActiveMemory } from "./select.js";
 
 interface ProtectArgs {
@@ -67,8 +77,25 @@ export function parseProtectArgs(argv: string[]): ProtectArgs {
 	) {
 		throw new Error("--protect/--unprotect take an integer rule id");
 	}
-	if (args.add !== null && args.add.trim().length === 0) {
-		throw new Error("--add needs a non-empty rule body");
+	if (args.add !== null) {
+		if (args.add.trim().length === 0) {
+			throw new Error("--add needs a non-empty rule body");
+		}
+		// --add is the one path that writes rules.body without a benchmark
+		// behind it: insertAuthoredRule stores it already-active and protected,
+		// so it is never re-audited and never evicted, and compileMemoryMd
+		// renders it as "- ${body}" with no escaping of its own. An unvalidated
+		// body could therefore emit extra bullets into the agent's MEMORY.md
+		// permanently. Hold it to exactly the contract every other writer
+		// (distill, compress, adopt) enforces: one printable, length-bounded
+		// line. Shared, not copied, so the definition can never drift.
+		const parsed = ruleBodySchema.safeParse(args.add);
+		if (!parsed.success) {
+			throw new Error(
+				`--add rule body is invalid: ${parsed.error.issues[0]?.message ?? "does not meet the rule body contract"}`,
+			);
+		}
+		args.add = parsed.data;
 	}
 	return args;
 }
@@ -79,7 +106,7 @@ export function runProtect(db: WardenDb, args: ProtectArgs): string {
 		if (rules.length === 0) return `No rules for agent ${args.agent}.`;
 		const lines = rules.map((r) => {
 			const tag = r.protected ? "[PROTECTED]" : `[${r.status}]`;
-			return `  ${r.id} ${tag} (rent ${r.context_cost}): "${r.body}"`;
+			return `  ${r.id} ${tag} (rent ${r.context_cost}): "${displayText(r.body)}"`;
 		});
 		return [`Rules for ${args.agent}:`, ...lines].join("\n");
 	}

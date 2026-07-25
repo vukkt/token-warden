@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadAgentDefinition, loadGoldenTasks } from "../src/bench.js";
 import {
 	assertKnownAgent,
+	isValidAgentName,
 	knownAgents,
 	userAgentsDir,
 	userBenchmarksDir,
@@ -68,12 +69,57 @@ describe("knownAgents", () => {
 		expect(knownAgents()).toEqual([...DOMAIN_AGENTS, "good"]);
 	});
 
+	it("never lets a listed name become a path escape", () => {
+		process.env.TOKEN_WARDEN_AGENTS_DIR = agentsDir;
+		// Basenames a hostile or careless drop-in could produce. None of these
+		// may reach a join() as an agent name.
+		for (const name of ["..md", ".md", "-rf.md", "a b.md", "a.b.md", "x.md"]) {
+			writeFileSync(join(agentsDir, name), "memory: user\n");
+		}
+		// A directory (not a definition) that happens to end in .md.
+		mkdirSync(join(agentsDir, "adir.md"));
+		expect(knownAgents()).toEqual([...DOMAIN_AGENTS]);
+	});
+
 	it("dedupes a custom override of a bundled name", () => {
 		process.env.TOKEN_WARDEN_AGENTS_DIR = agentsDir;
 		writeFileSync(join(agentsDir, `${DOMAIN_AGENTS[0]}.md`), "memory: user\n");
 		const agents = knownAgents();
 		expect(agents).toEqual([...DOMAIN_AGENTS]);
 		expect(agents.filter((a) => a === DOMAIN_AGENTS[0])).toHaveLength(1);
+	});
+});
+
+describe("isValidAgentName", () => {
+	it("accepts lowercase slugs of 2-32 characters", () => {
+		for (const name of ["sql", "my-agent", "a1", "a".repeat(32)]) {
+			expect(isValidAgentName(name)).toBe(true);
+		}
+		for (const bundled of DOMAIN_AGENTS) {
+			expect(isValidAgentName(bundled)).toBe(true);
+		}
+	});
+
+	it("rejects anything that could escape a path or an argv slot", () => {
+		for (const name of [
+			"",
+			"a",
+			"..",
+			"../etc/passwd",
+			"sql/../../x",
+			"sql/sub",
+			"sql\\win",
+			"-rf",
+			"--agent",
+			"Sql",
+			"sql agent",
+			"sql.md",
+			"sql ",
+			"sql\n",
+			"a".repeat(33),
+		]) {
+			expect(isValidAgentName(name), name).toBe(false);
+		}
 	});
 });
 

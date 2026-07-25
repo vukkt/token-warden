@@ -20,6 +20,7 @@
 import { spawnSync } from "node:child_process";
 import {
 	appendFileSync,
+	existsSync,
 	mkdirSync,
 	readFileSync,
 	writeFileSync,
@@ -43,7 +44,8 @@ import {
 	openDb,
 	type RuleRow,
 } from "./db.js";
-import { assertKnownAgent } from "./registry.js";
+import { parseClaudeEnvelope } from "./distill.js";
+import { assertKnownAgent, userAgentsDir } from "./registry.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROPOSE_TIMEOUT_MS = 2 * 60 * 1000;
@@ -95,6 +97,15 @@ export function checkProposal(
 	original: string,
 	proposed: string,
 ): ProposalCheck {
+	// Checked FIRST: everything below this point embeds slices of `proposed`
+	// into a `reason` string that gets logged, so control and escape
+	// characters must be ruled out before any of it is quoted anywhere.
+	if (CONTROL_CHARS.test(proposed)) {
+		return {
+			ok: false,
+			reason: "contains control/escape characters — refusing to write to disk",
+		};
+	}
 	try {
 		// Throws if the proposal is not a well-formed agent definition.
 		parseAgentDefinition(proposed, "proposal");
@@ -118,16 +129,12 @@ export function checkProposal(
 	if (body.length < 40) {
 		return { ok: false, reason: "body too short — likely truncated or empty" };
 	}
-	if (CONTROL_CHARS.test(proposed)) {
-		return {
-			ok: false,
-			reason: "contains control/escape characters — refusing to write to disk",
-		};
-	}
 	return { ok: true, reason: "ok" };
 }
 
-function buildProposalPrompt(agent: string, current: string): string {
+/** Exported for testing: prompt construction is pure, so it can be asserted
+ * without spending a token. */
+export function buildProposalPrompt(agent: string, current: string): string {
 	return [
 		`Here is the full markdown definition of an AI coding subagent named "${agent}":`,
 		"",
@@ -140,7 +147,7 @@ function buildProposalPrompt(agent: string, current: string): string {
 }
 
 /** Strip a stray markdown code fence if the model wrapped its output. */
-function stripFence(text: string): string {
+export function stripFence(text: string): string {
 	return text
 		.trim()
 		.replace(/^```(?:markdown|md)?\s*\n?/i, "")
@@ -175,14 +182,27 @@ function proposeVariant(agent: string, current: string): string | null {
 		logLine(`propose error: ${claude.error.message}`);
 		return null;
 	}
-	let result: string;
-	try {
-		result = (JSON.parse(claude.stdout) as { result?: string }).result ?? "";
-	} catch {
-		logLine("propose: unparseable model output");
+	// BUG FIX: the exit code was never checked here, unlike the distiller and
+	// the compressor. A quota death or CLI failure exits non-zero, and its
+	// stdout was fed straight to JSON.parse — surfacing a real environment
+	// failure as the indistinguishable "unparseable model output". Exit code,
+	// not output, is the failure signal (error-ledger rule).
+	if (claude.status !== 0) {
+		logLine(
+			`propose: claude exited ${claude.status}: ${(claude.stderr ?? "").slice(0, 200)}`,
+		);
 		return null;
 	}
-	const proposed = stripFence(result);
+	// One shared, validated envelope parser across all three model-call paths.
+	// It also closes the hole where an `is_error: true` envelope — the CLI
+	// reporting its OWN failure, e.g. a quota death — was read as a model
+	// answer and benchmarked.
+	const envelope = parseClaudeEnvelope(claude.stdout);
+	if (!envelope.ok) {
+		logLine(`propose: ${envelope.reason}`);
+		return null;
+	}
+	const proposed = stripFence(envelope.result);
 	const check = checkProposal(current, proposed);
 	if (!check.ok) {
 		logLine(`propose rejected: ${check.reason}`);
@@ -228,8 +248,23 @@ export function parseEvolveArgs(argv: string[]): EvolveArgs {
 	return args;
 }
 
+/**
+ * Resolve an agent's definition file the same way the benchmark does: a
+ * bundled agent first, then the bring-your-own-agent directory.
+ *
+ * BUG FIX: this used to be a bare `pluginRoot/agents/<name>.md`. Since v0.36.0
+ * `assertKnownAgent` accepts custom agents discovered in `userAgentsDir()`, so
+ * `/warden-evolve --agent <custom>` passed validation and then died on ENOENT.
+ */
+function agentDefinitionPath(agent: string): string {
+	const bundledPath = join(pluginRoot, "agents", `${agent}.md`);
+	return existsSync(bundledPath)
+		? bundledPath
+		: join(userAgentsDir(), `${agent}.md`);
+}
+
 export function main(args: EvolveArgs): void {
-	const agentPath = join(pluginRoot, "agents", `${args.agent}.md`);
+	const agentPath = agentDefinitionPath(args.agent);
 	const current = readFileSync(agentPath, "utf8");
 
 	console.log(
@@ -282,8 +317,16 @@ export function main(args: EvolveArgs): void {
 		console.log("");
 		console.log(formatComparison(comparison));
 
+		// BUG FIX: `environmentFailure` was not consulted. Since v0.39.0 an
+		// all-zero-token candidate side is classified as an environment failure
+		// INSTEAD of a regression, so a quota death mid-suite left
+		// `regression` false while the dead task contributed ~0 tokens — which
+		// reads as a large saving. This could recommend, and write to disk, a
+		// variant that was never actually measured. It is exactly the class of
+		// false verdict the v0.39.0 abort guard exists to prevent.
 		const wins =
 			!comparison.regression &&
+			!comparison.environmentFailure &&
 			!comparison.uncertain &&
 			comparison.comparableTasks >= 2 &&
 			(comparison.delta ?? 0) > 0;

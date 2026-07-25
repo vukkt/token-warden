@@ -158,34 +158,132 @@ const MIGRATIONS: readonly string[] = [
 	`
 	ALTER TABLE rules ADD COLUMN replaces INTEGER;
 	`,
+	// Indices for the two latency-sensitive paths. The Stop hook has a hard 2s
+	// budget and reads the agent's recent real-work totals on every turn; the
+	// SessionStart nudge reads the last measurement timestamp. Both scanned the
+	// whole `runs` table before this. The partial index encodes the real-work
+	// predicate (task_hash IS NULL AND completed = 1) so it stays small and
+	// serves the ORDER BY ts DESC without a sort. `rule_receipts` had no index
+	// on `agent` at all, so /warden-receipt scanned every decision ever made.
+	`
+	CREATE INDEX IF NOT EXISTS idx_runs_config_ts ON runs(config, ts);
+	CREATE INDEX IF NOT EXISTS idx_runs_realwork ON runs(agent, ts DESC)
+		WHERE task_hash IS NULL AND completed = 1;
+	CREATE INDEX IF NOT EXISTS idx_receipts_agent ON rule_receipts(agent, rule_id);
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
 export const MIGRATION_COUNT = MIGRATIONS.length;
 
-function migrate(db: WardenDb): void {
-	const current = db.pragma("user_version", { simple: true }) as number;
-	for (let version = current; version < MIGRATIONS.length; version++) {
-		const sql = MIGRATIONS[version];
-		if (sql === undefined) break;
-		db.transaction(() => {
+function schemaVersion(db: WardenDb): number {
+	return db.pragma("user_version", { simple: true }) as number;
+}
+
+/**
+ * Apply one migration and stamp the new `user_version` in the SAME
+ * transaction. SQLite makes both DDL and the user_version header write
+ * transactional, so a crash mid-migration rolls the schema change back rather
+ * than leaving a half-applied schema stamped as complete; the next open
+ * retries it.
+ *
+ * BEGIN IMMEDIATE rather than the default deferred BEGIN, plus a re-read of
+ * the stamp inside the lock: two warden processes can open the same DB at once
+ * (a Stop hook firing while a benchmark writes). Both would read the same
+ * pre-migration version and both try to apply it, and `ALTER TABLE ... ADD
+ * COLUMN` is not idempotent, so the loser used to die with "duplicate column
+ * name". Immediate takes the write lock up front (busy_timeout applies);
+ * re-reading under it lets the loser observe the winner's stamp and stand
+ * down. A deferred transaction cannot do this — a read-then-write upgrade
+ * fails with SQLITE_BUSY_SNAPSHOT, which busy_timeout does NOT retry.
+ *
+ * Returns false when another process already moved the stamp past `version`.
+ */
+function applyMigration(db: WardenDb, version: number, sql: string): boolean {
+	return db
+		.transaction((): boolean => {
+			if (schemaVersion(db) !== version) return false;
 			db.exec(sql);
 			db.pragma(`user_version = ${version + 1}`);
-		})();
+			return true;
+		})
+		.immediate();
+}
+
+function migrate(db: WardenDb): void {
+	let version = schemaVersion(db);
+	if (version > MIGRATIONS.length) {
+		// Downgrade: a newer warden wrote this DB and older code is now opening
+		// it. Never rewind the schema — the extra columns are harmless to
+		// `SELECT *` readers and destroying them would lose the ledger. Say so
+		// loudly instead, because a missing-column error three commands later is
+		// far harder to diagnose than this line.
+		process.stderr.write(
+			`WARNING: warden database schema version ${version} is newer than this build understands (${MIGRATIONS.length}); running without migrating\n`,
+		);
+		return;
+	}
+	while (version < MIGRATIONS.length) {
+		const sql = MIGRATIONS[version];
+		// The loop bound guarantees a value; noUncheckedIndexedAccess does not
+		// know that.
+		if (sql === undefined) break;
+		if (applyMigration(db, version, sql)) {
+			version += 1;
+			continue;
+		}
+		// Lost the race to a concurrent process: adopt its stamp. If that did
+		// not actually move us forward, stop rather than spin forever.
+		const observed = schemaVersion(db);
+		if (observed <= version) break;
+		version = observed;
 	}
 }
 
-export function openDb(path: string = defaultDbPath()): WardenDb {
-	mkdirSync(dirname(path), { recursive: true });
-	const db = new Database(path);
+/**
+ * Connection pragmas. Order matters — see the busy_timeout comment.
+ *
+ * NOTE: `foreign_keys` is deliberately left OFF (SQLite's default), so the
+ * REFERENCES clauses in the schema are documentation, not enforcement.
+ * Switching it on is a behavioural change that would reject writes against
+ * existing ledgers holding rows whose parent was never recorded, and nothing
+ * in the codebase ever deletes a run or a rule (evicted rules are the negative
+ * dataset), so the cascades it would activate have no work to do.
+ */
+function configureConnection(db: WardenDb): void {
+	// FIRST, before any other pragma: `journal_mode = WAL` needs a brief
+	// exclusive lock the first time it converts a rollback-journal DB, and a
+	// second warden process may hold the write lock right then. With the busy
+	// timeout still at its default 0 the open would throw SQLITE_BUSY instead
+	// of waiting the way every later statement does.
+	db.pragma("busy_timeout = 2000");
 	db.pragma("journal_mode = WAL");
 	// Explicit rather than inherited: better-sqlite3's bundled build already
 	// runs WAL at NORMAL (SQLITE_DEFAULT_WAL_SYNCHRONOUS=1), but the Stop hook's
 	// 2s budget depends on it, so pin it instead of trusting a compile flag.
 	db.pragma("synchronous = NORMAL");
-	db.pragma("busy_timeout = 2000");
+}
+
+export function openDb(path: string = defaultDbPath()): WardenDb {
+	mkdirSync(dirname(path), { recursive: true });
+	const db = new Database(path);
+	configureConnection(db);
 	migrate(db);
 	return db;
+}
+
+/**
+ * Unwrap the row an `INSERT ... RETURNING` promised. better-sqlite3 types
+ * `.get()` as possibly-undefined; for these statements that can only happen if
+ * the insert did not land, which means a corrupt or concurrently-mangled DB.
+ * Fail loudly rather than handing back a bogus row id that would then be
+ * written into a foreign key column.
+ */
+function requireRow<T>(row: T | undefined, what: string): T {
+	if (row === undefined) {
+		throw new Error(`${what}: INSERT ... RETURNING produced no row`);
+	}
+	return row;
 }
 
 /** Which rule configuration produced a run: 'real' for collected work
@@ -296,10 +394,7 @@ export function upsertRun(db: WardenDb, run: NewRun): number {
 			run.model ?? null,
 			run.durationMs ?? null,
 		);
-	if (row === undefined) {
-		throw new Error("upsertRun: INSERT ... RETURNING produced no row");
-	}
-	return row.id;
+	return requireRow(row, "upsertRun").id;
 }
 
 export function getRunBySession(
@@ -411,8 +506,7 @@ export function insertRule(db: WardenDb, rule: NewRule): number {
 			rule.bornDigest ?? null,
 			rule.replaces ?? null,
 		);
-	if (row === undefined) throw new Error("insertRule produced no row");
-	return row.id;
+	return requireRow(row, "insertRule").id;
 }
 
 /** Set (or clear, with null) a rule's "allowed where" scope predicate. */
@@ -477,8 +571,7 @@ export function insertAuthoredRule(db: WardenDb, rule: NewRule): number {
 			rule.createdAt,
 			rule.createdAt,
 		);
-	if (row === undefined) throw new Error("insertAuthoredRule produced no row");
-	return row.id;
+	return requireRow(row, "insertAuthoredRule").id;
 }
 
 /** Toggle a rule's protected flag. Protecting an evicted rule reactivates it
@@ -589,8 +682,7 @@ export function bumpRulesetVersion(
 			 RETURNING version`,
 		)
 		.get(agent, ts);
-	if (row === undefined) throw new Error("bumpRulesetVersion produced no row");
-	return row.version;
+	return requireRow(row, "bumpRulesetVersion").version;
 }
 
 export interface QuestionRow {
@@ -618,8 +710,7 @@ export function insertQuestion(
 			 VALUES (?, ?, ?, NULL, ?) RETURNING id`,
 		)
 		.get(fromAgent, toAgent, body, ts);
-	if (row === undefined) throw new Error("insertQuestion produced no row");
-	return row.id;
+	return requireRow(row, "insertQuestion").id;
 }
 
 /** Mark the most recent pending question matching this send as approved —
@@ -916,8 +1007,14 @@ export function recordToolCosts(
 			input_chars = excluded.input_chars,
 			result_chars = excluded.result_chars`,
 	);
+	// One transaction so a reader never sees the run with its costs deleted but
+	// not yet rewritten. The DELETE runs first, so the write lock is taken on
+	// the transaction's first statement and busy_timeout covers the wait — no
+	// read-then-write upgrade, which busy_timeout would not retry.
 	db.transaction(() => {
 		db.prepare("DELETE FROM tool_costs WHERE run_id = ?").run(runId);
+		// The DELETE means the ON CONFLICT above can only fire for duplicate
+		// (kind, grp, label) tuples inside a single `costs` array; last wins.
 		for (const c of costs) {
 			insert.run(
 				runId,

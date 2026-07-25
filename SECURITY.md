@@ -31,7 +31,8 @@ all collected and imported data as untrusted:
 - **No secrets, no network by default.** State lives in a local SQLite file at
   `~/.token-warden/warden.db`. Benchmarking spawns `claude` locally and is
   scoped (`acceptEdits` + a Bash allowlist), never `bypassPermissions`. Token
-  counts are never converted to currency or sent anywhere.
+  counts never leave the machine: `/warden-cost` prices them into dollars
+  locally, from a static rate table (`src/pricing.ts`), with no network call.
 - **Parsing is tolerant and bounded.** The transcript parser never throws on
   malformed input, streams line-by-line (bounded memory), and counts the four
   token fields deterministically.

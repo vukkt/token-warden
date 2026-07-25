@@ -1,5 +1,135 @@
 # Changelog
 
+## v0.40.0 — 2026-07-25
+
+A hardening pass over the whole repository, run as a 21-agent audit (10 writers
+with disjoint file ownership, 11 read-only cross-cutting auditors) against the
+principles of *Clean Code*, *The Pragmatic Programmer*, *Functional Programming
+in Scala*, and a systems-design and threat-model review. No feature work. The
+tests go 684 -> 1001 and branch coverage 85.94% -> 90.09%, the axis that was
+weakest.
+
+**Correctness bugs fixed** (each silently produced a wrong number or a wrong
+verdict; none announced itself):
+
+- **The distiller was fed the wrong transcript** (`src/collect.ts`). On a
+  `SubagentStop` the `runs` row was built from the subagent's own sidechain, but
+  the distiller spawn passed `payload.transcript_path` — the *parent*
+  conversation. Rules were attributed to a subagent from evidence it never
+  generated, then benchmarked and potentially promoted into that subagent's
+  memory.
+- **A concurrent-open migration race** (`src/db.ts`). Two processes (a Stop hook
+  firing while a benchmark writes) both read the same pre-migration
+  `user_version` and both applied it; `ALTER TABLE ADD COLUMN` is not idempotent,
+  so the loser died with `duplicate column name`. Now `BEGIN IMMEDIATE` with the
+  version re-read inside the lock.
+- **`busy_timeout` was set after `journal_mode = WAL`** (`src/db.ts`), so the
+  brief exclusive lock WAL conversion needs could make `openDb` throw
+  `SQLITE_BUSY` instead of waiting.
+- **A success check that could not *run* was recorded as the task failing**
+  (`src/bench.ts`). `spawnSync` returns `status === null` on a missing `bash`, a
+  timeout, or an output overrun; all three entered the corpus as measurements,
+  and because the run had spent real tokens the environment-failure discriminator
+  could never catch them. The check spawn also had no `maxBuffer`, leaving Node's
+  1 MB default.
+- **`priceFor` read the prototype chain** (`src/pricing.ts`). A model named
+  `constructor`/`toString`/`valueOf` resolved to a function through
+  `Object.prototype`, passed the truthiness guard, and made every downstream
+  dollar figure `NaN`. Reachable via a bring-your-own agent's `model:` line.
+  `priceFor("")` threw outright. Both fixed with `Object.hasOwn`.
+- **An empty price override priced the workload at zero** (`src/pricing.ts`).
+  `Number("") === 0`, so `export TOKEN_WARDEN_PRICE_INPUT=` — the ordinary shell
+  way to unset-but-export — set every rate to zero. NaN was already guarded;
+  empty string was the hole.
+- **`evolve` could recommend a variant it never measured** (`src/evolve.ts`).
+  `wins` never consulted `comparison.environmentFailure`, so a quota death read
+  as a large saving and wrote a proposals file, directly under the warning it had
+  just printed. Its model call also checked only `claude.error`, never the exit
+  status.
+- **The A/B percentage averaged two different task sets** (`src/compare.ts`).
+  Each side filtered `> 0` independently, so a task one side failed entirely was
+  dropped from that mean and kept in the other — printing e.g. "+126.7% ...
+  cheaper for this workload", a sentence contradicting itself and the (correct)
+  delta beside it. `regressedTaskIds` also reported quota deaths as regressions,
+  so the roll-up could print "REGRESSED" and "completion-safe across all suites"
+  together.
+- **`delta=+null` and `delta=+-500` in `/warden-status`** (`src/status.ts`): a
+  hardcoded `+` on a nullable, sometimes-negative measured delta.
+- **Compression was impossible for rules under 20 characters**
+  (`src/compress.ts`): the prompt asked for `max(10, len/2)` while the check
+  enforced `floor(len/2)`, so every reply was rejected by construction after
+  paying for the model call.
+
+**Security hardening** (authorized review of the project's own trust
+boundaries):
+
+- **`/warden-protect --add` bypassed every body check** — the only writer into
+  `rules.body` with no validation, inserting `status='active', protected=1`, so a
+  body containing `\n- ...` forged extra bullets into the compiled `MEMORY.md`
+  permanently (protected rules are never re-audited or evicted). `--scope` had
+  the same hole. Both now enforce the shared rule-body contract.
+- **The compression rewriter used a weaker validator than the distiller** — its
+  regex accepted bidi overrides, zero-width joiners and emoji that
+  `ruleBodySchema` rejects, while `distill.ts` carried a comment claiming the two
+  paths "can never drift". They now share one schema, and all three model-call
+  paths share one validated envelope parser.
+- **`displayText` under-covered** (`src/sanitize.ts`): it stripped the 7-bit CSI
+  but not the 8-bit form (U+009B), and no bidi/zero-width class at all. Six
+  report sites interpolated untrusted rule bodies and task ids raw.
+- **Imported ledgers** (`src/adopt.ts`): size and rule-count caps applied before
+  parsing, agent names slug-validated inside the schema, and block extraction
+  anchored on the marker so a rule body ending in a fenced block can no longer
+  mis-slice the ledger.
+- **Golden-task fields validated at the parse chokepoint** (`src/bench.ts`): a
+  prompt starting with `-` is rejected, because `-p` takes an *optional* value
+  and such a prompt is read by the child CLI as a flag — enough to change the
+  benchmarked agent's permission mode.
+- **Hook wiring** (`hooks/hooks.json`): the `Stop` hook was the only one without
+  `|| true`, so a failed `cd`/install surfaced as a hook error despite the
+  documented exit-0 guarantee; its `[ -d node_modules ]` guard tested directory
+  existence rather than install success, so an interrupted install wedged
+  collection permanently. Now gated on a success sentinel, `npm ci`, the local
+  `tsx` binary (no registry fetch inside a hook), and `|| true` everywhere. The
+  `SessionStart` nudge no longer fires on `clear`/`compact`.
+- **CI**: the one `${{ }}` interpolation inside a `run:` block moved to `env:`.
+
+**Benchmarks** — `benchmarks/sql/golden-08.md` added. `sql-01`'s check passes on
+the pristine fixture (it greps for `create index` and `user_id`, both already in
+`schema.sql`), so it can never detect a regression, and a quota-dead run on it
+records `completed = true`, hiding it from the environment-failure discriminator
+on the very agent every burn in FINDINGS.md used. `sql-01` is left
+byte-identical — its frozen `run1_tokens` and every published comparison stay
+valid — and the corrected task is *added*, the same remedy v0.36.0 used for the
+noisy-task splits.
+
+**Structure** — `src/select.ts` decomposed (`selectForAgent` 345 -> 65 lines) with
+`MeasurementPlan`/`MeasuredSide`/`DecisionOutcome` replacing boolean-blind
+parameters and a nullable-abort out-param. Verified behaviour-preserving by
+differential fuzzing against a pristine `git archive HEAD` copy: 132,000
+comparisons across the full verdict path and 250 randomized multi-round
+orchestration scenarios, comparing resulting DB rows and compiled `MEMORY.md` —
+all identical. `src/bench.ts` gained an injectable `RunOnceDeps` seam (coverage
+75% -> 91%) and a signal-safe temp-dir sweep, so an interrupted burn no longer
+leaks a fixture copy per run.
+
+**Docs** — ARCHITECTURE.md corrected (9 -> 16 migrations, 10 -> 20 commands, the
+bring-your-own-agent contradiction, `zod` as a second runtime dependency, rent vs
+`effectiveRent`); SECURITY.md's "token counts are never converted to currency"
+removed, which `/warden-cost` has falsified since v0.26.0; the superseded ~2.5%
+synthetic false-positive rate annotated with the measured 8.8% everywhere it
+appears; the compression A/B marked CLOSED in ROADMAP.md so a fourth ~16M-token
+burn is not attempted; `docs/specs/*` given status banners (one of the four was
+tested and rejected but still read as a plan); and the two release traps this
+repo actually hit recorded in CONTRIBUTING.md.
+
+**Known limitations, deliberately not fixed here** — the shared-module
+extractions (`stats.ts`, `format.ts`, `rules.ts`, `memory.ts`, `cli.ts`) are
+deferred to the next pass and tracked in ROADMAP.md; they are cross-cutting and
+would have collided with the file ownership that kept this pass conflict-free.
+`WARDEN_CONFIDENCE_Z` still *rejects* a sub-1 value and falls back to 2 rather
+than clamping to 1 as CONTRIBUTING previously implied — the doc now describes the
+actual behaviour rather than the gate being changed, since `z` is calibrated.
+
 ## v0.39.0 — 2026-07-11
 
 The complete environment-failure abort. v0.38.0 shipped a first, simpler guard

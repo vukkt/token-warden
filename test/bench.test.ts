@@ -1,28 +1,51 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	type AgentDefinition,
+	assertSafePathSegment,
+	type BenchSpawnOptions,
+	benchChildEnv,
+	cleanupWorkDirs,
 	compileMemoryMd,
 	EnvironmentFailureError,
+	findTranscript,
 	type GoldenTask,
 	goldenSuiteHash,
+	installAgent,
+	installWorkDirCleanup,
 	isEnvironmentFailure,
 	loadGoldenTasks,
 	parseAgentDefinition,
 	parseArgs,
 	parseGoldenTask,
 	passEnvironmentFailure,
+	type RunOnceDeps,
 	type RunResult,
+	registerWorkDir,
+	releaseWorkDir,
+	runOnce,
 	runSuite,
+	SESSION_ENV_KEYS,
+	type SpawnResult,
 	type SuiteOptions,
+	shouldCopyFixtureEntry,
 	summarizeTask,
 	totalTokens,
 } from "../src/bench.js";
 import {
 	getBaseline,
 	openDb,
+	type RuleRow,
 	recordBaseline,
 	type WardenDb,
 } from "../src/db.js";
@@ -511,5 +534,666 @@ describe("runSuite environment-failure streak abort", () => {
 			.flatMap((s) => s.results)
 			.filter((r) => !r.completed);
 		expect(failed).toHaveLength(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Contract, resource-management and subprocess-safety tests for the
+// integration boundary. None of these spawn a real process or spend a token:
+// the spawn seam (RunOnceDeps) is injected.
+// ---------------------------------------------------------------------------
+
+describe("path-segment safety", () => {
+	it("accepts the shipped id/agent shapes", () => {
+		for (const value of ["sql", "sql-01", "backend-03", "my.agent_2"]) {
+			expect(() => assertSafePathSegment(value, "id", "x.md")).not.toThrow();
+		}
+	});
+
+	it("rejects separators, traversal, empties and over-long values", () => {
+		for (const value of [
+			"../../etc/passwd",
+			"a/b",
+			"a\\b",
+			".hidden",
+			"",
+			"has space",
+			"a".repeat(65),
+		]) {
+			expect(() => assertSafePathSegment(value, "id", "x.md"), value).toThrow(
+				/filename-safe slug/,
+			);
+		}
+	});
+
+	it("parseGoldenTask refuses a task whose id would escape the temp dir", () => {
+		const task = (id: string, agent = "sql") =>
+			`---\nid: ${id}\nagent: ${agent}\nprompt: "Do the thing."\nsuccess_check: "true"\n---\nbody`;
+		// mkdtemp(warden-bench-<id>-…) with a traversing id writes outside tmpdir.
+		expect(() => parseGoldenTask(task("../../pwn"), "x.md")).toThrow(/"id"/);
+		// agent becomes .claude/agents/<agent>.md inside the workdir.
+		expect(() => parseGoldenTask(task("sql-01", "../../pwn"), "x.md")).toThrow(
+			/"agent"/,
+		);
+		expect(() => parseGoldenTask(task("sql-01"), "x.md")).not.toThrow();
+	});
+});
+
+describe("loadGoldenTasks empty-suite contract", () => {
+	let dir: string;
+	let original: string | undefined;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-empty-suite-"));
+		original = process.env.TOKEN_WARDEN_BENCHMARKS_DIR;
+		process.env.TOKEN_WARDEN_BENCHMARKS_DIR = dir;
+	});
+
+	afterEach(() => {
+		if (original === undefined) delete process.env.TOKEN_WARDEN_BENCHMARKS_DIR;
+		else process.env.TOKEN_WARDEN_BENCHMARKS_DIR = original;
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("throws rather than returning an empty suite nothing can be measured on", () => {
+		mkdirSync(join(dir, "custom-agent"), { recursive: true });
+		writeFileSync(join(dir, "custom-agent", "notes.md"), "not a golden task");
+		expect(() => loadGoldenTasks("custom-agent")).toThrow(
+			/no golden tasks for agent "custom-agent"/,
+		);
+	});
+
+	it("still reports a missing suite directory distinctly", () => {
+		expect(() => loadGoldenTasks("absent-agent")).toThrow(/no golden suite/);
+	});
+});
+
+describe("shouldCopyFixtureEntry", () => {
+	it("keeps fixture sources and drops state, answers and vendored deps", () => {
+		expect(shouldCopyFixtureEntry("/f/src/index.ts")).toBe(true);
+		expect(shouldCopyFixtureEntry("/f/db/schema.sql")).toBe(true);
+		// node_modules is symlinked, never copied.
+		expect(shouldCopyFixtureEntry("/f/node_modules")).toBe(false);
+		// BUGS.md would hand the agent the answers to the golden tasks.
+		expect(shouldCopyFixtureEntry("/f/BUGS.md")).toBe(false);
+		expect(shouldCopyFixtureEntry("/f/.git")).toBe(false);
+		expect(shouldCopyFixtureEntry("/f/data/app.db")).toBe(false);
+	});
+});
+
+describe("benchChildEnv (hermetic child session)", () => {
+	const saved = new Map<string, string | undefined>();
+
+	beforeEach(() => {
+		for (const key of [...SESSION_ENV_KEYS, "TOKEN_WARDEN_BENCH_MARKER"]) {
+			saved.set(key, process.env[key]);
+		}
+	});
+
+	afterEach(() => {
+		for (const [key, value] of saved) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		saved.clear();
+	});
+
+	it("strips every parent session-identity variable", () => {
+		for (const key of SESSION_ENV_KEYS) process.env[key] = "parent";
+		const env = benchChildEnv();
+		for (const key of SESSION_ENV_KEYS) {
+			expect(env[key], key).toBeUndefined();
+		}
+	});
+
+	it("disables the distiller and preserves unrelated variables", () => {
+		process.env.TOKEN_WARDEN_BENCH_MARKER = "keep-me";
+		const env = benchChildEnv();
+		expect(env.TOKEN_WARDEN_NO_DISTILL).toBe("1");
+		expect(env.TOKEN_WARDEN_BENCH_MARKER).toBe("keep-me");
+	});
+
+	it("does not mutate the parent process environment", () => {
+		process.env.CLAUDE_CODE_SESSION_ID = "parent-session";
+		benchChildEnv();
+		expect(process.env.CLAUDE_CODE_SESSION_ID).toBe("parent-session");
+	});
+
+	it("covers the variables named in the 30.4M-token false-baseline incident", () => {
+		// Regression guard: silently shortening this list re-opens the bug where
+		// a child bound to the parent session froze a multi-megatoken parent
+		// transcript as run1.
+		expect(SESSION_ENV_KEYS).toContain("CLAUDECODE");
+		expect(SESSION_ENV_KEYS).toContain("CLAUDE_CODE_SESSION_ID");
+		expect(SESSION_ENV_KEYS).toContain("CLAUDE_CODE_REMOTE_SESSION_ID");
+	});
+});
+
+describe("findTranscript", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-transcripts-"));
+	});
+
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("finds a session transcript under any project directory", () => {
+		mkdirSync(join(dir, "-Users-x-proj-a"), { recursive: true });
+		mkdirSync(join(dir, "-Users-x-proj-b"), { recursive: true });
+		const path = join(dir, "-Users-x-proj-b", "sess-42.jsonl");
+		writeFileSync(path, "{}\n");
+		expect(findTranscript("sess-42", dir)).toBe(path);
+	});
+
+	it("returns null for an unknown session and a missing projects dir", () => {
+		mkdirSync(join(dir, "-Users-x-proj-a"), { recursive: true });
+		expect(findTranscript("nope", dir)).toBeNull();
+		expect(findTranscript("nope", join(dir, "does-not-exist"))).toBeNull();
+	});
+});
+
+describe("installAgent", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-install-agent-"));
+	});
+
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	const definition: AgentDefinition = {
+		content: "---\nmemory: project\n---\nYou are an agent.\n",
+		model: "sonnet",
+	};
+
+	it("writes the definition and scoped permissions, and no MEMORY.md without rules", () => {
+		installAgent(dir, "sql", definition, []);
+		expect(readFileSync(join(dir, ".claude", "agents", "sql.md"), "utf8")).toBe(
+			definition.content,
+		);
+		const settings = JSON.parse(
+			readFileSync(join(dir, ".claude", "settings.json"), "utf8"),
+		) as { permissions: { allow: string[] } };
+		// Bench agents run scoped: an allowlist, never bypassPermissions.
+		expect(settings.permissions.allow).toContain("Bash(npx vitest:*)");
+		expect(JSON.stringify(settings)).not.toContain("bypassPermissions");
+		expect(
+			existsSync(join(dir, ".claude", "agent-memory", "sql", "MEMORY.md")),
+		).toBe(false);
+	});
+
+	it("compiles active rules into the project-scoped MEMORY.md", () => {
+		const rules = [
+			{ body: "Grep before reading." } as RuleRow,
+			{ body: "Batch edits.", scope: "when editing" } as RuleRow,
+		];
+		installAgent(dir, "sql", definition, rules);
+		const memory = readFileSync(
+			join(dir, ".claude", "agent-memory", "sql", "MEMORY.md"),
+			"utf8",
+		);
+		expect(memory).toBe(compileMemoryMd(rules));
+		expect(memory).toContain("- Grep before reading.");
+		expect(memory).toContain("- (when when editing) Batch edits.");
+	});
+
+	it("refuses an agent name that would escape the work directory", () => {
+		expect(() => installAgent(dir, "../../pwn", definition, [])).toThrow(
+			/filename-safe slug/,
+		);
+		expect(existsSync(join(dir, ".claude"))).toBe(false);
+	});
+});
+
+describe("temp fixture-copy lifecycle", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-workdirs-"));
+	});
+
+	afterEach(() => {
+		cleanupWorkDirs();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	function makeDir(name: string): string {
+		const path = join(dir, name);
+		mkdirSync(path, { recursive: true });
+		writeFileSync(join(path, "file.txt"), "x");
+		return path;
+	}
+
+	it("releaseWorkDir removes the copy and stops tracking it", () => {
+		const path = makeDir("a");
+		registerWorkDir(path);
+		releaseWorkDir(path);
+		expect(existsSync(path)).toBe(false);
+		// Already released: the interrupt sweep finds nothing left to do.
+		expect(cleanupWorkDirs()).toBe(0);
+	});
+
+	it("cleanupWorkDirs sweeps every copy an interrupt would have orphaned", () => {
+		const paths = ["a", "b", "c"].map(makeDir);
+		for (const path of paths) registerWorkDir(path);
+		expect(cleanupWorkDirs()).toBe(3);
+		for (const path of paths) expect(existsSync(path)).toBe(false);
+		// Idempotent: a signal followed by the exit hook must not double-count.
+		expect(cleanupWorkDirs()).toBe(0);
+	});
+
+	it("cleanupWorkDirs never throws (it runs from signal and exit handlers)", () => {
+		const path = makeDir("gone");
+		registerWorkDir(path);
+		rmSync(path, { recursive: true, force: true });
+		expect(() => cleanupWorkDirs()).not.toThrow();
+	});
+
+	it("installWorkDirCleanup is idempotent and fully reversible", () => {
+		const before = {
+			exit: process.listenerCount("exit"),
+			sigint: process.listenerCount("SIGINT"),
+			sigterm: process.listenerCount("SIGTERM"),
+			sighup: process.listenerCount("SIGHUP"),
+		};
+		const uninstall = installWorkDirCleanup();
+		expect(process.listenerCount("exit")).toBe(before.exit + 1);
+		expect(process.listenerCount("SIGINT")).toBe(before.sigint + 1);
+		expect(process.listenerCount("SIGTERM")).toBe(before.sigterm + 1);
+		expect(process.listenerCount("SIGHUP")).toBe(before.sighup + 1);
+		// A second install adds nothing (a 3-agent suite calls it per run).
+		expect(installWorkDirCleanup()).toBe(uninstall);
+		expect(process.listenerCount("SIGINT")).toBe(before.sigint + 1);
+		uninstall();
+		expect(process.listenerCount("exit")).toBe(before.exit);
+		expect(process.listenerCount("SIGINT")).toBe(before.sigint);
+		expect(process.listenerCount("SIGTERM")).toBe(before.sigterm);
+		expect(process.listenerCount("SIGHUP")).toBe(before.sighup);
+	});
+});
+
+describe("runOnce (spawn boundary injected)", () => {
+	let dir: string;
+	let db: WardenDb;
+	let logSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-runonce-"));
+		db = openDb(join(dir, "warden.db"));
+		logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		logSpy.mockRestore();
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	const task: GoldenTask = {
+		id: "sql-01",
+		agent: "sql",
+		prompt: "Add an index on orders.user_id.",
+		successCheck: "grep -qi 'create index' db/schema.sql",
+		file: "golden-01.md",
+		weight: 1,
+	};
+	const definition: AgentDefinition = {
+		content: "---\nmemory: project\n---\nbody\n",
+		model: "sonnet",
+	};
+	const options = (over: Partial<SuiteOptions> = {}): SuiteOptions => ({
+		rules: [],
+		runs: 1,
+		recordBaselines: false,
+		rulesetVersion: 3,
+		label: "test-pass",
+		config: "candidate",
+		...over,
+	});
+
+	// 1000 + 200 + 300 + 500 = 2000 tokens.
+	const transcript = [
+		JSON.stringify({ type: "user", uuid: "u1", message: { content: "do x" } }),
+		JSON.stringify({
+			type: "assistant",
+			uuid: "a1",
+			message: {
+				id: "m1",
+				content: [{ type: "text", text: "done" }],
+				usage: {
+					input_tokens: 1000,
+					output_tokens: 200,
+					cache_creation_input_tokens: 300,
+					cache_read_input_tokens: 500,
+				},
+			},
+		}),
+	].join("\n");
+
+	interface Harness {
+		deps: RunOnceDeps;
+		spawns: Array<{
+			command: string;
+			args: string[];
+			options: BenchSpawnOptions;
+		}>;
+		created: string[];
+		disposed: string[];
+	}
+
+	const claudeOk = (over: Partial<SpawnResult> = {}): SpawnResult => ({
+		status: 0,
+		signal: null,
+		stdout: JSON.stringify({ session_id: "sess-1", duration_ms: 4200 }),
+		stderr: "",
+		...over,
+	});
+	const checkResult = (
+		status: number | null,
+		over: Partial<SpawnResult> = {},
+	): SpawnResult => ({
+		status,
+		signal: null,
+		stdout: "",
+		stderr: "",
+		...over,
+	});
+
+	function harness(
+		script: SpawnResult[],
+		over: Partial<RunOnceDeps> = {},
+	): Harness {
+		const spawns: Harness["spawns"] = [];
+		const created: string[] = [];
+		const disposed: string[] = [];
+		let i = 0;
+		const deps: RunOnceDeps = {
+			spawn: (command, args, spawnOptions) => {
+				spawns.push({ command, args, options: spawnOptions });
+				const next = script[i++];
+				if (next === undefined) throw new Error("spawn script exhausted");
+				return next;
+			},
+			makeWorkDir: (t) => {
+				const workDir = join(dir, `work-${t.id}-${created.length}`);
+				mkdirSync(workDir, { recursive: true });
+				created.push(workDir);
+				return workDir;
+			},
+			disposeWorkDir: (d) => {
+				disposed.push(d);
+				rmSync(d, { recursive: true, force: true });
+			},
+			copyFixture: () => {},
+			installAgent: () => {},
+			findTranscript: () => join(dir, "transcript.jsonl"),
+			readTranscript: () => transcript,
+			now: () => "2026-07-25T00:00:00.000Z",
+			...over,
+		};
+		return { deps, spawns, created, disposed };
+	}
+
+	function runCount(taskId: string): number {
+		const row = db
+			.prepare<unknown[], { n: number }>(
+				"SELECT COUNT(*) AS n FROM runs WHERE task_hash = ?",
+			)
+			.get(taskId);
+		return row?.n ?? 0;
+	}
+
+	it("records a completed run and returns its parsed cost", () => {
+		const h = harness([claudeOk(), checkResult(0)]);
+		const result = runOnce(db, task, definition, [], options(), h.deps);
+		expect(result).toMatchObject({
+			sessionId: "sess-1",
+			tokens: 2000,
+			completed: true,
+		});
+		expect(runCount("sql-01")).toBe(1);
+		// The temp fixture copy is gone on the happy path.
+		expect(h.disposed).toEqual(h.created);
+		expect(existsSync(h.created[0] as string)).toBe(false);
+	});
+
+	it("builds a hermetic, non-shell claude invocation with a timeout", () => {
+		const h = harness([claudeOk(), checkResult(0)]);
+		runOnce(db, task, definition, [], options({ model: "opus" }), h.deps);
+
+		const claude = h.spawns[0];
+		expect(claude?.command).toBe("claude");
+		// The model-generated prompt is ONE argv element: no shell, so nothing in
+		// it can be word-split, globbed, or interpreted as another flag's value.
+		expect(claude?.args).toEqual([
+			"-p",
+			task.prompt,
+			"--agent",
+			"sql",
+			"--model",
+			"opus",
+			"--permission-mode",
+			"acceptEdits",
+			"--max-turns",
+			"60",
+			"--output-format",
+			"json",
+		]);
+		expect(claude?.options.cwd).toBe(h.created[0]);
+		expect(claude?.options.timeout).toBeGreaterThan(0);
+		expect(claude?.options.maxBuffer).toBeGreaterThan(0);
+		expect(claude?.options.env?.TOKEN_WARDEN_NO_DISTILL).toBe("1");
+		for (const key of SESSION_ENV_KEYS) {
+			expect(claude?.options.env?.[key], key).toBeUndefined();
+		}
+
+		const check = h.spawns[1];
+		expect(check?.command).toBe("bash");
+		expect(check?.args).toEqual(["-c", task.successCheck]);
+		expect(check?.options.timeout).toBeGreaterThan(0);
+		// Regression guard for the ENOBUFS misread: the check spawn is capped
+		// like the claude spawn, not left on the 1MB default.
+		expect(check?.options.maxBuffer).toBe(claude?.options.maxBuffer);
+	});
+
+	it("passes an injection-shaped prompt through verbatim as a single argument", () => {
+		const nasty: GoldenTask = {
+			...task,
+			prompt: "$(rm -rf ~); `id`; --dangerously-skip-permissions",
+		};
+		const h = harness([claudeOk(), checkResult(0)]);
+		runOnce(db, nasty, definition, [], options(), h.deps);
+		expect(h.spawns[0]?.args[1]).toBe(nasty.prompt);
+		// It never becomes its own flag: it sits in the -p slot only.
+		expect(h.spawns[0]?.args.filter((a) => a === nasty.prompt)).toHaveLength(1);
+	});
+
+	it("records a genuine check failure as an incomplete run, not an error", () => {
+		const h = harness([claudeOk(), checkResult(1)]);
+		const result = runOnce(
+			db,
+			task,
+			definition,
+			[],
+			options({ recordBaselines: true }),
+			h.deps,
+		);
+		expect(result.completed).toBe(false);
+		expect(result.tokens).toBe(2000);
+		// A failed run never freezes a baseline…
+		expect(getBaseline(db, "sql", "sql-01")).toBeFalsy();
+		// …but it IS recorded: a rule-broken run is evidence about the rule.
+		expect(runCount("sql-01")).toBe(1);
+	});
+
+	// BUG FIX regression tests: a success check that could not RUN is an
+	// infrastructure failure, and must never be recorded as "the task failed".
+	it("throws when the success check could not be executed at all", () => {
+		const h = harness([
+			claudeOk(),
+			checkResult(null, { error: new Error("spawnSync bash ENOENT") }),
+		]);
+		expect(() => runOnce(db, task, definition, [], options(), h.deps)).toThrow(
+			/success check for sql-01 could not run/,
+		);
+		expect(runCount("sql-01")).toBe(0);
+		expect(h.disposed).toEqual(h.created);
+	});
+
+	it("throws when the success check was killed before reporting (timeout, ENOBUFS)", () => {
+		const h = harness([
+			claudeOk(),
+			checkResult(null, { signal: "SIGTERM" as NodeJS.Signals }),
+		]);
+		expect(() => runOnce(db, task, definition, [], options(), h.deps)).toThrow(
+			/was killed before it could report/,
+		);
+		expect(runCount("sql-01")).toBe(0);
+	});
+
+	it("freezes a baseline only for a completed active-set run", () => {
+		const h = harness([claudeOk(), checkResult(0)]);
+		runOnce(
+			db,
+			task,
+			definition,
+			[],
+			options({ recordBaselines: true }),
+			h.deps,
+		);
+		expect(getBaseline(db, "sql", "sql-01")?.run1_tokens).toBe(2000);
+	});
+
+	it("never touches baselines for a candidate configuration", () => {
+		const h = harness([claudeOk(), checkResult(0)]);
+		runOnce(db, task, definition, [], options(), h.deps);
+		expect(getBaseline(db, "sql", "sql-01")).toBeFalsy();
+	});
+
+	it("rethrows a spawn error (timeout, missing binary) and still disposes", () => {
+		const boom = new Error("spawnSync claude ETIMEDOUT");
+		const h = harness([claudeOk({ error: boom })]);
+		expect(() => runOnce(db, task, definition, [], options(), h.deps)).toThrow(
+			/ETIMEDOUT/,
+		);
+		expect(runCount("sql-01")).toBe(0);
+		expect(h.disposed).toEqual(h.created);
+		expect(existsSync(h.created[0] as string)).toBe(false);
+	});
+
+	it("reports unparseable output and a missing session id, with stderr context", () => {
+		const noJson = harness([
+			claudeOk({ status: 1, stdout: "not json", stderr: "quota exhausted" }),
+		]);
+		expect(() =>
+			runOnce(db, task, definition, [], options(), noJson.deps),
+		).toThrow(/unparseable output/);
+		expect(() =>
+			runOnce(
+				db,
+				task,
+				definition,
+				[],
+				options(),
+				harness([claudeOk({ stdout: JSON.stringify({ duration_ms: 1 }) })])
+					.deps,
+			),
+		).toThrow(/no session_id/);
+	});
+
+	it("throws when the transcript for the reported session cannot be found", () => {
+		const h = harness([claudeOk(), checkResult(0)], {
+			findTranscript: () => null,
+		});
+		expect(() => runOnce(db, task, definition, [], options(), h.deps)).toThrow(
+			/transcript not found for session sess-1/,
+		);
+		expect(runCount("sql-01")).toBe(0);
+		expect(h.disposed).toEqual(h.created);
+	});
+
+	it("disposes the fixture copy even when installAgent throws before any spawn", () => {
+		const h = harness([], {
+			installAgent: () => {
+				throw new Error("disk full");
+			},
+		});
+		expect(() => runOnce(db, task, definition, [], options(), h.deps)).toThrow(
+			/disk full/,
+		);
+		expect(h.spawns).toHaveLength(0);
+		expect(h.disposed).toEqual(h.created);
+	});
+
+	it("tolerates a missing duration_ms (advisory latency axis only)", () => {
+		const h = harness([
+			claudeOk({ stdout: JSON.stringify({ session_id: "sess-2" }) }),
+			checkResult(0),
+		]);
+		expect(runOnce(db, task, definition, [], options(), h.deps).sessionId).toBe(
+			"sess-2",
+		);
+		const row = db
+			.prepare<unknown[], { duration_ms: number | null }>(
+				"SELECT duration_ms FROM runs WHERE session_id = ?",
+			)
+			.get("sess-2");
+		expect(row?.duration_ms).toBeNull();
+	});
+});
+
+describe("runSuite contract assertions", () => {
+	let dir: string;
+	let db: WardenDb;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-suite-contract-"));
+		db = openDb(join(dir, "warden.db"));
+	});
+
+	afterEach(() => {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	const task: GoldenTask = {
+		id: "t1",
+		agent: "sql",
+		prompt: "do the thing",
+		successCheck: "true",
+		file: "t1.md",
+		weight: 1,
+	};
+	const options = (over: Partial<SuiteOptions> = {}): SuiteOptions => ({
+		rules: [],
+		runs: 1,
+		recordBaselines: false,
+		rulesetVersion: 0,
+		label: "test-pass",
+		config: "candidate",
+		definitionOverride: { content: "agent", model: "sonnet" },
+		...over,
+	});
+	const never = (): RunResult => {
+		throw new Error("runOnce must not be reached");
+	};
+
+	it("refuses an empty suite instead of returning an unmeasured pass", () => {
+		expect(() => runSuite(db, "sql", [], options(), never as never)).toThrow(
+			/no golden tasks/,
+		);
+	});
+
+	it("refuses a non-positive or fractional run count", () => {
+		for (const runs of [0, -1, 1.5, Number.NaN]) {
+			expect(() =>
+				runSuite(db, "sql", [task], options({ runs }), never as never),
+			).toThrow(/runs must be a positive integer/);
+		}
 	});
 });

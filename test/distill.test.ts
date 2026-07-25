@@ -7,10 +7,14 @@ import { openDb, upsertRun, type WardenDb } from "../src/db.js";
 import {
 	buildPrompt,
 	contextCost,
+	hasForbiddenChar,
+	MAX_MODEL_REPLY_CHARS,
 	p75,
+	parseClaudeEnvelope,
 	parseDistillArgs,
 	parseRulesJson,
 	shouldDistill,
+	stripJsonFence,
 	trigramSimilarity,
 } from "../src/distill.js";
 import { digestTranscript } from "../src/transcript.js";
@@ -182,6 +186,125 @@ describe("parseRulesJson", () => {
 		expect(
 			parseRulesJson('[{"body": "Rule with escape \\u001b[31m inside it."}]'),
 		).toBeNull();
+	});
+
+	it("refuses an absurdly long reply without parsing it", () => {
+		// A valid reply is at most two 200-char bodies. Anything at this scale is
+		// garbage and must not be handed to JSON.parse or the regex passes.
+		expect(parseRulesJson("[".repeat(MAX_MODEL_REPLY_CHARS + 1))).toBeNull();
+		// A genuinely valid payload padded past the cap is refused too — the cap
+		// is on what we are willing to inspect, not on what looks plausible.
+		const valid = '[{"body": "Use Grep before reading files."}]';
+		expect(
+			parseRulesJson(valid + " ".repeat(MAX_MODEL_REPLY_CHARS)),
+		).toBeNull();
+	});
+});
+
+/** Build a string containing a specific code point without writing an
+ * invisible character into this source file. */
+const codePoint = (code: number) => String.fromCharCode(code);
+
+describe("rule-body character hardening", () => {
+	/** Wrap a body in the exact shape a valid model reply would have. */
+	const replyWith = (body: string) => JSON.stringify([{ body }]);
+
+	it.each([
+		["LINE SEPARATOR", 0x2028],
+		["PARAGRAPH SEPARATOR", 0x2029],
+		["NEXT LINE (C1)", 0x0085],
+		["C1 control", 0x009b],
+		["ZERO WIDTH SPACE", 0x200b],
+		["RIGHT-TO-LEFT OVERRIDE", 0x202e],
+		["LEFT-TO-RIGHT ISOLATE", 0x2066],
+		["ZERO WIDTH NO-BREAK SPACE / BOM", 0xfeff],
+		["REPLACEMENT CHARACTER", 0xfffd],
+		["lone surrogate", 0xd800],
+	])("rejects a body carrying %s — it could fake structure or hide its content", (_name, code) => {
+		const body = `Grep before ${codePoint(code)} reading whole files.`;
+		expect(hasForbiddenChar(body)).toBe(true);
+		expect(parseRulesJson(replyWith(body))).toBeNull();
+	});
+
+	it("rejects astral-plane characters (emoji are banned project-wide)", () => {
+		// U+1F600 as its surrogate pair — a well-formed emoji, still refused.
+		const body = `Grep before ${codePoint(0xd83d)}${codePoint(0xde00)} reading files.`;
+		expect(hasForbiddenChar(body)).toBe(true);
+		expect(parseRulesJson(replyWith(body))).toBeNull();
+	});
+
+	it("still accepts ordinary punctuation and accented latin text", () => {
+		const body = "Grep for the symbol first; don't re-read a file (naive).";
+		expect(hasForbiddenChar(body)).toBe(false);
+		expect(parseRulesJson(replyWith(body))).toEqual([{ body }]);
+	});
+
+	it("trims surrounding whitespace before enforcing the length floor", () => {
+		expect(parseRulesJson(replyWith("   short    "))).toBeNull();
+		expect(parseRulesJson(replyWith("   Grep before reading.   "))).toEqual([
+			{ body: "Grep before reading." },
+		]);
+	});
+});
+
+describe("stripJsonFence", () => {
+	it("removes a wrapping fence and leaves bare JSON untouched", () => {
+		expect(stripJsonFence('```json\n[{"body":"x"}]\n```')).toBe(
+			'[{"body":"x"}]',
+		);
+		expect(stripJsonFence("```\n[]\n```")).toBe("[]");
+		expect(stripJsonFence('  [{"body":"x"}]  ')).toBe('[{"body":"x"}]');
+	});
+});
+
+describe("parseClaudeEnvelope", () => {
+	it("extracts the result text from a healthy envelope", () => {
+		expect(
+			parseClaudeEnvelope(
+				JSON.stringify({ type: "result", is_error: false, result: "hello" }),
+			),
+		).toEqual({ ok: true, result: "hello" });
+	});
+
+	it("treats a missing result field as empty rather than crashing", () => {
+		expect(parseClaudeEnvelope(JSON.stringify({ type: "result" }))).toEqual({
+			ok: true,
+			result: "",
+		});
+	});
+
+	it("fails closed on JSON that is not an object", () => {
+		// REGRESSION: `null` is valid JSON, so the old
+		// `JSON.parse(stdout).result` threw a TypeError and took the caller
+		// down instead of dropping the sample.
+		for (const stdout of ["null", "true", '"a string"', "[1,2,3]", "123"]) {
+			const parsed = parseClaudeEnvelope(stdout);
+			expect(parsed.ok).toBe(false);
+		}
+	});
+
+	it("fails closed on empty, absent, and non-JSON stdout", () => {
+		expect(parseClaudeEnvelope("")).toMatchObject({ ok: false });
+		expect(parseClaudeEnvelope("   ")).toMatchObject({ ok: false });
+		expect(parseClaudeEnvelope(undefined)).toMatchObject({ ok: false });
+		const junk = parseClaudeEnvelope("not json at all");
+		expect(junk.ok).toBe(false);
+		expect(junk.ok === false && junk.reason).toContain("not JSON");
+	});
+
+	it("fails closed when the CLI reports its own error", () => {
+		const parsed = parseClaudeEnvelope(
+			JSON.stringify({ is_error: true, result: "credit quota exhausted" }),
+		);
+		expect(parsed.ok).toBe(false);
+		expect(parsed.ok === false && parsed.reason).toContain("quota exhausted");
+	});
+
+	it("refuses an oversized stdout buffer", () => {
+		const huge = `{"result":"${"x".repeat(MAX_MODEL_REPLY_CHARS)}"}`;
+		const parsed = parseClaudeEnvelope(huge);
+		expect(parsed.ok).toBe(false);
+		expect(parsed.ok === false && parsed.reason).toContain("cap");
 	});
 });
 

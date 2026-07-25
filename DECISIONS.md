@@ -557,6 +557,45 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.40.0 — hardening pass: what we fixed, and what we deliberately did not
+
+- **A degenerate golden check is retired by ADDITION, never by edit.** `sql-01`'s
+  `success_check` passes on the pristine fixture, so it cannot fail and — worse — a
+  quota-dead run on it records `completed = true`, which hides it from
+  `isEnvironmentFailure` (that discriminator requires `!completed`). The obvious fix is to
+  correct the check in place. We did not: `run1_tokens` is frozen forever and denominates
+  every published comparison that includes sql-01, so editing it would silently invalidate
+  the FINDINGS burns. `sql-08` is the corrected task, added alongside, exactly as v0.36.0
+  added sql-06/07 rather than editing the noisy sql-02. The cost is a permanently
+  dead task in the suite; the alternative was retroactively unfalsifiable history.
+- **`WARDEN_CONFIDENCE_Z` keeps rejecting sub-1 values rather than clamping.**
+  CONTRIBUTING.md said "clamped to >= 1" while the code resets anything below 1 to the
+  default 2 — so `0.5` silently yields the *strictest* setting, the opposite of the
+  operator's intent. Both behaviours are defensible and the documented one is arguably
+  friendlier, but `z` is the calibrated gate parameter: changing what a given value means
+  would move admission thresholds for anyone who had set it, and the empirical FP rate
+  (8.8%) was measured under the current semantics. We corrected the documentation instead.
+  Revisit only alongside a re-calibration.
+- **The shared-module extractions were deferred, not rejected.** The audit found genuinely
+  duplicated knowledge (the CLI shim 25x, `sessionsPerWeek()` twice — feeding both the
+  keep/evict bar and the dollar projection — number formatters sharing a name with two
+  rounding contracts). Extracting them is right and is on the roadmap. It was held back
+  because this pass ran as concurrent agents with disjoint file ownership, and a
+  cross-cutting extraction is precisely the change that ownership model cannot express
+  safely. Sequencing beats cleverness here.
+- **Hook bootstrap gates on a success sentinel, not directory existence.** `[ -d
+  node_modules ]` is an existence test: an install interrupted by the 120s timeout leaves a
+  partial tree that passes the guard forever, so collection dies silently on every session
+  end with no self-repair. Now `[ -f node_modules/.warden-deps-ok ]`, written only after a
+  zero-exit `npm ci`. Moving the install out of the Stop hook entirely is the better fix and
+  is on the roadmap; it changes the documented marketplace first-run contract, so it is a
+  product decision rather than a hardening one.
+- **`benchmarks/` stayed frozen throughout.** Ten writer agents were explicitly forbidden
+  from touching the fixture or existing golden tasks, and the fixture was verified
+  byte-identical to HEAD after the pass. The one addition (sql-08) was made by the
+  integrator, with the check verified to exit 1 on the pristine fixture and 0 after the
+  intended fix — the property sql-01 lacks.
+
 ## v0.38.0 — environment-failure abort (refuse a verdict, don't steer one)
 
 - **An abort is not advisory-axis gating.** The non-goals list forbids gating verdicts on

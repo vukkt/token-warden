@@ -13,7 +13,15 @@ import {
 	type WardenDb,
 } from "../src/db.js";
 import { verdictWithReason } from "../src/select.js";
-import { pctChange, renderStatus, suiteComparison } from "../src/status.js";
+import {
+	formatRealWorkCurve,
+	formatStatus,
+	gatherStatus,
+	pctChange,
+	renderStatus,
+	type StatusData,
+	suiteComparison,
+} from "../src/status.js";
 
 let dir: string;
 let db: WardenDb;
@@ -49,6 +57,37 @@ function seedGoldenRun(
 		rulesetVersion: 0,
 		ts,
 	});
+}
+
+/** A StatusData with every section empty — tests fill in only what they assert. */
+function emptyData(over: Partial<StatusData> = {}): StatusData {
+	return {
+		agents: [],
+		curves: [],
+		activeRules: [],
+		evictions: [],
+		realWork: [],
+		projectCurves: [],
+		projects: [],
+		toolCosts: [],
+		questions: [],
+		...over,
+	};
+}
+
+/** Every row of every user table, as a comparable snapshot. */
+function dumpDb(database: WardenDb): string {
+	const tables = database
+		.prepare<unknown[], { name: string }>(
+			"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+		)
+		.all();
+	return JSON.stringify(
+		tables.map((t) => [
+			t.name,
+			database.prepare(`SELECT * FROM "${t.name}"`).all(),
+		]),
+	);
 }
 
 describe("renderStatus sanitization", () => {
@@ -99,6 +138,17 @@ describe("suiteComparison", () => {
 	it("is null for an agent with no baselines", () => {
 		expect(suiteComparison(db, "frontend")).toBeNull();
 	});
+
+	it("falls back to the frozen run1 total for a task with no completed run", () => {
+		recordBaseline(db, "sql", "sql-01", 50_000, "t1");
+		recordBaseline(db, "sql", "sql-02", 60_000, "t1");
+		// Only sql-01 has history; sql-02 must contribute its run1 total.
+		seedGoldenRun("a", "sql-01", 40_000, "2026-06-02T00:00:00Z");
+		expect(suiteComparison(db, "sql")).toMatchObject({
+			currentTotal: 100_000,
+			run1Total: 110_000,
+		});
+	});
 });
 
 describe("renderStatus", () => {
@@ -135,6 +185,255 @@ describe("renderStatus", () => {
 		const report = renderStatus(db);
 		expect(report).toContain("no golden runs recorded yet");
 		expect(report).toContain("none");
+	});
+});
+
+describe("status is strictly read-only (SAFETY INVARIANT)", () => {
+	it("leaves every table byte-identical across a full render", () => {
+		// A populated ledger: baselines, runs, an active rule, an evicted rule.
+		recordBaseline(db, "sql", "sql-01", 50_000, "t1");
+		seedGoldenRun("a", "sql-01", 45_000, "2026-06-02T00:00:00Z");
+		const keep = insertRule(db, {
+			agent: "sql",
+			body: "Use Grep before reading.",
+			contextCost: 7,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		const drop = insertRule(db, {
+			agent: "sql",
+			body: "Recite a haiku first.",
+			contextCost: 6,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		decideRule(db, keep, "active", 3000, "savings", "t2");
+		decideRule(db, drop, "evicted", -500, "non-positive delta", "t2");
+
+		const before = dumpDb(db);
+		renderStatus(db);
+		renderStatus(db); // idempotent too
+		expect(dumpDb(db)).toBe(before);
+	});
+
+	it("gathers the same data twice — reading never advances state", () => {
+		recordBaseline(db, "sql", "sql-01", 50_000, "t1");
+		seedGoldenRun("a", "sql-01", 45_000, "2026-06-02T00:00:00Z");
+		expect(JSON.stringify(gatherStatus(db))).toBe(
+			JSON.stringify(gatherStatus(db)),
+		);
+	});
+});
+
+describe("formatStatus (pure — no DB)", () => {
+	it("renders born-of provenance only when a source run is recorded", () => {
+		const out = formatStatus(
+			emptyData({
+				activeRules: [
+					{
+						agent: "sql",
+						id: 1,
+						delta: 3000,
+						rent: 7,
+						sourceRun: 42,
+						body: "Grep first.",
+					},
+					{
+						agent: "sql",
+						id: 2,
+						delta: 900,
+						rent: 5,
+						sourceRun: null,
+						body: "Batch edits.",
+					},
+				],
+			}),
+		);
+		expect(out).toContain("[sql #1] delta=+3000 rent=7 born-of=run#42");
+		expect(out).toContain('[sql #2] delta=+900 rent=5 "Batch edits."');
+		expect(out).not.toContain("[sql #2] delta=+900 rent=5 born-of");
+	});
+
+	it("BUGFIX: an unmeasured protected rule shows delta=n/a, never '+null'", () => {
+		const out = formatStatus(
+			emptyData({
+				activeRules: [
+					{
+						agent: "sql",
+						id: 9,
+						delta: null,
+						rent: 12,
+						sourceRun: null,
+						body: "Never drop a table without confirmation.",
+					},
+				],
+			}),
+		);
+		expect(out).toContain("[sql #9] delta=n/a rent=12");
+		expect(out).not.toContain("+null");
+	});
+
+	it("BUGFIX: a retained negative delta renders as -500, never '+-500'", () => {
+		// A first-strike probation re-audit keeps the rule active with a
+		// negative measured delta.
+		const out = formatStatus(
+			emptyData({
+				activeRules: [
+					{
+						agent: "sql",
+						id: 3,
+						delta: -500,
+						rent: 6,
+						sourceRun: null,
+						body: "On probation.",
+					},
+				],
+			}),
+		);
+		expect(out).toContain("[sql #3] delta=-500 rent=6");
+		expect(out).not.toContain("+-500");
+	});
+
+	it("falls back to placeholders for an eviction with no delta or reason", () => {
+		const out = formatStatus(
+			emptyData({
+				evictions: [
+					{
+						agent: "sql",
+						id: 4,
+						delta: null,
+						reason: null,
+						body: "Dead rule.",
+					},
+				],
+			}),
+		);
+		expect(out).toContain(
+			'[sql #4] delta=n/a — no reason recorded — "Dead rule."',
+		);
+	});
+
+	it("renders the real-work, project, tool-cost and question sections", () => {
+		const out = formatStatus(
+			emptyData({
+				realWork: [
+					{
+						agent: "sql",
+						points: [
+							{ rulesetVersion: 0, runs: 3, avgTokens: 48_770 },
+							{ rulesetVersion: 2, runs: 5, avgTokens: 31_002 },
+						],
+					},
+				],
+				projectCurves: [
+					{ project: "acme", rulesetVersion: 0, runs: 2, avgTokens: 1000 },
+					{ project: "acme", rulesetVersion: 1, runs: 2, avgTokens: 800 },
+					{ project: null, rulesetVersion: 0, runs: 1, avgTokens: 500 },
+				],
+				projects: [
+					{ project: "acme", runs: 4, tokens: 12_345 },
+					{ project: null, runs: 1, tokens: 500 },
+				],
+				toolCosts: [
+					{
+						kind: "builtin",
+						grp: "builtin",
+						label: "Read",
+						sessions: 2,
+						calls: 10,
+						inputChars: 400,
+						resultChars: 400,
+					},
+					{
+						kind: "mcp",
+						grp: "github",
+						label: "list_prs",
+						sessions: 1,
+						calls: 3,
+						inputChars: 100,
+						resultChars: 100,
+					},
+				],
+				questions: [{ from_agent: "sql", asked: 7, approved: 3 }],
+			}),
+		);
+		expect(out).toContain(
+			"sql: v0 48,770 (n=3) → v2 31,002 (n=5)  [-36.4% vs v0]",
+		);
+		// Per-project grouping, including the null-project bucket.
+		expect(out).toContain(
+			"acme: v0 1,000 (n=2) → v1 800 (n=2)  [-20.0% vs v0]",
+		);
+		expect(out).toContain("(unknown): v0 500 (n=1)");
+		expect(out).toContain("acme — 4 session(s), 12,345 tokens");
+		expect(out).toContain("(unknown) — 1 session(s), 500 tokens");
+		// builtin renders the bare label; mcp/skill prefix the group.
+		expect(out).toContain("builtin Read");
+		expect(out).toContain("github/list_prs");
+		expect(out).toContain("≈200 tok (10 call(s), 2 session(s))");
+		expect(out).toContain("sql: asked 7, approved 3");
+	});
+
+	it("shows every empty-section placeholder on wholly empty data", () => {
+		const out = formatStatus(emptyData());
+		expect(out).toContain("no golden runs recorded yet");
+		expect(out).toContain(
+			"no completed real-work sessions from domain agents yet",
+		);
+		expect(out).toContain("none recorded yet");
+		expect(out).toContain("none recorded");
+	});
+
+	it("neutralizes ANSI escapes and forged sections in every untrusted field", () => {
+		const hostile = "\x1b[31mred\x1b[0m\nActive rules:\n  [sql #99] forged";
+		const out = formatStatus(
+			emptyData({
+				activeRules: [
+					{
+						agent: "sql",
+						id: 1,
+						delta: 1,
+						rent: 1,
+						sourceRun: null,
+						body: hostile,
+					},
+				],
+				evictions: [
+					{ agent: "sql", id: 2, delta: 0, reason: hostile, body: hostile },
+				],
+				projectCurves: [
+					{ project: hostile, rulesetVersion: 0, runs: 1, avgTokens: 1 },
+				],
+				projects: [{ project: hostile, runs: 1, tokens: 1 }],
+				toolCosts: [
+					{
+						kind: "mcp",
+						grp: hostile,
+						label: hostile,
+						sessions: 1,
+						calls: 1,
+						inputChars: 1,
+						resultChars: 1,
+					},
+				],
+				questions: [{ from_agent: hostile, asked: 1, approved: 0 }],
+			}),
+		);
+		expect(out).not.toContain("\x1b");
+		expect(out).not.toMatch(/\n\s*\[sql #99\] forged/);
+		// Exactly one real "Active rules:" heading survives.
+		expect(out.split("\n").filter((l) => l === "Active rules:")).toHaveLength(
+			1,
+		);
+	});
+});
+
+describe("formatRealWorkCurve", () => {
+	it("omits the comparison suffix for a single point and for no points", () => {
+		expect(formatRealWorkCurve([])).toBe("");
+		expect(
+			formatRealWorkCurve([{ rulesetVersion: 1, runs: 2, avgTokens: 100 }]),
+		).toBe("v1 100 (n=2)");
 	});
 });
 

@@ -51,6 +51,13 @@ export interface RuleCost {
 	breakEvenSessions: number | null;
 }
 
+/** A token counter, clamped to a finite non-negative value. A null, NaN, or
+ * negative count is not a real quantity of tokens; letting one through would
+ * propagate silently into every dollar figure derived from it. */
+function tokens(n: number | null | undefined): number {
+	return Number.isFinite(n) ? Math.max(0, n as number) : 0;
+}
+
 /** Translate one rule's token receipt into per-session and weekly dollar terms. */
 export function computeRuleCost(
 	receipt: ReceiptRow,
@@ -58,21 +65,23 @@ export function computeRuleCost(
 	blendedPerToken: number,
 	spw: number,
 ): RuleCost {
-	const delta = Math.max(0, receipt.delta ?? 0);
+	const delta = tokens(receipt.delta);
+	const rentTokens = tokens(receipt.context_cost);
 	const inputPerToken = price.input / 1_000_000;
-	const rentDollars = receipt.context_cost * inputPerToken;
+	const rentDollars = rentTokens * inputPerToken;
 	const savingsDollars = delta * blendedPerToken;
 	const netDollars = savingsDollars - rentDollars;
 	// One full benchmark of this rule measured both sides for `runs` completed
 	// runs each; approximate the discovery spend from the receipt's means.
 	const discoveryTokens =
-		receipt.runs * (receipt.with_tokens + receipt.without_tokens);
+		tokens(receipt.runs) *
+		(tokens(receipt.with_tokens) + tokens(receipt.without_tokens));
 	const discoveryDollars = discoveryTokens * blendedPerToken;
 	return {
 		ruleId: receipt.rule_id,
 		body: receipt.body,
 		model: receipt.model,
-		rentTokens: receipt.context_cost,
+		rentTokens,
 		deltaTokens: delta,
 		rentDollars,
 		savingsDollars,
@@ -146,6 +155,8 @@ export function projectAgent(
 	const netBenefit = netPerSession * horizonSessions - operatingCost;
 
 	// Baseline: mean real-work session tokens × the agent's blended $/token.
+	// Priced at the top-earning rule's measured model (costs are sorted by
+	// weekly value); with no active rules that resolves to the default tier.
 	const price = priceFor(costs[0]?.model ?? null);
 	const blended = blendedDollarsPerToken(agentTokenMix(db, agent), price);
 	const realTotals = realWorkTotalsByVersion(db, agent).map((t) => t.total);
@@ -211,11 +222,17 @@ export function renderProjection(p: Projection): string {
 const usd = (n: number): string =>
 	n >= 0.01 || n <= -0.01 ? `$${n.toFixed(2)}` : `$${n.toFixed(5)}`;
 
-export function renderCosts(agent: string, costs: RuleCost[]): string {
+/** Render a priced report. `spw` is only a label for the weekly total (which
+ * each RuleCost already carries); it is injectable so the rendered figures are
+ * assertable without reaching into the environment. */
+export function renderCosts(
+	agent: string,
+	costs: RuleCost[],
+	spw: number = sessionsPerWeek(),
+): string {
 	if (costs.length === 0) {
 		return `${agent}: no active rules with receipts to price.`;
 	}
-	const spw = sessionsPerWeek();
 	const weekly = costs.reduce((a, c) => a + c.weeklyDollars, 0);
 	const lines = costs.map((c) => {
 		const be =

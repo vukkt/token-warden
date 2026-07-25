@@ -12,45 +12,103 @@
  * one — "measured, not claimed" holds across machines. Near-duplicates of any
  * existing rule (trigram > 0.85, including evicted ones) are skipped, so a
  * rule already falsified locally cannot be re-adopted.
+ *
+ * THREAT MODEL: the file is authored on someone else's machine and is treated
+ * as fully hostile. Everything it carries is either discarded (deltas, rent,
+ * source run) or validated at the boundary BEFORE use — size, rule count,
+ * agent-name slug, and a rule body that must be one line of visible text. What
+ * this file cannot check is the *meaning* of a rule body: a shared rule is by
+ * construction an instruction that will be put in front of a model, so a
+ * malicious ledger is a prompt-injection vector no schema can close. The
+ * mitigations are that a body is short, single-line, free of invisible or
+ * bidi-reordering characters (so PR review sees exactly what is imported), and
+ * that it lands as a CANDIDATE that must survive local measurement first.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { insertRule, listRulesByAgent, openDb, type RuleRow } from "./db.js";
 import { contextCost, trigramSimilarity } from "./distill.js";
-import { knownAgents } from "./registry.js";
-import type { SharedRule } from "./share.js";
+import { isValidAgentName, knownAgents } from "./registry.js";
+import { LEDGER_MARKER, type SharedRule } from "./share.js";
 
 /** Matches src/distill.ts's dedupe threshold so adoption and distillation
  * treat "the same rule" identically. */
 const ADOPT_SIMILARITY = 0.85;
 
+/** Hard cap on a ledger file. A real ledger is a handful of one-line rules
+ * (kilobytes); anything larger is a mistake or a resource-exhaustion attempt,
+ * and the file is read whole into memory before it is validated. */
+export const MAX_LEDGER_BYTES = 1024 * 1024;
+
+/** Hard cap on rules per ledger. Deduplication is O(incoming x existing)
+ * trigram comparisons and every survivor becomes a DB row, so an unbounded
+ * array is both a CPU and a storage amplifier. An agent's active set is
+ * single digits in practice; 500 is far above any honest export. */
+export const MAX_LEDGER_RULES = 500;
+
+/**
+ * Characters an imported rule body may never contain. The old check rejected
+ * only C0 controls and DEL, which let through a second class of text that is
+ * invisible or reorders what a reviewer sees:
+ *
+ * - C1 controls (U+0080-U+009F), which include the 8-bit CSI U+009B that some
+ *   terminals honour exactly like `ESC [`;
+ * - bidi overrides/isolates and the Arabic letter mark, which can make the
+ *   rendered rule read differently from the bytes that reach the model;
+ * - zero-width, soft-hyphen, invisible-operator and BOM code points, which
+ *   hide text inside a body that looks innocuous in review;
+ * - LINE/PARAGRAPH SEPARATOR, which break the one-rule-per-line contract of
+ *   the compiled MEMORY.md;
+ * - Unicode tag characters (U+E0000-U+E007F), the classic channel for
+ *   smuggling an entirely invisible instruction into a reviewed string.
+ *
+ * The ledger's whole premise is that a human reviews the file in a PR diff, so
+ * "what is rendered is what is imported" is a security property, not polish.
+ */
+const UNSAFE_BODY_CHARS =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control and invisible characters is the point
+	/[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/u;
+
 const ledgerSchema = z.object({
-	agent: z.string(),
-	exportedAt: z.string(),
-	rules: z.array(
-		z.object({
-			body: z
-				.string()
-				.trim()
-				.min(10)
-				.max(200)
-				// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control chars is the point
-				.regex(/^[^\x00-\x1f\x7f]+$/),
-			measuredDelta: z.number().nullable().catch(null),
-			contextCost: z.number().catch(0),
-			sourceRun: z.number().nullable().catch(null),
-			createdAt: z.string().catch(""),
-		}),
-	),
+	// The agent name is a path component and a subprocess argument everywhere
+	// downstream, so it is slug-validated at the boundary — before it can be
+	// interpolated into an error message or matched against knownAgents().
+	agent: z.string().refine(isValidAgentName),
+	exportedAt: z.string().max(64).catch(""),
+	rules: z
+		.array(
+			z.object({
+				body: z
+					.string()
+					.trim()
+					.min(10)
+					.max(200)
+					.refine((body) => !UNSAFE_BODY_CHARS.test(body)),
+				measuredDelta: z.number().nullable().catch(null),
+				contextCost: z.number().catch(0),
+				sourceRun: z.number().nullable().catch(null),
+				createdAt: z.string().max(64).catch(""),
+			}),
+		)
+		.max(MAX_LEDGER_RULES),
 });
 
 export type ParsedLedger = z.infer<typeof ledgerSchema>;
 
 /** Extract and validate the machine-readable ledger block from a shared
- * file. Returns null on a missing/invalid block — never throws. */
+ * file. Returns null on a missing/invalid block — never throws. Oversized
+ * content is rejected before the regex scan and the JSON parse, so neither
+ * runs over attacker-chosen megabytes. */
 export function parseLedgerFile(content: string): ParsedLedger | null {
-	const match = content.match(/```json\s*\n([\s\S]*?)\n```/);
+	if (content.length > MAX_LEDGER_BYTES) return null;
+	// Scan from the marker when there is one: a rule body may legitimately end
+	// in "```json", and matching the FIRST fence in the file would then latch
+	// onto a bullet line in the prose and mis-slice the real block. Files
+	// without a marker keep the old first-fence behaviour.
+	const markerIndex = content.indexOf(LEDGER_MARKER);
+	const scope = markerIndex >= 0 ? content.slice(markerIndex) : content;
+	const match = scope.match(/```json\s*\n([\s\S]*?)\n```/);
 	if (!match?.[1]) return null;
 	let raw: unknown;
 	try {
@@ -121,17 +179,35 @@ export function parseAdoptArgs(argv: string[]): AdoptArgs {
 	return args;
 }
 
-export function main(args: AdoptArgs): void {
-	if (!existsSync(args.from)) {
-		throw new Error(`ledger file not found: ${args.from}`);
+/** Read a ledger file, refusing anything that is not a regular file of sane
+ * size. Guards against `--from /dev/zero` (a character device reads forever)
+ * and against loading an arbitrarily large file into memory before any
+ * validation can run. */
+function readLedgerFile(path: string): string {
+	if (!existsSync(path)) {
+		throw new Error(`ledger file not found: ${path}`);
 	}
-	const ledger = parseLedgerFile(readFileSync(args.from, "utf8"));
+	const stat = statSync(path);
+	if (!stat.isFile()) {
+		throw new Error(`not a regular file: ${path}`);
+	}
+	if (stat.size > MAX_LEDGER_BYTES) {
+		throw new Error(
+			`ledger file too large: ${stat.size} bytes (max ${MAX_LEDGER_BYTES})`,
+		);
+	}
+	return readFileSync(path, "utf8");
+}
+
+export function main(args: AdoptArgs): void {
+	const ledger = parseLedgerFile(readLedgerFile(args.from));
 	if (ledger === null) {
 		throw new Error(`no valid token-warden ledger block found in ${args.from}`);
 	}
-	if (!knownAgents().includes(ledger.agent)) {
+	const agents = knownAgents();
+	if (!agents.includes(ledger.agent)) {
 		throw new Error(
-			`ledger names agent "${ledger.agent}", not one of: ${knownAgents().join(", ")}`,
+			`ledger names agent "${ledger.agent}", not one of: ${agents.join(", ")}`,
 		);
 	}
 
@@ -142,7 +218,12 @@ export function main(args: AdoptArgs): void {
 		const now = new Date().toISOString();
 		for (const rule of adopt) {
 			// Recompute rent locally; discard the foreign delta — the selector
-			// re-measures from scratch on this machine's golden suite.
+			// re-measures from scratch on this machine's golden suite. insertRule
+			// is the ONLY write this file makes and it hardcodes status
+			// 'candidate' with a null measured_delta, so there is no code path
+			// from an imported ledger to an active rule (and hence to a compiled
+			// MEMORY.md) that does not go through local measurement. Asserted in
+			// test/adopt.test.ts, "cannot bypass local measurement".
 			insertRule(db, {
 				agent: ledger.agent,
 				body: rule.body,

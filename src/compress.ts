@@ -26,38 +26,37 @@ import {
 	type RuleRow,
 	type WardenDb,
 } from "./db.js";
-import { contextCost, trigramSimilarity } from "./distill.js";
+import {
+	contextCost,
+	distillModel,
+	MAX_MODEL_REPLY_CHARS,
+	MIN_RULE_BODY_CHARS,
+	parseClaudeEnvelope,
+	ruleBodySchema,
+	stripJsonFence,
+	trigramSimilarity,
+} from "./distill.js";
 import { assertKnownAgent } from "./registry.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const COMPRESS_TIMEOUT_MS = 2 * 60 * 1000;
-const COMPRESS_MODEL = process.env.TOKEN_WARDEN_DISTILL_MODEL ?? "sonnet";
 /** A rewrite must not be a near-verbatim copy — otherwise there is nothing
  * to A/B and the dedupe machinery would rightly reject it downstream. */
 const SIMILARITY_THRESHOLD = 0.85;
 
-const rewriteSchema = z.object({
-	// Same constraints as a distilled rule body: one printable line.
-	body: z
-		.string()
-		.trim()
-		.min(10)
-		.max(200)
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control chars is the point
-		.regex(/^[^\x00-\x1f\x7f]+$/),
-});
+// A rewrite is held to exactly the same body contract as a distilled rule —
+// one trimmed, printable, length-bounded line. Shared, not restated, so the
+// two proposal paths can never drift on what a valid rule body is.
+const rewriteSchema = z.object({ body: ruleBodySchema });
 
 /** Parse the model's reply: a single JSON object {"body": "..."}. Strict —
  * null on anything else; the caller reports and stops, never retries. */
 export function parseRewriteJson(text: string): { body: string } | null {
-	const stripped = text
-		.trim()
-		.replace(/^```(?:json)?\s*/i, "")
-		.replace(/\s*```$/, "");
+	if (text.length > MAX_MODEL_REPLY_CHARS) return null;
 	let raw: unknown;
 	try {
-		raw = JSON.parse(stripped);
+		raw = JSON.parse(stripJsonFence(text));
 	} catch {
 		return null;
 	}
@@ -65,8 +64,33 @@ export function parseRewriteJson(text: string): { body: string } | null {
 	return result.success ? result.data : null;
 }
 
+/**
+ * Character budget a rewrite must fit in: half the original, which halves the
+ * rule's rent (rent is length/4).
+ *
+ * One definition, used by both the prompt and the acceptance check, so the
+ * budget we ask for and the budget we enforce cannot drift.
+ */
+export function compressBudget(body: string): number {
+	return Math.floor(body.length / 2);
+}
+
+/**
+ * True when a rule is too short to have a compressed variant at all: half its
+ * length leaves no room for the minimum body a rule is allowed to have.
+ *
+ * Without this guard such a rule is silently unwinnable — the prompt asks for
+ * a 10-character rewrite (the old `Math.max(10, ...)` floor), the schema
+ * demands at least 10 characters, and the acceptance check then demands at
+ * most 9. Every attempt burns a model call to fail with a misleading
+ * "not within half" message.
+ */
+export function isTooShortToCompress(body: string): boolean {
+	return compressBudget(body) < MIN_RULE_BODY_CHARS;
+}
+
 export function buildCompressPrompt(rule: RuleRow): string {
-	const budget = Math.max(10, Math.floor(rule.body.length / 2));
+	const budget = compressBudget(rule.body);
 	return [
 		"An AI coding agent carries this efficiency rule in its prompt every session:",
 		"",
@@ -113,7 +137,7 @@ export function requestRewrite(prompt: string): string {
 			"-p",
 			prompt,
 			"--model",
-			COMPRESS_MODEL,
+			distillModel(),
 			"--max-turns",
 			"1",
 			"--output-format",
@@ -134,8 +158,11 @@ export function requestRewrite(prompt: string): string {
 			`claude exited ${claude.status}: ${(claude.stderr ?? "").slice(0, 200)}`,
 		);
 	}
-	const output = JSON.parse(claude.stdout) as { result?: string };
-	return output.result ?? "";
+	const envelope = parseClaudeEnvelope(claude.stdout);
+	if (!envelope.ok) {
+		throw new Error(`claude ${envelope.reason}`);
+	}
+	return envelope.result;
 }
 
 export function runCompress(
@@ -152,7 +179,16 @@ export function runCompress(
 			`rule ${args.rule} is ${rule.status} — only an active (measured) rule is worth compressing`,
 		);
 	}
+	// Fail before spending a model call on a rewrite that could never be
+	// accepted: at this length, half the original is below the minimum body a
+	// rule may have, so every possible reply is rejected by construction.
+	if (isTooShortToCompress(rule.body)) {
+		throw new Error(
+			`rule ${args.rule} is only ${rule.body.length} chars — half of it is under the ${MIN_RULE_BODY_CHARS}-char minimum body length, so no valid rewrite exists; nothing to compress`,
+		);
+	}
 
+	const budget = compressBudget(rule.body);
 	const reply = rewrite(buildCompressPrompt(rule));
 	const parsed = parseRewriteJson(reply);
 	if (parsed === null) {
@@ -160,7 +196,7 @@ export function runCompress(
 			`model returned invalid rewrite JSON; dropping (never retried). head: ${reply.slice(0, 200)}`,
 		);
 	}
-	if (parsed.body.length > Math.floor(rule.body.length / 2)) {
+	if (parsed.body.length > budget) {
 		throw new Error(
 			`rewrite is ${parsed.body.length} chars — not within half of the original ${rule.body.length}; nothing gained`,
 		);

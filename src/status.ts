@@ -6,7 +6,20 @@
  * Renders, per agent: collected runs, rule counts by status, current
  * golden-suite total vs the frozen run1 baseline, a learning curve of
  * golden-run costs over time, and the rule ledger (active rules plus the
- * last 5 evictions with reasons). Writes nothing.
+ * last 5 evictions with reasons).
+ *
+ * SAFETY INVARIANT — this module is strictly read-only. It imports only
+ * SELECT-side helpers from db.ts and issues only SELECT statements; nothing
+ * here writes, decides, evicts, or recompiles memory. `gatherStatus` is the
+ * only function that touches the database; `formatStatus` is pure, so the
+ * whole report is assertable without a DB. Keep it that way: a new section
+ * adds a field to `StatusData`, never a write.
+ *
+ * SECURITY — rule bodies and eviction reasons are model-generated, and project
+ * paths and tool/skill/MCP names come from the environment. Every one of them
+ * is rendered through `displayText`, which strips ANSI escapes and control
+ * characters and collapses newlines, so collected data can never forge a
+ * report line or a section header.
  */
 import { pathToFileURL } from "node:url";
 import {
@@ -14,12 +27,16 @@ import {
 	getRulesetVersion,
 	lastEvictions,
 	openDb,
+	type ProjectCurvePoint,
+	type ProjectUsage,
 	projectUsage,
+	type QuestionCount,
 	questionCounts,
 	type RealWorkPoint,
 	RUN_TOTAL_TOKENS_SQL,
 	realWorkCurveByAgent,
 	realWorkCurveByProject,
+	type ToolCostRollup,
 	toolCostRollup,
 	type WardenDb,
 } from "./db.js";
@@ -27,6 +44,12 @@ import { knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
 
 const TOTAL_SQL = RUN_TOTAL_TOKENS_SQL;
+
+/** Projects and tool costs shown in the report. */
+const PROJECT_LIMIT = 5;
+const TOOL_COST_LIMIT = 8;
+/** Evictions listed per agent. */
+const EVICTION_LIMIT = 5;
 
 /** Signed percent change of current vs baseline, e.g. "-5.7%". */
 export function pctChange(current: number, baseline: number): string {
@@ -139,8 +162,137 @@ function learningCurve(db: WardenDb, agent: string): CurvePoint[] {
 		.all(agent);
 }
 
+/* ------------------------------------------------------------------ *
+ * Data model — everything the report needs, gathered once, so that
+ * formatting is a pure function of plain data.
+ * ------------------------------------------------------------------ */
+
+/** One row of the per-agent summary table. */
+export interface AgentSummary {
+	agent: string;
+	runs: RunCounts;
+	rules: RuleCounts;
+	suite: SuiteComparison | null;
+}
+
+/** One agent's golden-run learning curve (only agents with history appear). */
+export interface AgentCurve {
+	agent: string;
+	rulesetVersion: number;
+	points: CurvePoint[];
+}
+
+/** An active rule as the ledger shows it. */
+export interface ActiveRuleEntry {
+	agent: string;
+	id: number;
+	delta: number | null;
+	rent: number;
+	sourceRun: number | null;
+	body: string;
+}
+
+/** An evicted rule as the ledger shows it. */
+export interface EvictionEntry {
+	agent: string;
+	id: number;
+	delta: number | null;
+	reason: string | null;
+	body: string;
+}
+
+/** One agent's real-work learning curve (only agents with sessions appear). */
+export interface AgentRealWork {
+	agent: string;
+	points: RealWorkPoint[];
+}
+
+/** The complete, DB-free input to `formatStatus`. */
+export interface StatusData {
+	agents: AgentSummary[];
+	curves: AgentCurve[];
+	activeRules: ActiveRuleEntry[];
+	evictions: EvictionEntry[];
+	realWork: AgentRealWork[];
+	projectCurves: ProjectCurvePoint[];
+	projects: ProjectUsage[];
+	toolCosts: ToolCostRollup[];
+	questions: QuestionCount[];
+}
+
+/** Read every figure the report needs. SELECT-only: see the module invariant. */
+export function gatherStatus(db: WardenDb): StatusData {
+	const agents = knownAgents();
+	const curves: AgentCurve[] = [];
+	const activeRules: ActiveRuleEntry[] = [];
+	const evictions: EvictionEntry[] = [];
+	const realWork: AgentRealWork[] = [];
+
+	for (const agent of agents) {
+		const points = learningCurve(db, agent);
+		if (points.length > 0) {
+			curves.push({
+				agent,
+				rulesetVersion: getRulesetVersion(db, agent),
+				points,
+			});
+		}
+		for (const rule of getActiveRules(db, agent)) {
+			activeRules.push({
+				agent,
+				id: rule.id,
+				delta: rule.measured_delta,
+				rent: rule.context_cost,
+				sourceRun: rule.source_run,
+				body: rule.body,
+			});
+		}
+		for (const rule of lastEvictions(db, agent, EVICTION_LIMIT)) {
+			evictions.push({
+				agent,
+				id: rule.id,
+				delta: rule.measured_delta,
+				reason: rule.decided_reason,
+				body: rule.body,
+			});
+		}
+		const realPoints = realWorkCurveByAgent(db, agent);
+		if (realPoints.length > 0) realWork.push({ agent, points: realPoints });
+	}
+
+	return {
+		// 'main' has a run/rule row but never rules of its own, so it is only
+		// part of the summary table.
+		agents: [...agents, "main"].map((agent) => ({
+			agent,
+			runs: runCounts(db, agent),
+			rules: ruleCounts(db, agent),
+			suite: suiteComparison(db, agent),
+		})),
+		curves,
+		activeRules,
+		evictions,
+		realWork,
+		projectCurves: realWorkCurveByProject(db, PROJECT_LIMIT),
+		projects: projectUsage(db, PROJECT_LIMIT),
+		toolCosts: toolCostRollup(db, { limit: TOOL_COST_LIMIT }),
+		questions: questionCounts(db),
+	};
+}
+
+/* ------------------------------------------------------------------ *
+ * Formatting — pure.
+ * ------------------------------------------------------------------ */
+
 function formatTokens(n: number): string {
 	return n.toLocaleString("en-US");
+}
+
+/** A measured delta with an explicit sign, or "n/a" when never measured
+ * (protected human-authored rules are active without a token measurement). */
+function signedDelta(delta: number | null): string {
+	if (delta === null) return "n/a";
+	return delta > 0 ? `+${delta}` : String(delta);
 }
 
 /** "v0 48,770 (n=3) → v2 31,002 (n=5)  [-36.4% vs v0]" */
@@ -158,153 +310,129 @@ export function formatRealWorkCurve(points: RealWorkPoint[]): string {
 	return `${sequence}  [${pctChange(last.avgTokens, first.avgTokens)} vs v${first.rulesetVersion}]`;
 }
 
-export function renderStatus(db: WardenDb): string {
-	const lines: string[] = [];
-	lines.push("token-warden status");
-	lines.push("");
+/** Blank line, heading, then the body — or a single placeholder when empty.
+ * The one place section shape is decided, so every section matches. */
+function section(title: string, body: string[], whenEmpty: string): string[] {
+	return ["", title, ...(body.length > 0 ? body : [whenEmpty])];
+}
 
-	lines.push(
+function summaryTable(agents: AgentSummary[]): string[] {
+	return [
 		"agent     | runs real/golden | rules act/cand/evict | suite now vs run1 (frozen)",
-	);
-	lines.push(
 		"----------|------------------|----------------------|---------------------------",
-	);
-	for (const agent of [...knownAgents(), "main"]) {
-		const runs = runCounts(db, agent);
-		const rules = ruleCounts(db, agent);
-		const suite = suiteComparison(db, agent);
-		const suiteText = suite
-			? `${formatTokens(suite.currentTotal)} vs ${formatTokens(suite.run1Total)} (${pctChange(suite.currentTotal, suite.run1Total)}, best ${formatTokens(suite.bestTotal)})`
-			: "no baselines";
-		lines.push(
-			`${agent.padEnd(9)} | ${String(runs.real).padStart(6)} / ${String(runs.golden).padEnd(6)} | ${`${rules.active}/${rules.candidate}/${rules.evicted}`.padEnd(20)} | ${suiteText}`,
-		);
-	}
+		...agents.map(({ agent, runs, rules, suite }) => {
+			const suiteText = suite
+				? `${formatTokens(suite.currentTotal)} vs ${formatTokens(suite.run1Total)} (${pctChange(suite.currentTotal, suite.run1Total)}, best ${formatTokens(suite.bestTotal)})`
+				: "no baselines";
+			const counts = `${rules.active}/${rules.candidate}/${rules.evicted}`;
+			return `${agent.padEnd(9)} | ${String(runs.real).padStart(6)} / ${String(runs.golden).padEnd(6)} | ${counts.padEnd(20)} | ${suiteText}`;
+		}),
+	];
+}
 
-	lines.push("");
-	lines.push("Learning curve (avg completed golden-run tokens by day):");
-	let anyCurve = false;
-	for (const agent of knownAgents()) {
-		const curve = learningCurve(db, agent);
-		if (curve.length === 0) continue;
-		anyCurve = true;
-		const points = curve
-			.map((p) => `${p.day}: ${formatTokens(p.avgTokens)} (n=${p.runs})`)
-			.join("  |  ");
-		lines.push(
-			`  ${agent} (ruleset v${getRulesetVersion(db, agent)}): ${points}`,
-		);
+/** Group per-project curve points by project, preserving query order. */
+function groupByProject(
+	points: ProjectCurvePoint[],
+): Map<string, RealWorkPoint[]> {
+	const byProject = new Map<string, RealWorkPoint[]>();
+	for (const point of points) {
+		const key = point.project ?? "(unknown)";
+		const list = byProject.get(key) ?? [];
+		list.push(point);
+		byProject.set(key, list);
 	}
-	if (!anyCurve) lines.push("  no golden runs recorded yet");
+	return byProject;
+}
 
-	lines.push("");
-	lines.push("Active rules:");
-	let anyActive = false;
-	for (const agent of knownAgents()) {
-		for (const rule of getActiveRules(db, agent)) {
-			anyActive = true;
-			const provenance =
-				rule.source_run !== null ? ` born-of=run#${rule.source_run}` : "";
-			lines.push(
-				`  [${agent} #${rule.id}] delta=+${rule.measured_delta} rent=${rule.context_cost}${provenance} "${displayText(rule.body)}"`,
-			);
-		}
-	}
-	if (!anyActive) lines.push("  none");
+/** Render the whole report from gathered data. Pure — no DB, no clock. */
+export function formatStatus(data: StatusData): string {
+	return [
+		"token-warden status",
+		"",
+		...summaryTable(data.agents),
 
-	lines.push("");
-	lines.push("Last evictions (max 5 per agent):");
-	let anyEvicted = false;
-	for (const agent of knownAgents()) {
-		for (const rule of lastEvictions(db, agent, 5)) {
-			anyEvicted = true;
-			lines.push(
-				`  [${agent} #${rule.id}] delta=${rule.measured_delta ?? "n/a"} — ${displayText(rule.decided_reason ?? "no reason recorded")} — "${displayText(rule.body)}"`,
-			);
-		}
-	}
-	if (!anyEvicted) lines.push("  none");
+		...section(
+			"Learning curve (avg completed golden-run tokens by day):",
+			data.curves.map((c) => {
+				const points = c.points
+					.map((p) => `${p.day}: ${formatTokens(p.avgTokens)} (n=${p.runs})`)
+					.join("  |  ");
+				return `  ${c.agent} (ruleset v${c.rulesetVersion}): ${points}`;
+			}),
+			"  no golden runs recorded yet",
+		),
 
-	lines.push("");
-	lines.push(
-		"Real-work learning (avg completed session tokens per ruleset version; domain agents only — rules never apply to 'main'):",
-	);
-	let anyRealWork = false;
-	for (const agent of knownAgents()) {
-		const curve = realWorkCurveByAgent(db, agent);
-		if (curve.length === 0) continue;
-		anyRealWork = true;
-		lines.push(`  ${agent}: ${formatRealWorkCurve(curve)}`);
-	}
-	if (!anyRealWork) {
-		lines.push("  no completed real-work sessions from domain agents yet");
-	}
+		...section(
+			"Active rules:",
+			data.activeRules.map((r) => {
+				const provenance =
+					r.sourceRun !== null ? ` born-of=run#${r.sourceRun}` : "";
+				return `  [${r.agent} #${r.id}] delta=${signedDelta(r.delta)} rent=${r.rent}${provenance} "${displayText(r.body)}"`;
+			}),
+			"  none",
+		),
 
-	lines.push("");
-	lines.push("Real-work learning by project (domain agents pooled):");
-	const projectCurves = realWorkCurveByProject(db, 5);
-	if (projectCurves.length === 0) {
-		lines.push("  none recorded yet");
-	} else {
-		const byProject = new Map<string, RealWorkPoint[]>();
-		for (const point of projectCurves) {
-			const key = point.project ?? "(unknown)";
-			const list = byProject.get(key) ?? [];
-			list.push(point);
-			byProject.set(key, list);
-		}
-		for (const [project, points] of byProject) {
-			lines.push(`  ${displayText(project)}: ${formatRealWorkCurve(points)}`);
-		}
-	}
+		...section(
+			"Last evictions (max 5 per agent):",
+			data.evictions.map(
+				(r) =>
+					`  [${r.agent} #${r.id}] delta=${r.delta ?? "n/a"} — ${displayText(r.reason ?? "no reason recorded")} — "${displayText(r.body)}"`,
+			),
+			"  none",
+		),
 
-	lines.push("");
-	lines.push("Real-work tokens by project:");
-	const projects = projectUsage(db, 5);
-	if (projects.length === 0) {
-		lines.push("  none recorded");
-	} else {
-		for (const usage of projects) {
-			lines.push(
-				`  ${displayText(usage.project ?? "(unknown)")} — ${usage.runs} session(s), ${formatTokens(usage.tokens)} tokens`,
-			);
-		}
-	}
+		...section(
+			"Real-work learning (avg completed session tokens per ruleset version; domain agents only — rules never apply to 'main'):",
+			data.realWork.map(
+				(w) => `  ${w.agent}: ${formatRealWorkCurve(w.points)}`,
+			),
+			"  no completed real-work sessions from domain agents yet",
+		),
 
-	lines.push("");
-	lines.push(
-		"Top tool / skill / MCP costs (real-work footprint, ≈tokens; see /warden-attribute):",
-	);
-	const toolCosts = toolCostRollup(db, { limit: 8 });
-	if (toolCosts.length === 0) {
-		lines.push("  none recorded yet");
-	} else {
-		for (const c of toolCosts) {
-			const estTokens = Math.round((c.inputChars + c.resultChars) / 4);
-			const where =
-				c.kind === "builtin" ? c.label : `${displayText(c.grp, 24)}/${c.label}`;
-			lines.push(
-				`  ${c.kind.padEnd(7)} ${displayText(where, 40).padEnd(40)} ≈${formatTokens(estTokens)} tok (${c.calls} call(s), ${c.sessions} session(s))`,
-			);
-		}
-	}
+		...section(
+			"Real-work learning by project (domain agents pooled):",
+			[...groupByProject(data.projectCurves)].map(
+				([project, points]) =>
+					`  ${displayText(project)}: ${formatRealWorkCurve(points)}`,
+			),
+			"  none recorded yet",
+		),
 
-	lines.push("");
-	lines.push(
-		"Cross-agent questions (high volume = that agent's memory is missing something):",
-	);
-	const counts = questionCounts(db);
-	if (counts.length === 0) {
-		lines.push("  none recorded");
-	} else {
-		for (const count of counts) {
-			lines.push(
-				`  ${displayText(count.from_agent, 60)}: asked ${count.asked}, approved ${count.approved}`,
-			);
-		}
-	}
+		...section(
+			"Real-work tokens by project:",
+			data.projects.map(
+				(usage) =>
+					`  ${displayText(usage.project ?? "(unknown)")} — ${usage.runs} session(s), ${formatTokens(usage.tokens)} tokens`,
+			),
+			"  none recorded",
+		),
 
-	return lines.join("\n");
+		...section(
+			"Top tool / skill / MCP costs (real-work footprint, ≈tokens; see /warden-attribute):",
+			data.toolCosts.map((c) => {
+				const estTokens = Math.round((c.inputChars + c.resultChars) / 4);
+				const where =
+					c.kind === "builtin"
+						? c.label
+						: `${displayText(c.grp, 24)}/${c.label}`;
+				return `  ${displayText(c.kind, 12).padEnd(7)} ${displayText(where, 40).padEnd(40)} ≈${formatTokens(estTokens)} tok (${c.calls} call(s), ${c.sessions} session(s))`;
+			}),
+			"  none recorded yet",
+		),
+
+		...section(
+			"Cross-agent questions (high volume = that agent's memory is missing something):",
+			data.questions.map(
+				(count) =>
+					`  ${displayText(count.from_agent, 60)}: asked ${count.asked}, approved ${count.approved}`,
+			),
+			"  none recorded",
+		),
+	].join("\n");
+}
+
+export function renderStatus(db: WardenDb): string {
+	return formatStatus(gatherStatus(db));
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

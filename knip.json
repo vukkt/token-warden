@@ -27,5 +27,7 @@
 		"scripts/*.mjs"
 	],
 	"project": ["src/**/*.ts"],
-	"ignoreBinaries": ["claude"]
+	"ignoreBinaries": ["claude", "mkfifo"],
+	"ignoreExportsUsedInFile": true,
+	"tags": ["-@public"]
 }

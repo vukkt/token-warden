@@ -22,7 +22,7 @@ import {
 	openDb,
 	type WardenDb,
 } from "./db.js";
-import { knownAgents } from "./registry.js";
+import { isValidAgentName, knownAgents } from "./registry.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -33,8 +33,10 @@ export function buildNudge(
 	allCounts: { agent: string; pending: number }[],
 ): string | null {
 	// Only domain agents can be measured by /warden-select; anything else
-	// would nudge the user toward a command that errors.
-	const counts = allCounts.filter((c) => knownAgents().includes(c.agent));
+	// would nudge the user toward a command that errors. knownAgents() scans a
+	// directory, so it is read once, not once per row.
+	const agents = knownAgents();
+	const counts = allCounts.filter((c) => agents.includes(c.agent));
 	if (counts.length === 0) return null;
 	const total = counts.reduce((sum, c) => sum + c.pending, 0);
 	const perAgent = counts.map((c) => `${c.agent}: ${c.pending}`).join(", ");
@@ -60,8 +62,12 @@ export function planAutoSelect(
 	if (!enabled) {
 		return { agent: null, reason: "TOKEN_WARDEN_AUTO_SELECT is not set" };
 	}
+	// Same one-scan-per-call rule as buildNudge; this filter is also the guard
+	// that keeps an arbitrary DB-derived string out of the spawned selector's
+	// argv (spawnAutoSelect passes `agent` as an argument).
+	const agents = knownAgents();
 	const counts = allCounts
-		.filter((c) => knownAgents().includes(c.agent))
+		.filter((c) => agents.includes(c.agent))
 		.sort((a, b) => b.pending - a.pending);
 	const top = counts[0];
 	if (!top) return { agent: null, reason: "no pending candidates" };
@@ -83,6 +89,11 @@ export function planAutoSelect(
 /** Detached fire-and-forget selector spawn — the distill-spawn pattern:
  * SessionStart must return immediately, the benchmark runs on its own. */
 export function spawnAutoSelect(agent: string): void {
+	// Defence in depth: callers already filter through knownAgents(), but this
+	// value ends up in an argv, so a name that could be read as a flag or a
+	// path never gets there. spawn() is shell-less, so this is the only
+	// injection surface.
+	if (!isValidAgentName(agent)) return;
 	spawn(
 		"npx",
 		["tsx", join(pluginRoot, "src", "select.ts"), "--agent", agent],

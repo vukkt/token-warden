@@ -1,8 +1,16 @@
+import {
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { parseTranscript } from "../src/transcript.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseTranscript, parseTranscriptFile } from "../src/transcript.js";
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -250,7 +258,6 @@ describe("parseTranscript edge cases", () => {
 	});
 
 	it("streaming file parser produces identical results to the string parser", async () => {
-		const { parseTranscriptFile } = await import("../src/transcript.js");
 		for (const name of [
 			"main-session.jsonl",
 			"interrupted-session.jsonl",
@@ -378,6 +385,22 @@ describe("parseTranscript — toolEvents (attribution raw material)", () => {
 		expect(parseTranscript(lines).toolEvents[0]?.resultChars).toBe(5);
 	});
 
+	it("keeps a tool name verbatim — sanitizing is the renderer's job", () => {
+		// The parser is the ingestion boundary, not the display boundary: it
+		// must not silently rewrite payloads (that would corrupt attribution
+		// keys). Neutralizing escapes happens in displayText at render time.
+		const hostile = `Read${String.fromCharCode(0x1b)}[31m\nFAKE`;
+		const lines = entry({
+			type: "assistant",
+			uuid: "a1",
+			message: {
+				id: "m1",
+				content: [{ type: "tool_use", id: "t1", name: hostile, input: {} }],
+			},
+		});
+		expect(parseTranscript(lines).toolEvents[0]?.name).toBe(hostile);
+	});
+
 	it("still records a tool_use that has no id (input only)", () => {
 		const lines = entry({
 			type: "assistant",
@@ -390,5 +413,304 @@ describe("parseTranscript — toolEvents (attribution raw material)", () => {
 		const events = parseTranscript(lines).toolEvents;
 		expect(events).toHaveLength(1);
 		expect(events[0]?.resultChars).toBe(0);
+	});
+});
+
+/**
+ * Totality: a transcript is written by another program and can be truncated,
+ * corrupt, or actively hostile. Every case below must produce a ParsedRun —
+ * never a throw, since a throw here is a broken user session.
+ */
+describe("parseTranscript totality (hostile and malformed input)", () => {
+	const NUL = String.fromCharCode(0);
+	const ESC = String.fromCharCode(0x1b);
+
+	it("counts a truncated final line as malformed and keeps earlier entries", () => {
+		const good = entry({
+			type: "assistant",
+			uuid: "a1",
+			message: {
+				id: "m1",
+				content: [{ type: "text", text: "ok" }],
+				usage: { input_tokens: 11, output_tokens: 2 },
+			},
+		});
+		// No trailing newline, JSON cut mid-object — how a killed process
+		// leaves the file.
+		const run = parseTranscript(
+			`${good}\n{"type":"assistant","message":{"id":"m2","usage":{"input_to`,
+		);
+		expect(run.malformedLines).toBe(1);
+		expect(run.entryCount).toBe(1);
+		expect(run.inputTokens).toBe(11);
+	});
+
+	it("treats valid JSON of the wrong shape as malformed", () => {
+		for (const line of ["[1,2,3]", "42", '"a string"', "null", "true", "{}"]) {
+			const run = parseTranscript(line);
+			expect(run.malformedLines, line).toBe(1);
+			expect(run.entryCount, line).toBe(0);
+		}
+	});
+
+	it("ignores a usage object of the wrong shape without dropping the entry", () => {
+		for (const usage of [[1, 2], "lots", 7, true]) {
+			const run = parseTranscript(
+				entry({
+					type: "assistant",
+					uuid: "a1",
+					message: { id: "m1", usage, content: [{ type: "text", text: "ok" }] },
+				}),
+			);
+			expect(run.malformedLines, JSON.stringify(usage)).toBe(0);
+			expect(run.entryCount, JSON.stringify(usage)).toBe(1);
+			expect(run.inputTokens, JSON.stringify(usage)).toBe(0);
+			expect(run.completed, JSON.stringify(usage)).toBe(true);
+		}
+	});
+
+	it("defaults every counter to zero when usage fields are missing or renamed", () => {
+		const run = parseTranscript(
+			entry({
+				type: "assistant",
+				uuid: "a1",
+				// A future/renamed schema must degrade to zero, never to NaN.
+				message: { id: "m1", usage: { inputTokens: 500, outputTokens: 40 } },
+			}),
+		);
+		expect(run).toMatchObject({
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheCreation: 0,
+			cacheRead: 0,
+			malformedLines: 0,
+		});
+	});
+
+	it("rejects negative, fractional, and out-of-range counters as zero", () => {
+		const run = parseTranscript(
+			entry({
+				type: "assistant",
+				uuid: "a1",
+				message: {
+					id: "m1",
+					usage: {
+						input_tokens: -5,
+						output_tokens: 1.5,
+						cache_creation_input_tokens: 1e21,
+						cache_read_input_tokens: 12,
+					},
+				},
+			}),
+		);
+		expect(run).toMatchObject({
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheCreation: 0,
+			cacheRead: 12,
+		});
+	});
+
+	it("keeps the last usage seen for a repeated message id (dedup semantics)", () => {
+		// Locked deliberately: Claude Code repeats the same `usage` object on
+		// every streamed entry of one API message, and the final entry carries
+		// the complete counts. Changing this changes every frozen baseline.
+		const run = parseTranscript(
+			[
+				entry({
+					type: "assistant",
+					uuid: "a1",
+					message: { id: "m1", usage: { input_tokens: 5, output_tokens: 1 } },
+				}),
+				entry({
+					type: "assistant",
+					uuid: "a2",
+					message: { id: "m1", usage: { input_tokens: 9, output_tokens: 3 } },
+				}),
+			].join("\n"),
+		);
+		expect(run.inputTokens).toBe(9);
+		expect(run.outputTokens).toBe(3);
+	});
+
+	it("survives an enormous single line", () => {
+		const huge = entry({
+			type: "assistant",
+			uuid: "a1",
+			message: {
+				id: "m1",
+				usage: { input_tokens: 3 },
+				content: [{ type: "text", text: "z".repeat(4_000_000) }],
+			},
+		});
+		expect(huge.length).toBeGreaterThan(4_000_000);
+		const run = parseTranscript(huge);
+		expect(run.entryCount).toBe(1);
+		expect(run.inputTokens).toBe(3);
+		expect(run.completed).toBe(true);
+	});
+
+	it("survives deeply nested JSON without throwing", () => {
+		const deep = `{"type":"assistant","uuid":"a1","message":{"id":"m1","content":${"[".repeat(20_000)}${"]".repeat(20_000)}}}`;
+		expect(() => parseTranscript(deep)).not.toThrow();
+	});
+
+	it("survives raw NUL and escape bytes inside JSON strings", () => {
+		const run = parseTranscript(
+			entry({
+				type: "assistant",
+				uuid: "a1",
+				message: {
+					id: "m1",
+					usage: { input_tokens: 4 },
+					content: [{ type: "text", text: `a${NUL}b${ESC}[2Jc` }],
+				},
+			}),
+		);
+		expect(run.entryCount).toBe(1);
+		expect(run.inputTokens).toBe(4);
+	});
+
+	it("cannot pollute Object.prototype through a tool input", () => {
+		const line = `{"type":"assistant","uuid":"a1","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"__proto__":{"polluted":"yes"},"constructor":{"prototype":{"polluted":"yes"}}}}]}}`;
+		const run = parseTranscript(line);
+		expect(run.toolCalls).toBe(1);
+		expect(({} as Record<string, unknown>).polluted ?? null).toBeNull();
+		expect(Object.prototype).not.toHaveProperty("polluted");
+	});
+
+	it("parses CRLF input identically to LF", () => {
+		const lines = [
+			entry({ type: "user", uuid: "u1", message: { content: "go" } }),
+			entry({
+				type: "assistant",
+				uuid: "a1",
+				message: {
+					id: "m1",
+					usage: { input_tokens: 6, output_tokens: 2 },
+					content: [{ type: "text", text: "done" }],
+				},
+			}),
+		];
+		expect(parseTranscript(lines.join("\r\n"))).toEqual(
+			parseTranscript(lines.join("\n")),
+		);
+	});
+
+	it("drops the whole content array when one block is malformed (known limit)", () => {
+		// Documented tolerance boundary: content is validated as a unit, so a
+		// single wrong-typed block (here a numeric tool_use id) costs the
+		// entry's tool calls and text. Token counters are unaffected — usage
+		// is parsed independently of content.
+		const run = parseTranscript(
+			entry({
+				type: "assistant",
+				uuid: "a1",
+				message: {
+					id: "m1",
+					usage: { input_tokens: 5, output_tokens: 1 },
+					content: [
+						{ type: "tool_use", id: 5, name: "Bash", input: {} },
+						{ type: "text", text: "hi" },
+					],
+				},
+			}),
+		);
+		expect(run.inputTokens).toBe(5);
+		expect(run.toolCalls).toBe(0);
+		expect(run.toolEvents).toHaveLength(0);
+		expect(run.completed).toBe(false);
+		expect(run.malformedLines).toBe(0);
+	});
+});
+
+describe("parseTranscriptFile IO edges", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-transcript-"));
+	});
+
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	const validLine = entry({
+		type: "assistant",
+		uuid: "a1",
+		message: {
+			id: "m1",
+			usage: { input_tokens: 21, output_tokens: 2 },
+			content: [{ type: "text", text: "ok" }],
+		},
+	});
+
+	function write(name: string, content: string | Uint8Array): string {
+		const path = join(dir, name);
+		writeFileSync(path, content);
+		return path;
+	}
+
+	it("returns zeros for an empty file", async () => {
+		const run = await parseTranscriptFile(write("empty.jsonl", ""));
+		expect(run).toMatchObject({
+			entryCount: 0,
+			malformedLines: 0,
+			inputTokens: 0,
+			completed: false,
+		});
+	});
+
+	it("counts non-UTF8 bytes as malformed without losing the good lines", async () => {
+		const bytes = Buffer.concat([
+			Buffer.from([0xff, 0xfe, 0x80, 0x9f]),
+			Buffer.from("\n", "utf8"),
+			Buffer.from(validLine, "utf8"),
+			Buffer.from("\n", "utf8"),
+		]);
+		const run = await parseTranscriptFile(write("binary.jsonl", bytes));
+		expect(run.malformedLines).toBe(1);
+		expect(run.entryCount).toBe(1);
+		expect(run.inputTokens).toBe(21);
+	});
+
+	it("follows a symlink to the real transcript", async () => {
+		const target = write("real.jsonl", `${validLine}\n`);
+		const link = join(dir, "link.jsonl");
+		symlinkSync(target, link);
+		expect(await parseTranscriptFile(link)).toEqual(
+			await parseTranscriptFile(target),
+		);
+	});
+
+	it("settles either way when the file vanishes mid-read", async () => {
+		const path = write(
+			"vanishing.jsonl",
+			`${Array.from({ length: 5_000 }, () => validLine).join("\n")}\n`,
+		);
+		const pending = parseTranscriptFile(path);
+		unlinkSync(path);
+		// Racy by nature: the open may lose to the unlink (ENOENT) or win and
+		// keep reading the still-open inode. Both are acceptable; hanging, or
+		// resolving with a half-built run that then gets recorded as real
+		// token spend, is not. One message id means usage dedupes to a single
+		// count however much was read.
+		const [outcome] = await Promise.allSettled([pending]);
+		if (outcome?.status === "fulfilled") {
+			expect(outcome.value.inputTokens).toBe(21);
+			expect(outcome.value.entryCount).toBeGreaterThan(0);
+		} else {
+			expect(outcome?.reason).toBeInstanceOf(Error);
+		}
+	});
+
+	it("rejects (never hangs) on a missing file", async () => {
+		await expect(
+			parseTranscriptFile(join(dir, "does-not-exist.jsonl")),
+		).rejects.toBeInstanceOf(Error);
+	});
+
+	it("rejects (never hangs) when the path is a directory", async () => {
+		await expect(parseTranscriptFile(dir)).rejects.toBeInstanceOf(Error);
 	});
 });

@@ -1,5 +1,7 @@
 # Spec: bring-your-own-agent (BYOA)
 
+**Status: SHIPPED in v0.36.0** (`src/registry.ts`).
+
 ## Why
 The four domain agents (frontend/backend/sql/testing) are a hardcoded tuple
 (`DOMAIN_AGENTS`, src/types.ts) validated in ~76 call sites. An outside user

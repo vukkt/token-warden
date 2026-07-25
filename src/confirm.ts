@@ -34,7 +34,9 @@ export type ConfirmVerdict =
 	| "nothing-to-confirm";
 
 export interface FixtureSide {
-	/** Active rules with a receipt, best delta first. */
+	/** How many rules are currently active. Counts every active rule, including
+	 * any that carry no receipt yet and so contribute nothing to
+	 * `expectedSavingsPerRun`. */
 	activeRules: number;
 	/** Sum of the positive measured deltas of active rules (tokens/run the
 	 * fixture says the current memory earns). */
