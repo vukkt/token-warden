@@ -28,13 +28,10 @@ import {
 	type ReceiptRow,
 	type WardenDb,
 } from "./db.js";
+import { formatNumber as fmt } from "./format.js";
 import { blendedDollarsPerToken, priceFor } from "./pricing.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
-
-function fmt(n: number): string {
-	return n.toLocaleString("en-US");
-}
 
 /** Savings as a multiple of context rent (the rule must clear 2×). */
 function roi(delta: number | null, contextCost: number): string {

@@ -26,6 +26,7 @@ import {
 	realWorkTotalsByVersion,
 	type WardenDb,
 } from "./db.js";
+import { usd } from "./format.js";
 import { blendedDollarsPerToken, type Price, priceFor } from "./pricing.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
 import { sessionsPerWeek } from "./stats.js";
@@ -214,9 +215,6 @@ export function renderProjection(p: Projection): string {
 	}
 	return lines.join("\n");
 }
-
-const usd = (n: number): string =>
-	n >= 0.01 || n <= -0.01 ? `$${n.toFixed(2)}` : `$${n.toFixed(5)}`;
 
 /** Render a priced report. `spw` is only a label for the weekly total (which
  * each RuleCost already carries); it is injectable so the rendered figures are

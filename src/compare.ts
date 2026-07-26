@@ -22,9 +22,9 @@ import {
 	type TaskSummary,
 } from "./bench.js";
 import { getRunBySession, type WardenDb } from "./db.js";
+import { formatNumber as fmt, pctChange } from "./format.js";
 import { displayText } from "./sanitize.js";
 import { assessDelta, type DeltaAssessment } from "./select.js";
-import { pctChange } from "./status.js";
 
 /** One golden-task run reduced to the token measures comparison needs. */
 export interface RunDatum {
@@ -290,10 +290,6 @@ export function verdictLine(cmp: Comparison): string {
 		return `${c} used ${cmp.pct} processing tokens vs ${b} on the ${subject} suite (all comparable tasks completed) — cheaper for this workload on token count.`;
 	}
 	return `${c} used ${cmp.pct} processing tokens vs ${b} on the ${subject} suite — more expensive for this workload on token count.`;
-}
-
-function fmt(n: number): string {
-	return n.toLocaleString("en-US");
 }
 
 /** Render a millisecond duration as seconds with one decimal, e.g. "12.3s". */

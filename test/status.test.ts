@@ -12,12 +12,12 @@ import {
 	upsertRun,
 	type WardenDb,
 } from "../src/db.js";
+import { pctChange } from "../src/format.js";
 import { verdictWithReason } from "../src/select.js";
 import {
 	formatRealWorkCurve,
 	formatStatus,
 	gatherStatus,
-	pctChange,
 	renderStatus,
 	type StatusData,
 	suiteComparison,

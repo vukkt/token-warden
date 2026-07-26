@@ -31,6 +31,7 @@ import {
 	openDb,
 	type WardenDb,
 } from "./db.js";
+import { formatRounded as fmt } from "./format.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
 import { confidenceZ, effectiveRent, sampleVariance } from "./stats.js";
 
@@ -276,10 +277,6 @@ export function parsePowerArgs(argv: string[]): PowerArgs {
 		else throw new Error(`unknown flag: ${flag}`);
 	}
 	return args;
-}
-
-function fmt(n: number): string {
-	return Math.round(n).toLocaleString("en-US");
 }
 
 export interface RenderOpts {

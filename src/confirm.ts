@@ -23,6 +23,7 @@ import {
 	openDb,
 	type ReceiptRow,
 } from "./db.js";
+import { formatRounded as fmt } from "./format.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
 
 const DEFAULT_MIN_N = 5;
@@ -128,10 +129,6 @@ export function confirmAgent(
 				cohort,
 			};
 	}
-}
-
-function fmt(n: number): string {
-	return Math.round(n).toLocaleString("en-US");
 }
 
 export function renderConfirmation(c: Confirmation): string {

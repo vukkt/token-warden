@@ -32,6 +32,7 @@ import {
 	toolCostRollup,
 	type WardenDb,
 } from "./db.js";
+import { formatNumber as fmt } from "./format.js";
 import { displayText } from "./sanitize.js";
 import { parseTranscript } from "./transcript.js";
 import type { RawToolEvent } from "./types.js";
@@ -152,10 +153,6 @@ export function attributeTranscript(jsonlText: string): AttributionReport {
 		totalChars += chars;
 	}
 	return { totalCalls, totalChars, costs, byKind };
-}
-
-function fmt(n: number): string {
-	return n.toLocaleString("en-US");
 }
 
 function pct(part: number, whole: number): string {

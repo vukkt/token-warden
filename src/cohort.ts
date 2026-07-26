@@ -31,6 +31,7 @@ import {
 	type VersionedTotal,
 	type WardenDb,
 } from "./db.js";
+import { formatRounded as fmt } from "./format.js";
 import { knownAgents } from "./registry.js";
 
 /** Minimum completed sessions per cohort before a verdict is trustworthy. */
@@ -212,10 +213,6 @@ export function assessAgentCohorts(
 		project: project ?? null,
 		assessment: assessCohorts(stats, minN),
 	};
-}
-
-function fmt(n: number): string {
-	return Math.round(n).toLocaleString("en-US");
 }
 
 export function renderCohort(

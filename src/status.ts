@@ -40,6 +40,7 @@ import {
 	toolCostRollup,
 	type WardenDb,
 } from "./db.js";
+import { formatNumber as fmt, pctChange } from "./format.js";
 import { knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
 
@@ -52,13 +53,6 @@ const TOOL_COST_LIMIT = 8;
 const EVICTION_LIMIT = 5;
 
 /** Signed percent change of current vs baseline, e.g. "-5.7%". */
-export function pctChange(current: number, baseline: number): string {
-	if (baseline === 0) return "n/a";
-	const change = ((current - baseline) / baseline) * 100;
-	const sign = change > 0 ? "+" : "";
-	return `${sign}${change.toFixed(1)}%`;
-}
-
 export interface SuiteComparison {
 	taskCount: number;
 	currentTotal: number;
@@ -284,10 +278,6 @@ export function gatherStatus(db: WardenDb): StatusData {
  * Formatting — pure.
  * ------------------------------------------------------------------ */
 
-function formatTokens(n: number): string {
-	return n.toLocaleString("en-US");
-}
-
 /** A measured delta with an explicit sign, or "n/a" when never measured
  * (protected human-authored rules are active without a token measurement). */
 function signedDelta(delta: number | null): string {
@@ -298,9 +288,7 @@ function signedDelta(delta: number | null): string {
 /** "v0 48,770 (n=3) → v2 31,002 (n=5)  [-36.4% vs v0]" */
 export function formatRealWorkCurve(points: RealWorkPoint[]): string {
 	const sequence = points
-		.map(
-			(p) => `v${p.rulesetVersion} ${formatTokens(p.avgTokens)} (n=${p.runs})`,
-		)
+		.map((p) => `v${p.rulesetVersion} ${fmt(p.avgTokens)} (n=${p.runs})`)
 		.join(" → ");
 	const first = points[0];
 	const last = points[points.length - 1];
@@ -322,7 +310,7 @@ function summaryTable(agents: AgentSummary[]): string[] {
 		"----------|------------------|----------------------|---------------------------",
 		...agents.map(({ agent, runs, rules, suite }) => {
 			const suiteText = suite
-				? `${formatTokens(suite.currentTotal)} vs ${formatTokens(suite.run1Total)} (${pctChange(suite.currentTotal, suite.run1Total)}, best ${formatTokens(suite.bestTotal)})`
+				? `${fmt(suite.currentTotal)} vs ${fmt(suite.run1Total)} (${pctChange(suite.currentTotal, suite.run1Total)}, best ${fmt(suite.bestTotal)})`
 				: "no baselines";
 			const counts = `${rules.active}/${rules.candidate}/${rules.evicted}`;
 			return `${agent.padEnd(9)} | ${String(runs.real).padStart(6)} / ${String(runs.golden).padEnd(6)} | ${counts.padEnd(20)} | ${suiteText}`;
@@ -355,7 +343,7 @@ export function formatStatus(data: StatusData): string {
 			"Learning curve (avg completed golden-run tokens by day):",
 			data.curves.map((c) => {
 				const points = c.points
-					.map((p) => `${p.day}: ${formatTokens(p.avgTokens)} (n=${p.runs})`)
+					.map((p) => `${p.day}: ${fmt(p.avgTokens)} (n=${p.runs})`)
 					.join("  |  ");
 				return `  ${c.agent} (ruleset v${c.rulesetVersion}): ${points}`;
 			}),
@@ -402,7 +390,7 @@ export function formatStatus(data: StatusData): string {
 			"Real-work tokens by project:",
 			data.projects.map(
 				(usage) =>
-					`  ${displayText(usage.project ?? "(unknown)")} — ${usage.runs} session(s), ${formatTokens(usage.tokens)} tokens`,
+					`  ${displayText(usage.project ?? "(unknown)")} — ${usage.runs} session(s), ${fmt(usage.tokens)} tokens`,
 			),
 			"  none recorded",
 		),
@@ -415,7 +403,7 @@ export function formatStatus(data: StatusData): string {
 					c.kind === "builtin"
 						? c.label
 						: `${displayText(c.grp, 24)}/${c.label}`;
-				return `  ${displayText(c.kind, 12).padEnd(7)} ${displayText(where, 40).padEnd(40)} ≈${formatTokens(estTokens)} tok (${c.calls} call(s), ${c.sessions} session(s))`;
+				return `  ${displayText(c.kind, 12).padEnd(7)} ${displayText(where, 40).padEnd(40)} ≈${fmt(estTokens)} tok (${c.calls} call(s), ${c.sessions} session(s))`;
 			}),
 			"  none recorded yet",
 		),
