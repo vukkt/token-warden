@@ -33,7 +33,8 @@ import {
 	runSuite,
 } from "../src/bench.js";
 import { insertRule, openDb, type RuleRow } from "../src/db.js";
-import { assessDelta, effectiveRent } from "../src/select.js";
+import { assessDelta } from "../src/select.js";
+import { effectiveRent } from "../src/stats.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const AGENT = "sql";

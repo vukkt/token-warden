@@ -10,13 +10,12 @@ import {
 	assessDelta,
 	betweenTaskDofInflation,
 	mergeSummaries,
-	pooledVariance,
 	type RunAllocation,
 	type SuiteRunner,
-	sampleVariance,
 	selectForAgent,
 	withinTaskDofInflation,
 } from "../src/select.js";
+import { pooledVariance, sampleVariance } from "../src/stats.js";
 
 /** Deterministic LCG so the property sweeps below are reproducible — a flaky
  * statistical test is worse than no test. */

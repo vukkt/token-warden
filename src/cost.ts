@@ -28,14 +28,10 @@ import {
 } from "./db.js";
 import { blendedDollarsPerToken, type Price, priceFor } from "./pricing.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
+import { sessionsPerWeek } from "./stats.js";
 
 /** Average weeks per calendar month, for --months → weeks. */
 const WEEKS_PER_MONTH = 4.345;
-
-function sessionsPerWeek(): number {
-	const raw = Number(process.env.WARDEN_SESSIONS_PER_WEEK ?? 20);
-	return Number.isFinite(raw) && raw > 0 ? raw : 20;
-}
 
 export interface RuleCost {
 	ruleId: number;

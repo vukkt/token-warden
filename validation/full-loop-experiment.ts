@@ -31,7 +31,8 @@ import {
 } from "../src/bench.js";
 import { insertRule, openDb, type RuleRow, type RunRow } from "../src/db.js";
 import { buildPrompt, contextCost, parseRulesJson } from "../src/distill.js";
-import { assessDelta, effectiveRent } from "../src/select.js";
+import { assessDelta } from "../src/select.js";
+import { effectiveRent } from "../src/stats.js";
 import { digestTranscript } from "../src/transcript.js";
 
 const here = dirname(fileURLToPath(import.meta.url));

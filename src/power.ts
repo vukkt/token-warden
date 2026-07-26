@@ -32,7 +32,7 @@ import {
 	type WardenDb,
 } from "./db.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
-import { confidenceZ, effectiveRent, sampleVariance } from "./select.js";
+import { confidenceZ, effectiveRent, sampleVariance } from "./stats.js";
 
 /** One-sided normal quantiles for the planner's two power targets. */
 export const Z_POWER_80 = 0.8416;

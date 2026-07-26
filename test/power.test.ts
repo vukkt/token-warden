@@ -33,7 +33,7 @@ import {
 	Z_POWER_80,
 	Z_POWER_90,
 } from "../src/power.js";
-import { confidenceZ, effectiveRent } from "../src/select.js";
+import { confidenceZ, effectiveRent } from "../src/stats.js";
 
 /** Two-task suite with known variances: SE(n) = sqrt(250/n). */
 const NOISES: TaskNoise[] = [

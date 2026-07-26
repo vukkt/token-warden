@@ -17,13 +17,13 @@ import {
 import {
 	assessDelta,
 	compileActiveMemory,
-	effectiveRent,
 	memoryFilePath,
 	parseSelectArgs,
 	type SuiteRunner,
 	selectForAgent,
 	verdict,
 } from "../src/select.js";
+import { effectiveRent } from "../src/stats.js";
 
 function summary(
 	taskId: string,

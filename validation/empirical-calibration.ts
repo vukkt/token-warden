@@ -52,11 +52,10 @@ import { assertKnownAgent, knownAgents } from "../src/registry.js";
 import {
 	allocateTopUpRuns,
 	assessDelta,
-	confidenceZ,
-	effectiveRent,
 	mergeSummaries,
 	verdict,
 } from "../src/select.js";
+import { confidenceZ, effectiveRent } from "../src/stats.js";
 
 const DEFAULT_TRIALS = 2000;
 /** Permutation deals 2×runs distinct totals per trial, so pools of ≥4 qualify

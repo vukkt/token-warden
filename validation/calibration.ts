@@ -19,7 +19,8 @@
  *   npx tsx validation/calibration.ts
  */
 import { summarizeTask, type TaskSummary } from "../src/bench.js";
-import { assessDelta, effectiveRent, verdict } from "../src/select.js";
+import { assessDelta, verdict } from "../src/select.js";
+import { effectiveRent } from "../src/stats.js";
 
 const BASELINE = 60_000; // representative golden-session token cost
 const RENT = 25; // representative rule context rent (tokens)
