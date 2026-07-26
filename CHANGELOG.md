@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased
+
+The deferred shared-module extractions from v0.40.0, plus a correction to that
+release's notes.
+
+**CORRECTION to v0.40.0.** Those notes claimed the SQLITE_BUSY session-loss bug
+was fixed. It was not. The machinery (`isBusyError`, `withBusyRetry`,
+`openHookDb`, the DROP marker) and its tests were written, but the interrupted
+agent never connected any of it: `main()` still called plain `openDb()` and
+`withBusyRetry` had zero call sites. Biome's unused-variable warning on the
+orphaned helpers is what surfaced it. It is wired now, and verified the way it
+should have been the first time — hold a write lock in a second process,
+confirm it is held, fire the Stop hook: exit 0 and the row IS recorded, where
+the pre-fix reproduction lost the session permanently.
+
+**Extractions.** Six modules, each a pure move with unchanged bodies:
+
+- `src/rules.ts` — the rule vocabulary: what a body IS (`ruleBodySchema`,
+  `hasForbiddenChar`), what it COSTS (`contextCost`), when two are the same rule
+  (`trigramSimilarity`). Every path that can put a rule in the ledger now shares
+  one definition, which is what stops the drift that let the compression
+  rewriter accept bidi overrides the distiller rejected.
+- `src/model-call.ts` — the `claude -p --output-format json` envelope.
+- `src/stats.ts` — estimators and gate parameters. This removes a real hazard:
+  `sessionsPerWeek()` existed as two byte-identical copies, one feeding the
+  2x-rent bar and one feeding the dollar projection, which had to agree by
+  construction with nothing enforcing it.
+- `src/format.ts` — `fmt` was defined seven times across six modules under one
+  name with TWO contracts (rounded in three, unrounded in four), so the same
+  mean rendered differently depending on which file you were in. The contracts
+  are named separately rather than unified, because unifying them would silently
+  change published figures.
+- `src/memory.ts` — the single writer of agent memory.
+- `src/cli.ts` — the entry boundary; `runCli` replaces a shim copy-pasted 25
+  times. The four fail-open hooks deliberately keep their own: "exit 0 whatever
+  happens" is different knowledge from "report and exit 1".
+
+**Measured effect:** `select.ts` in-degree 4 -> 1 and 1875 -> 1684 lines;
+`distill.ts` in-degree 7 -> 1; CLI shims 25 -> 6. Both were hubs by accident.
+
+**Behaviour preservation** on the calibrated path was verified, not asserted: a
+differential harness fingerprinted `verdict`, `verdictWithReason`,
+`effectiveRent`, `confidenceZ`, `sampleVariance`, `pooledVariance` and
+`assessDelta` over 300 randomized multi-task scenarios swept across
+`WARDEN_CONFIDENCE_Z` x `WARDEN_SESSIONS_PER_WEEK` — 10,960 outputs, SHA-256
+identical before and after.
+
+Tests 1023 -> 1029 (the count tracks file count, since source-hygiene generates
+one assertion per source file). Coverage 96.85 lines / 89.10 branches / 97.14
+functions / 96.00 statements, floor unchanged at 96/96/96/89.
+
+Still open: `withDb` (23 hand-written open/close pairs). Written during this
+pass and removed before commit rather than shipped unused — it rewrites the body
+of every call site, so it needs its own verification rather than riding along.
+
 ## v0.40.0 — 2026-07-25
 
 A hardening pass over the whole repository, run as a 21-agent audit (10 writers

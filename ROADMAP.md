@@ -56,23 +56,20 @@ what remains is running the experiments and recording their results:
 
 ## 3. Engine improvements
 
-- **Extract the shared modules (deferred from v0.40.0).** The v0.40.0 audit found
-  the same knowledge duplicated across many sites: the `invokedDirectly` CLI shim
-  25x, `openDb`/`finally db.close()` 23x, hand-rolled `parse*Args` 20x, `mean`/
-  `median`/sum-reduce in 6 modules, `sessionsPerWeek()` defined twice (it feeds
-  both the keep/evict bar and the dollar projection, so the two copies must agree
-  by construction), and number formatters under one name with two different
-  rounding contracts. The target shape is `src/stats.ts` (estimators shared by
-  `select.ts` and `compare.ts`), `src/format.ts`, `src/rules.ts` (`contextCost`,
-  `trigramSimilarity`, `ruleBodySchema` — today `distill.ts` is a hub only
-  because four modules import text helpers from it), `src/memory.ts`
-  (`compileActiveMemory`, the single writer of agent memory), and `src/cli.ts`.
-  Deliberately held back from v0.40.0: the extractions are cross-cutting by
-  nature and would have collided with the per-file ownership that kept that pass
-  conflict-free. Keep the four fail-open hook entrypoints on a separate
-  `runHook()` boundary — their exit-0 contract is different knowledge from the
-  CLI shim's, and merging the two would be a regression.
-
+- **Extract the shared modules — SHIPPED.** `src/rules.ts` (rule vocabulary),
+  `src/model-call.ts` (the `claude -p` envelope), `src/stats.ts` (estimators and
+  gate parameters), `src/format.ts` (one name per formatting contract),
+  `src/memory.ts` (the single writer of agent memory) and `src/cli.ts` (the
+  entry boundary). Measured effect: `select.ts` in-degree 4 -> 1 and 1875 ->
+  1684 lines, `distill.ts` in-degree 7 -> 1, CLI shims 25 -> 6. Both hubs were
+  accidents — four modules wanted pure text helpers from the distiller, three
+  wanted one formatter or three estimators from the selector.
+  Open: `withDb` (open + `finally db.close()`, 23 hand-written copies). It was
+  written during this pass and removed before commit rather than shipped
+  unused, because unlike the entry shim it rewrites the BODY of every call site
+  and so needs its own verification rather than riding along on a mechanical
+  trailer replacement. The four fail-open hooks must keep their own boundary:
+  "exit 0 whatever happens" is different knowledge from "report and exit 1".
 - **Cut golden-suite variance further.** Real runs varied >25%, burying modest
   savings under noise. Shipped in v0.34.0: `/warden-health` now ranks golden
   tasks by run-to-run variance so the noisiest are named with evidence. Also
