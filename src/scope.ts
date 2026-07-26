@@ -29,8 +29,8 @@ import {
 	setRuleScope,
 	type WardenDb,
 } from "./db.js";
-import { hasForbiddenChar, MAX_RULE_BODY_CHARS } from "./distill.js";
 import { assertKnownAgent } from "./registry.js";
+import { hasForbiddenChar, MAX_RULE_BODY_CHARS } from "./rules.js";
 import { displayText } from "./sanitize.js";
 import { compileActiveMemory } from "./select.js";
 

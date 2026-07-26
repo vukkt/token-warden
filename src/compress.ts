@@ -27,16 +27,18 @@ import {
 	type WardenDb,
 } from "./db.js";
 import {
-	contextCost,
 	distillModel,
 	MAX_MODEL_REPLY_CHARS,
-	MIN_RULE_BODY_CHARS,
 	parseClaudeEnvelope,
-	ruleBodySchema,
 	stripJsonFence,
-	trigramSimilarity,
-} from "./distill.js";
+} from "./model-call.js";
 import { assertKnownAgent } from "./registry.js";
+import {
+	contextCost,
+	MIN_RULE_BODY_CHARS,
+	ruleBodySchema,
+	trigramSimilarity,
+} from "./rules.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 

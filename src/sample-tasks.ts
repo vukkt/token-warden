@@ -22,8 +22,8 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { trigramSimilarity } from "./distill.js";
 import { assertKnownAgent } from "./registry.js";
+import { trigramSimilarity } from "./rules.js";
 import { displayText } from "./sanitize.js";
 
 /** Two prompts within this trigram similarity are treated as the same task. */

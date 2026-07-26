@@ -33,12 +33,23 @@ import {
 	recentQuestionsFrom,
 	type WardenDb,
 } from "./db.js";
+import {
+	distillModel,
+	MAX_MODEL_REPLY_CHARS,
+	parseClaudeEnvelope,
+	stripJsonFence,
+} from "./model-call.js";
 import { knownAgents } from "./registry.js";
+import {
+	contextCost,
+	ruleBodySchema,
+	SIMILARITY_THRESHOLD,
+	trigramSimilarity,
+} from "./rules.js";
 import { digestTranscript } from "./transcript.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const SIMILARITY_THRESHOLD = 0.85;
 const MIN_PRIOR_RUNS = 5;
 /** Most recent evicted rules fed back into the distiller prompt as measured
  * negative examples. Bounded so the feedback block cannot grow without limit
@@ -48,21 +59,6 @@ const MAX_EVICTED_FEEDBACK = 8;
 const ROLLING_WINDOW = 50;
 const MAX_DIGEST_CHARS = 8000;
 const DISTILL_TIMEOUT_MS = 2 * 60 * 1000;
-/**
- * Model for proposing rules — used by the distiller and by the compression
- * rewriter. Defaults to sonnet: candidate quality is the loop's bottleneck
- * (haiku proposed narrow, low-impact rules — see FINDINGS.md), and a better
- * rule is worth far more than the extra cost of an infrequent call. Override
- * with TOKEN_WARDEN_DISTILL_MODEL=haiku to economize.
- *
- * Read per call, not frozen at module load: every other config value in the
- * repo is read per call, and a module-level const silently ignores any
- * process.env set after import — which made the override untestable and made
- * import order decide the model.
- */
-export function distillModel(): string {
-	return process.env.TOKEN_WARDEN_DISTILL_MODEL ?? "sonnet";
-}
 /** Hard ceiling on samples per distillation and on candidates inserted per
  * batch — the selector measures at most 3 candidates per invocation, so
  * proposing more than 3 would only queue unmeasured rules. */
@@ -151,122 +147,7 @@ export function alreadyDistilled(db: WardenDb, runId: number): boolean {
 	return (row?.n ?? 0) > 0;
 }
 
-function characterTrigrams(text: string): Set<string> {
-	const normalized = text
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, " ")
-		.trim();
-	const padded = `  ${normalized} `;
-	const grams = new Set<string>();
-	for (let i = 0; i + 3 <= padded.length; i++) {
-		grams.add(padded.slice(i, i + 3));
-	}
-	return grams;
-}
-
-/** Jaccard similarity over character trigrams, in [0, 1]. */
-export function trigramSimilarity(a: string, b: string): number {
-	const gramsA = characterTrigrams(a);
-	const gramsB = characterTrigrams(b);
-	if (gramsA.size === 0 || gramsB.size === 0) {
-		return a.trim() === b.trim() ? 1 : 0;
-	}
-	let intersection = 0;
-	for (const gram of gramsA) {
-		if (gramsB.has(gram)) intersection++;
-	}
-	return intersection / (gramsA.size + gramsB.size - intersection);
-}
-
-/** Shortest and longest acceptable rule body, in characters. The floor keeps
- * a truncated fragment from becoming a rule; the ceiling bounds rent. */
-export const MIN_RULE_BODY_CHARS = 10;
-export const MAX_RULE_BODY_CHARS = 200;
-
-/**
- * Code-point ranges (inclusive) a rule body must never contain.
- *
- * A body is rendered into the compiled MEMORY.md that goes into the agent's
- * prompt, into log lines, into the status report, and back into this very
- * prompt as feedback. So anything that can fake structure, hide its real
- * content, or corrupt on write is rejected at the boundary rather than
- * sanitized: a rule the model cannot state in plain printable text is not a
- * rule worth spending a benchmark on.
- *
- * Expressed as numeric ranges rather than a regex literal on purpose — the
- * characters guarded against are exactly the ones that would be invisible,
- * or unrepresentable, in this source file.
- */
-const FORBIDDEN_BODY_RANGES: readonly (readonly [number, number])[] = [
-	// C0 controls: newline (a body must stay one line), tab, ANSI ESC.
-	[0x00, 0x1f],
-	// DEL plus the C1 control block.
-	[0x7f, 0x9f],
-	// Zero-width space/non-joiner/joiner and the LTR/RTL marks.
-	[0x200b, 0x200f],
-	// LINE SEPARATOR / PARAGRAPH SEPARATOR: real line terminators to JS and
-	// to many renderers, so they fake structure exactly as a newline would.
-	[0x2028, 0x2029],
-	// Bidi embeddings and overrides, and bidi isolates (Trojan Source): the
-	// rule a human reviews in the status report would differ from the rule
-	// the agent is actually given.
-	[0x202a, 0x202e],
-	[0x2066, 0x2069],
-	// Surrogate code units. Unpaired ones corrupt when written to MEMORY.md;
-	// paired ones are astral-plane characters, which for a one-sentence
-	// English efficiency rule means emoji — banned project-wide.
-	[0xd800, 0xdfff],
-	// ZERO WIDTH NO-BREAK SPACE / BOM: invisible, and it inflates rent.
-	[0xfeff, 0xfeff],
-	// REPLACEMENT CHARACTER: the reply was not valid UTF-8, so the text is
-	// already corrupt and must not become a rule.
-	[0xfffd, 0xfffd],
-];
-
-/** True when `body` contains any character a rule body may not carry. */
-export function hasForbiddenChar(body: string): boolean {
-	for (let i = 0; i < body.length; i++) {
-		const code = body.charCodeAt(i);
-		for (const [low, high] of FORBIDDEN_BODY_RANGES) {
-			if (code >= low && code <= high) return true;
-		}
-	}
-	return false;
-}
-
-/**
- * The single definition of a well-formed rule body: one trimmed, printable,
- * length-bounded line. Shared with the compression rewriter so the two
- * proposal paths can never drift on what counts as a valid rule.
- */
-export const ruleBodySchema = z
-	.string()
-	.trim()
-	.min(MIN_RULE_BODY_CHARS)
-	.max(MAX_RULE_BODY_CHARS)
-	.refine((body) => !hasForbiddenChar(body), {
-		message:
-			"rule body must be a single printable line (no control, zero-width, bidi, or astral characters)",
-	});
-
 const rulesSchema = z.array(z.object({ body: ruleBodySchema })).max(2);
-
-/**
- * Hard ceiling on a model reply we are willing to run JSON.parse and two
- * regex passes over. The largest valid reply is two 200-character bodies, so
- * anything at this scale is garbage (or a 16 MB stdout buffer) and parsing it
- * only burns CPU on untrusted input.
- */
-export const MAX_MODEL_REPLY_CHARS = 64_000;
-
-/** Strip a stray markdown code fence the model wrapped its JSON in. The fence
- * is tolerated; nothing inside it is. */
-export function stripJsonFence(text: string): string {
-	return text
-		.trim()
-		.replace(/^```(?:json)?\s*/i, "")
-		.replace(/\s*```$/, "");
-}
 
 /**
  * Parse the model's reply into rules. Strict: must be a JSON array of 0–2
@@ -284,62 +165,6 @@ export function parseRulesJson(text: string): { body: string }[] | null {
 	}
 	const result = rulesSchema.safeParse(raw);
 	return result.success ? result.data : null;
-}
-
-/** The `claude -p --output-format json` envelope, validated at the boundary.
- * Unknown fields are tolerated (the CLI adds them over time); the shape we
- * depend on is not. */
-const claudeEnvelopeSchema = z.looseObject({
-	result: z.string().optional(),
-	is_error: z.boolean().optional(),
-});
-
-export type EnvelopeParse =
-	| { ok: true; result: string }
-	| { ok: false; reason: string };
-
-/**
- * Validate a headless `claude` stdout envelope and extract its `result` text.
- *
- * Every caller previously did `JSON.parse(stdout).result`, which crashes on a
- * bare `null`/`true`/`"str"` payload (all valid JSON) and silently treats the
- * CLI's own error envelope as a model answer. Failing closed with a reason is
- * the contract: the callers log it and drop the sample, never retry.
- */
-export function parseClaudeEnvelope(stdout: string | undefined): EnvelopeParse {
-	if (typeof stdout !== "string" || stdout.trim() === "") {
-		return { ok: false, reason: "stdout was empty" };
-	}
-	if (stdout.length > MAX_MODEL_REPLY_CHARS) {
-		return {
-			ok: false,
-			reason: `stdout was ${stdout.length} chars, over the ${MAX_MODEL_REPLY_CHARS} cap`,
-		};
-	}
-	let raw: unknown;
-	try {
-		raw = JSON.parse(stdout);
-	} catch {
-		return {
-			ok: false,
-			reason: `stdout was not JSON. head: ${stdout.slice(0, 200)}`,
-		};
-	}
-	const envelope = claudeEnvelopeSchema.safeParse(raw);
-	if (!envelope.success) {
-		return { ok: false, reason: "stdout JSON was not a result envelope" };
-	}
-	if (envelope.data.is_error === true) {
-		return {
-			ok: false,
-			reason: `claude reported an error: ${(envelope.data.result ?? "").slice(0, 200)}`,
-		};
-	}
-	return { ok: true, result: envelope.data.result ?? "" };
-}
-
-export function contextCost(body: string): number {
-	return Math.ceil(body.length / 4);
 }
 
 /** An evicted rule reduced to what the distiller needs to learn from it. */

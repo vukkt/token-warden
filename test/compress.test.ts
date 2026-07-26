@@ -39,7 +39,8 @@ import {
 	type RuleRow,
 	type WardenDb,
 } from "../src/db.js";
-import { MAX_MODEL_REPLY_CHARS, parseRulesJson } from "../src/distill.js";
+import { parseRulesJson } from "../src/distill.js";
+import { MAX_MODEL_REPLY_CHARS } from "../src/model-call.js";
 
 const spawnSyncMock = spawnSync as unknown as MockInstance;
 

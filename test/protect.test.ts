@@ -13,8 +13,8 @@ import {
 	setRuleProtected,
 	type WardenDb,
 } from "../src/db.js";
-import { MAX_RULE_BODY_CHARS } from "../src/distill.js";
 import { main, parseProtectArgs, runProtect } from "../src/protect.js";
+import { MAX_RULE_BODY_CHARS } from "../src/rules.js";
 
 describe("parseProtectArgs", () => {
 	it("requires exactly one action", () => {

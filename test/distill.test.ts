@@ -11,17 +11,21 @@ import {
 } from "../src/db.js";
 import {
 	buildPrompt,
-	contextCost,
-	hasForbiddenChar,
-	MAX_MODEL_REPLY_CHARS,
 	p75,
-	parseClaudeEnvelope,
 	parseDistillArgs,
 	parseRulesJson,
 	shouldDistill,
-	stripJsonFence,
-	trigramSimilarity,
 } from "../src/distill.js";
+import {
+	MAX_MODEL_REPLY_CHARS,
+	parseClaudeEnvelope,
+	stripJsonFence,
+} from "../src/model-call.js";
+import {
+	contextCost,
+	hasForbiddenChar,
+	trigramSimilarity,
+} from "../src/rules.js";
 import { digestTranscript } from "../src/transcript.js";
 
 describe("buildPrompt", () => {

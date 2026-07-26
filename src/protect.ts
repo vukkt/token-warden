@@ -31,8 +31,8 @@ import {
 	setRuleProtected,
 	type WardenDb,
 } from "./db.js";
-import { contextCost, ruleBodySchema } from "./distill.js";
 import { assertKnownAgent } from "./registry.js";
+import { contextCost, ruleBodySchema } from "./rules.js";
 import { displayText } from "./sanitize.js";
 import { compileActiveMemory } from "./select.js";
 

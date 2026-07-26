@@ -28,8 +28,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { insertRule, listRulesByAgent, openDb, type RuleRow } from "./db.js";
-import { contextCost, trigramSimilarity } from "./distill.js";
 import { isValidAgentName, knownAgents } from "./registry.js";
+import { contextCost, trigramSimilarity } from "./rules.js";
 import { LEDGER_MARKER, type SharedRule } from "./share.js";
 
 /** Matches src/distill.ts's dedupe threshold so adoption and distillation

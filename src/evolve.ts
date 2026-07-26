@@ -44,7 +44,7 @@ import {
 	openDb,
 	type RuleRow,
 } from "./db.js";
-import { parseClaudeEnvelope } from "./distill.js";
+import { parseClaudeEnvelope } from "./model-call.js";
 import { assertKnownAgent, userAgentsDir } from "./registry.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");

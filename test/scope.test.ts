@@ -18,7 +18,7 @@ import {
 	setRuleScope,
 	type WardenDb,
 } from "../src/db.js";
-import { MAX_RULE_BODY_CHARS } from "../src/distill.js";
+import { MAX_RULE_BODY_CHARS } from "../src/rules.js";
 import { main, parseScopeArgs, runScope } from "../src/scope.js";
 
 describe("compileMemoryMd scope rendering", () => {
