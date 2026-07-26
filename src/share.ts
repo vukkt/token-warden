@@ -13,7 +13,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { runCli } from "./cli.js";
 import { getActiveRules, openDb, type RuleRow } from "./db.js";
 import { assertKnownAgent } from "./registry.js";
 
@@ -131,16 +131,7 @@ export function main(args: ShareArgs): void {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		main(parseShareArgs(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	main(parseShareArgs(process.argv.slice(2)));
+});
 /* v8 ignore stop */

@@ -22,8 +22,8 @@
  * recorded golden replicates (identical task + ruleset version + model), so
  * the plan is grounded in measured run-to-run noise, not a guess.
  */
-import { pathToFileURL } from "node:url";
 import { loadGoldenTasks } from "./bench.js";
+import { runCli } from "./cli.js";
 import {
 	type GoldenReplicateRun,
 	getActiveRules,
@@ -448,16 +448,7 @@ export function main(argv: string[]): number {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		process.exit(main(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	return main(process.argv.slice(2));
+});
 /* v8 ignore stop */

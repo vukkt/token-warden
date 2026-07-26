@@ -26,8 +26,8 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { MAX_LEDGER_BYTES, parseLedgerFile } from "./adopt.js";
+import { runCli } from "./cli.js";
 import { displayText } from "./sanitize.js";
 import { LEDGER_MARKER } from "./share.js";
 
@@ -150,16 +150,7 @@ export function main(argv: string[]): number {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		process.exit(main(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	return main(process.argv.slice(2));
+});
 /* v8 ignore stop */

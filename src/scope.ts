@@ -21,7 +21,7 @@
  * (model-generated) and predicates alike — goes through `displayText`, so a
  * pre-existing row can never forge a listing line either.
  */
-import { pathToFileURL } from "node:url";
+import { runCli } from "./cli.js";
 import {
 	getRuleById,
 	listRulesByAgent,
@@ -127,16 +127,7 @@ export function main(argv: string[]): number {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		process.exit(main(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	return main(process.argv.slice(2));
+});
 /* v8 ignore stop */

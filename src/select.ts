@@ -23,7 +23,6 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import {
 	assertPosixPlatform,
 	EnvironmentFailureError,
@@ -37,6 +36,7 @@ import {
 	summarizeTask,
 	type TaskSummary,
 } from "./bench.js";
+import { runCli } from "./cli.js";
 import {
 	agentTokenMix,
 	bumpRulesetVersion,
@@ -1668,17 +1668,8 @@ export function main(args: SelectArgs): void {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		assertPosixPlatform();
-		main(parseSelectArgs(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	assertPosixPlatform();
+	main(parseSelectArgs(process.argv.slice(2)));
+});
 /* v8 ignore stop */

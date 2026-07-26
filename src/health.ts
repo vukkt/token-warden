@@ -28,8 +28,8 @@
  * ADDING task files, never editing frozen ones (invariant #4). Informational
  * only; it never affects --gate.
  */
-import { pathToFileURL } from "node:url";
 import { VARIANCE_WARN_RATIO } from "./bench.js";
+import { runCli } from "./cli.js";
 import {
 	type GoldenTaskTotal,
 	getActiveRules,
@@ -218,16 +218,7 @@ export function main(argv: string[], nowMs = Date.now()): number {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		process.exit(main(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	return main(process.argv.slice(2));
+});
 /* v8 ignore stop */

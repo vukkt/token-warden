@@ -21,7 +21,7 @@
  * characters and collapses newlines, so collected data can never forge a
  * report line or a section header.
  */
-import { pathToFileURL } from "node:url";
+import { runCli } from "./cli.js";
 import {
 	getActiveRules,
 	getRulesetVersion,
@@ -424,21 +424,12 @@ export function renderStatus(db: WardenDb): string {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
+runCli(import.meta.url, () => {
+	const db = openDb();
 	try {
-		const db = openDb();
-		try {
-			console.log(renderStatus(db));
-		} finally {
-			db.close();
-		}
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
+		console.log(renderStatus(db));
+	} finally {
+		db.close();
 	}
-}
+});
 /* v8 ignore stop */

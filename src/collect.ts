@@ -302,24 +302,32 @@ export async function main(): Promise<void> {
 	const agent = isSubagentEvent
 		? (payload.agent_type ?? parsed.agent)
 		: resolveAgent(payload.agent_type, parsed.agent);
-	const db = openDb();
+	// Open with the SHORT per-attempt lock wait (openHookDb) and wrap the write
+	// in withBusyRetry: "the database was busy" is transient and retryable,
+	// while every other failure is permanent and correctly skipped. Treating
+	// them alike silently deleted whole sessions from the ledger — the hook
+	// waited out the full busy_timeout, threw, failed open, and wrote nothing,
+	// with no retry and no trace beyond a stack in the log.
+	const db = openHookDb();
 	try {
-		const runId = upsertRun(db, {
-			agent,
-			sessionId: sessionKey,
-			taskHash: null,
-			inputTokens: parsed.inputTokens,
-			outputTokens: parsed.outputTokens,
-			cacheCreation: parsed.cacheCreation,
-			cacheRead: parsed.cacheRead,
-			toolCalls: parsed.toolCalls,
-			fileRereads: parsed.fileRereads,
-			completed: parsed.completed,
-			rulesetVersion: getRulesetVersion(db, agent),
-			ts: new Date().toISOString(),
-			config: "real",
-			project: payload.cwd ?? null,
-		});
+		const runId = await withBusyRetry(() =>
+			upsertRun(db, {
+				agent,
+				sessionId: sessionKey,
+				taskHash: null,
+				inputTokens: parsed.inputTokens,
+				outputTokens: parsed.outputTokens,
+				cacheCreation: parsed.cacheCreation,
+				cacheRead: parsed.cacheRead,
+				toolCalls: parsed.toolCalls,
+				fileRereads: parsed.fileRereads,
+				completed: parsed.completed,
+				rulesetVersion: getRulesetVersion(db, agent),
+				ts: new Date().toISOString(),
+				config: "real",
+				project: payload.cwd ?? null,
+			}),
+		);
 
 		// Attribute this session's tool/skill/MCP footprint for the
 		// /warden-attribute breakdown. Pure aggregation over already-parsed
@@ -437,7 +445,15 @@ if (invokedDirectly) {
 	} catch (err) {
 		const detail =
 			err instanceof Error ? (err.stack ?? err.message) : String(err);
-		logLine(`collect error: ${detail}`);
+		// A session lost to lock contention is DATA LOSS, not a generic error:
+		// the ledger silently under-reports and every downstream statistic is
+		// computed over a corpus with unexplained holes. Mark it distinctly so
+		// `grep -c 'collect DROP' collect.log` counts them.
+		logLine(
+			isBusyError(err)
+				? `${DROP_MARKER}: database busy after retries — session not recorded. ${detail}`
+				: `collect error: ${detail}`,
+		);
 	} finally {
 		clearTimeout(watchdog);
 	}

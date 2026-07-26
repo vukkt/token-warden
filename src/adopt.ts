@@ -25,8 +25,8 @@
  * that it lands as a CANDIDATE that must survive local measurement first.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { runCli } from "./cli.js";
 import { insertRule, listRulesByAgent, openDb, type RuleRow } from "./db.js";
 import { isValidAgentName, knownAgents } from "./registry.js";
 import { contextCost, trigramSimilarity } from "./rules.js";
@@ -251,16 +251,7 @@ export function main(args: AdoptArgs): void {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		main(parseAdoptArgs(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	main(parseAdoptArgs(process.argv.slice(2)));
+});
 /* v8 ignore stop */

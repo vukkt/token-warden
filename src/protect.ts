@@ -22,7 +22,7 @@
  * SECURITY — listed rule bodies are model-generated, so they are rendered
  * through `displayText` and cannot forge a listing row or an ANSI sequence.
  */
-import { pathToFileURL } from "node:url";
+import { runCli } from "./cli.js";
 import {
 	getRuleById,
 	insertAuthoredRule,
@@ -149,16 +149,7 @@ export function main(argv: string[]): number {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		process.exit(main(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	return main(process.argv.slice(2));
+});
 /* v8 ignore stop */

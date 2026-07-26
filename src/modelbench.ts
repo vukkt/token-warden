@@ -18,7 +18,6 @@
  * migration is a global change, so its safety must be judged per category,
  * not just on one agent's suite.
  */
-import { pathToFileURL } from "node:url";
 import {
 	type AgentDefinition,
 	assertPosixPlatform,
@@ -28,6 +27,7 @@ import {
 	runSuite,
 	type TaskSummary,
 } from "./bench.js";
+import { runCli } from "./cli.js";
 import {
 	type Comparison,
 	formatCategoryRegressions,
@@ -217,17 +217,8 @@ export function main(args: ModelbenchArgs): void {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		assertPosixPlatform();
-		main(parseModelbenchArgs(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	assertPosixPlatform();
+	main(parseModelbenchArgs(process.argv.slice(2)));
+});
 /* v8 ignore stop */

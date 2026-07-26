@@ -26,7 +26,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
 	type AgentDefinition,
 	assertPosixPlatform,
@@ -36,6 +36,7 @@ import {
 	runSuite,
 	type TaskSummary,
 } from "./bench.js";
+import { runCli } from "./cli.js";
 import { formatComparison, reportMetaCost, runComparison } from "./compare.js";
 import {
 	defaultDbPath,
@@ -365,17 +366,8 @@ export function main(args: EvolveArgs): void {
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
-const invokedDirectly =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
-	try {
-		assertPosixPlatform();
-		main(parseEvolveArgs(process.argv.slice(2)));
-	} catch (err) {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	}
-}
+runCli(import.meta.url, () => {
+	assertPosixPlatform();
+	main(parseEvolveArgs(process.argv.slice(2)));
+});
 /* v8 ignore stop */
