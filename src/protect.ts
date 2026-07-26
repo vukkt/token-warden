@@ -31,10 +31,10 @@ import {
 	setRuleProtected,
 	type WardenDb,
 } from "./db.js";
+import { compileActiveMemory } from "./memory.js";
 import { assertKnownAgent } from "./registry.js";
 import { contextCost, ruleBodySchema } from "./rules.js";
 import { displayText } from "./sanitize.js";
-import { compileActiveMemory } from "./select.js";
 
 interface ProtectArgs {
 	agent: string;

@@ -10,7 +10,6 @@ import {
 	type MockInstance,
 	vi,
 } from "vitest";
-import { compileMemoryMd } from "../src/bench.js";
 import {
 	getRuleById,
 	insertRule,
@@ -18,6 +17,7 @@ import {
 	setRuleScope,
 	type WardenDb,
 } from "../src/db.js";
+import { compileMemoryMd } from "../src/memory.js";
 import { MAX_RULE_BODY_CHARS } from "../src/rules.js";
 import { main, parseScopeArgs, runScope } from "../src/scope.js";
 

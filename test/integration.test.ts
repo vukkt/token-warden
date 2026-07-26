@@ -13,11 +13,8 @@ import {
 	upsertRun,
 } from "../src/db.js";
 import { shouldDistill } from "../src/distill.js";
-import {
-	memoryFilePath,
-	type SuiteRunner,
-	selectForAgent,
-} from "../src/select.js";
+import { memoryFilePath } from "../src/memory.js";
+import { type SuiteRunner, selectForAgent } from "../src/select.js";
 import { renderStatus } from "../src/status.js";
 
 /**

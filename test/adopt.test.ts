@@ -10,7 +10,6 @@ import {
 	parseLedgerFile,
 	planImport,
 } from "../src/adopt.js";
-import { compileMemoryMd } from "../src/bench.js";
 import {
 	getActiveRules,
 	listRulesByAgent,
@@ -18,6 +17,7 @@ import {
 	type RuleRow,
 	type WardenDb,
 } from "../src/db.js";
+import { compileMemoryMd } from "../src/memory.js";
 import { LEDGER_MARKER, type SharedRule } from "../src/share.js";
 
 function shared(body: string): SharedRule {

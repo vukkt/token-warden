@@ -26,7 +26,6 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
 	assertPosixPlatform,
-	compileMemoryMd,
 	EnvironmentFailureError,
 	type GoldenTask,
 	goldenSuiteHash,
@@ -53,6 +52,11 @@ import {
 	setRuleProbation,
 	type WardenDb,
 } from "./db.js";
+import {
+	compileActiveMemory,
+	healMemoryDrift,
+	memoryFilePath,
+} from "./memory.js";
 import { blendedDollarsPerToken, priceFor } from "./pricing.js";
 import { assertKnownAgent } from "./registry.js";
 import { displayText } from "./sanitize.js";
@@ -744,126 +748,6 @@ export function mergeSummaries(
 			summary.weight,
 		);
 	});
-}
-
-// ---------------------------------------------------------------------------
-// Compiled memory
-// ---------------------------------------------------------------------------
-
-/** Where compiled agent memory lives. Overridable for tests so they never
- * touch the real ~/.claude/agent-memory. */
-export function memoryFilePath(agent: string): string {
-	const base =
-		process.env.TOKEN_WARDEN_MEMORY_DIR ??
-		join(homedir(), ".claude", "agent-memory");
-	return join(base, agent, "MEMORY.md");
-}
-
-/** Ceilings on what one compiled bullet may carry. Every sanctioned insertion
- * path (distiller, compression rewriter, ledger import) already caps a rule
- * body at 200 characters, so the body ceiling is pure headroom; a rule SCOPE
- * has no input ceiling at all (it arrives from the /warden-scope CLI), which is
- * why it gets its own. */
-const MEMORY_BODY_MAX = 400;
-const MEMORY_SCOPE_MAX = 200;
-
-/**
- * SECURITY: MEMORY.md is the one artifact this tool writes straight into a real
- * agent's prompt, every session, and its format is one bullet per rule. A
- * newline anywhere in a body or a scope therefore forges additional bullets
- * that read exactly like measured rules — prompt injection into the agent this
- * tool is supposed to be making cheaper.
- *
- * Bodies are validated single-line at every insertion path (distill, compress,
- * adopt), but a scope is stored VERBATIM by design (src/scope.ts: the stored
- * value is what gets compiled), so nothing guarded this write. Defense in depth
- * belongs at the writer, not only at the writers' inputs: everything crossing
- * into compiled memory goes through `displayText`, the repo's single
- * sanitization chokepoint, which strips control/escape/invisible characters and
- * collapses the value onto one line. It is a no-op on a well-formed rule.
- */
-function memorySafeRules(rules: RuleRow[]): RuleRow[] {
-	return rules.map((rule) => ({
-		...rule,
-		body: displayText(rule.body, MEMORY_BODY_MAX),
-		scope:
-			rule.scope === null ? null : displayText(rule.scope, MEMORY_SCOPE_MAX),
-	}));
-}
-
-/** The exact bytes the agent's MEMORY.md should hold for a rule set. */
-function compiledMemoryFor(db: WardenDb, agent: string): string {
-	return compileMemoryMd(memorySafeRules(getActiveRules(db, agent)));
-}
-
-/**
- * Replace a file atomically: write a sibling temp file, then rename over the
- * target. `writeFileSync` truncates first, so a crash, a SIGKILL or ENOSPC
- * mid-write leaves a TRUNCATED MEMORY.md — and that file is injected into the
- * agent's prompt every subsequent session with nothing validating it on read.
- * A half-written rule is an instruction fragment the agent will try to follow.
- * rename(2) within a directory is atomic, so a reader sees either the old file
- * or the new one, never a fragment.
- */
-function writeFileAtomic(path: string, content: string): void {
-	const temp = `${path}.tmp-${process.pid}`;
-	try {
-		writeFileSync(temp, content);
-		renameSync(temp, path);
-	} catch (err) {
-		rmSync(temp, { force: true });
-		throw err;
-	}
-}
-
-/** Recompile the agent's MEMORY.md from its current active rule set (including
- * protected rules) and bump the ruleset version. The single writer of agent
- * memory — shared by the selector and the protect command so the file is always
- * the wholesale, never-hand-edited artifact (invariant #2).
- *
- * The read, the write and the version bump are one IMMEDIATE transaction: the
- * compiled file and the version number stamped on it must describe the same
- * rule set even when a second warden process is deciding rules concurrently
- * (the DB runs in WAL mode, so it can be). */
-export function compileActiveMemory(db: WardenDb, agent: string): number {
-	const memoryPath = memoryFilePath(agent);
-	mkdirSync(dirname(memoryPath), { recursive: true });
-	return db
-		.transaction(() => {
-			writeFileAtomic(memoryPath, compiledMemoryFor(db, agent));
-			return bumpRulesetVersion(db, agent, new Date().toISOString());
-		})
-		.immediate();
-}
-
-/**
- * Self-heal DB-vs-memory drift before measuring anything.
- *
- * Each rule's fate is committed as it is decided, but memory is compiled once
- * at the end of an invocation — so an interrupted or crashed /warden-select
- * leaves a rule `active` in the DB but absent from MEMORY.md, or (the expensive
- * direction) `evicted` in the DB while the agent keeps reading it and paying
- * its rent every session, forever, because nothing ever recompiles.
- *
- * Recompiling only on an actual content mismatch, rather than unconditionally,
- * is deliberate: `compileActiveMemory` bumps the ruleset version, and a version
- * bump on every invocation would churn a counter that receipts, /warden-status
- * and the run history all segment on, and would rewrite a file the agent's
- * prompt cache is keyed on, for no change. Comparing first costs one read.
- *
- * Returns the version compiled when drift was healed, else null.
- */
-function healMemoryDrift(db: WardenDb, agent: string): number | null {
-	const memoryPath = memoryFilePath(agent);
-	const expected = compiledMemoryFor(db, agent);
-	const actual = existsSync(memoryPath)
-		? readFileSync(memoryPath, "utf8")
-		: null;
-	if (actual === expected) return null;
-	// No rules and no file is not drift, it is a fresh install: writing an empty
-	// memory file (and burning ruleset v1 on it) would be noise.
-	if (actual === null && getActiveRules(db, agent).length === 0) return null;
-	return compileActiveMemory(db, agent);
 }
 
 // ---------------------------------------------------------------------------

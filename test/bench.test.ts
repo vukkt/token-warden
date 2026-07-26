@@ -18,7 +18,6 @@ import {
 	CHECK_ENV_ALLOWLIST,
 	checkChildEnv,
 	cleanupWorkDirs,
-	compileMemoryMd,
 	ENV_FAILURE_TOKEN_FLOOR,
 	EnvironmentFailureError,
 	findTranscript,
@@ -54,6 +53,7 @@ import {
 	recordBaseline,
 	type WardenDb,
 } from "../src/db.js";
+import { compileMemoryMd } from "../src/memory.js";
 import { knownAgents } from "../src/registry.js";
 
 describe("parseArgs", () => {

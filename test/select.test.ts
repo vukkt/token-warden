@@ -14,10 +14,9 @@ import {
 	setRuleScope,
 	type WardenDb,
 } from "../src/db.js";
+import { compileActiveMemory, memoryFilePath } from "../src/memory.js";
 import {
 	assessDelta,
-	compileActiveMemory,
-	memoryFilePath,
 	parseSelectArgs,
 	type SuiteRunner,
 	selectForAgent,
