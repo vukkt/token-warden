@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.41.0 — 2026-07-26
 
 The deferred shared-module extractions from v0.40.0, plus a correction to that
 release's notes.

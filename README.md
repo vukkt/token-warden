@@ -9,7 +9,7 @@ wants space in an agent's context must prove, on a frozen benchmark, that it sav
 tokens than it costs — or it is evicted.
 
 ```text
-   version   0.40.0                     commands   20 slash commands
+   version   0.41.0                     commands   20 slash commands
      tests   1029 across 47 files         agents   4 bundled + bring-your-own
   coverage   96.85% lines                 source   38 modules, ~12.7k lines
 ```
