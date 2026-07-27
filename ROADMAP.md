@@ -103,6 +103,34 @@ what remains is running the experiments and recording their results:
   verdict. Do not build the eviction side of this before the false-negative rate
   is actually measured — the A/A harness measures admission only, and guessing
   at the other tail is how the robust-SE estimator got vetoed.
+- **Close the loop on the agent PROMPT, not just its memory.** `/warden-evolve`
+  already exists and is the feed-forward analog of the distiller aimed at base
+  instructions: it proposes a rewrite of the prompt body (frontmatter preserved
+  byte-for-byte), benchmarks it against the shipped prompt with rules and model
+  held constant, rejects on regression or within-noise, and writes a winner to a
+  proposals file. It is deliberately never auto-applied — `agents/*.md` is
+  committed source, not a generated artifact, and three golden tasks cannot
+  capture an agent's whole behavior, so a suite win does not license rewriting
+  the agent's identity. That separation stays: the prompt is the reviewed
+  contract, memory is the measured accretion.
+  **The gap is that the two halves are not connected.** The distiller reads
+  expensive real sessions and produces RULES; evolve reads only the prompt and
+  produces a SHORTER PROMPT. Nothing carries production evidence into the
+  contract. Concretely, rules only ever accumulate: nothing promotes a rule that
+  has survived many re-audits into the base prompt (where it would stop paying
+  per-rule rent and stop consuming a re-audit slot), and nothing mines the
+  eviction history for prompt-level signal — "six rules about re-reading files
+  all died, so the prompt is the wrong instrument for this" is a conclusion the
+  data could support and no code looks for. Note also that evolve optimizes for
+  CHEAPER, not BETTER: its instruction is to preserve every behavior at fewer
+  tokens, so it can never add a guard for a failure that keeps recurring.
+  Cheap first version: a promotion criterion for long-surviving rules, surfaced
+  as a recommendation for a human to apply, matching how evolve already behaves.
+  **Blocked on sample size, not on effort.** Two banked rules and four evictions
+  is not a population — pattern-mining eviction history at n=4 would be reading
+  tea leaves, and promotion criteria tuned on two survivors would be fitted to
+  those two. This needs the dogfood window in section 1 to produce a real
+  population of verdicts first.
 - **Retire degenerate golden checks by addition.** Shipped in v0.40.0: `sql-08`
   replaces `sql-01`, whose `success_check` passes on the pristine fixture (it
   greps for `create index` and `user_id`, both already present), making it unable
