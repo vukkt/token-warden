@@ -36,7 +36,6 @@ Kept only if the measured saving clears **2x its context rent**, with confidence
 nothing. Every other outcome is a refusal.
 
 ```mermaid
-%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#f7f7f5","primaryTextColor":"#1c1c1c","primaryBorderColor":"#3f3f3c","lineColor":"#8f8f88","textColor":"#1c1c1c"}}}%%
 flowchart TD
     M["measure: suite with vs. without the rule"] --> Q1{"zero-token failed runs?"}
     Q1 -->|"yes"| AB["ABORT<br/>no verdict, no receipt,<br/>rule stays queued"]
@@ -63,13 +62,15 @@ sub-threshold result means probation; only a second consecutive one evicts.
 Six candidate rules, measured on the `sql` agent across **397 headless golden runs**. Real
 ledger, not a simulation.
 
-```mermaid
-%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","xyChart":{"backgroundColor":"#ffffff","titleColor":"#1c1c1c","xAxisLabelColor":"#1c1c1c","xAxisTitleColor":"#1c1c1c","xAxisTickColor":"#8f8f88","xAxisLineColor":"#3f3f3c","yAxisLabelColor":"#1c1c1c","yAxisTitleColor":"#1c1c1c","yAxisTickColor":"#8f8f88","yAxisLineColor":"#3f3f3c","plotColorPalette":"#b45309"}}}}%%
-xychart-beta
-    title "Measured delta per candidate rule, tokens/run"
-    x-axis ["rule 1", "rule 2", "rule 3", "rule 4", "rule 5"]
-    y-axis "tokens saved per run" -10000 --> 12000
-    bar [-9215, -6134, 622, 5731, 10851]
+```text
+  measured delta per candidate rule, tokens/run
+
+          -10k      -5k     0      +5k     +10k
+  rule 1    -9,215  ######################|
+  rule 2    -6,134         ###############|
+  rule 3      +622                        |#
+  rule 4    +5,731                        |##############
+  rule 5   +10,851                        |##########################
 ```
 
 | Rule | Measured delta | 2x rent bar | Verdict |
