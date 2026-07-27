@@ -37,18 +37,26 @@ nothing. Every other outcome is a refusal.
 
 ```mermaid
 flowchart TD
-    M["measure: suite with vs. without the rule"] --> Q1{"zero-token failed runs?"}
-    Q1 -->|"yes"| AB["ABORT<br/>no verdict, no receipt,<br/>rule stays queued"]
-    Q1 -->|"no"| Q2{"any task stopped passing?"}
-    Q2 -->|"yes"| EV["EVICT<br/>false economy"]
-    Q2 -->|"no"| Q3{"saving at least 2x rent?"}
-    Q3 -->|"no"| EV
-    Q3 -->|"yes"| Q4{"within noise of the bar?"}
-    Q4 -->|"yes"| TU["top-up pass<br/>runs placed by variance"] --> Q4
-    Q4 -->|"no"| KP["KEEP<br/>compiled into MEMORY.md"]
+    M["measure: suite with vs without the rule"]
+    Q1{"zero-token failed runs?"}
+    Q2{"any task stopped passing?"}
+    Q3{"saving at least 2x rent?"}
+    Q4{"within noise of the bar?"}
+    AB["ABORT: no verdict, no receipt, rule stays queued"]
+    EV["EVICT: false economy"]
+    TU["top-up pass, runs placed by variance"]
+    KP["KEEP: compiled into MEMORY.md"]
 
-    classDef accent fill:#fdf6ec,stroke:#b45309,stroke-width:1.5px,color:#7c2d12;
-    class KP accent;
+    M --> Q1
+    Q1 -->|yes| AB
+    Q1 -->|no| Q2
+    Q2 -->|yes| EV
+    Q2 -->|no| Q3
+    Q3 -->|no| EV
+    Q3 -->|yes| Q4
+    Q4 -->|yes| TU
+    TU --> Q4
+    Q4 -->|no| KP
 ```
 
 Rent is priced cache-aware, so the bar gets *harder* when a ruleset change busts the cache. A
