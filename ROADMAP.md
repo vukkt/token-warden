@@ -78,6 +78,31 @@ what remains is running the experiments and recording their results:
   untouched. Open: cutting per-run cost and tail variance further, which
   FINDINGS.md now names as the binding constraint on every future burn — nothing
   below the derailment-noise floor is measurable until it moves.
+- **False evictions: a good rule binned by an unlucky sample.** The gate's
+  false-POSITIVE rate is measured (8.8% empirically, FINDINGS.md); its
+  false-NEGATIVE rate is not. A rule that genuinely earns can draw one bad
+  sample and be evicted, and at the run counts this suite can afford that is not
+  a hypothetical: rule 1 was admitted at +3,673 tok/run and evicted by a single
+  -9,215 re-audit draw, and rule 5 measured +10,851 — 362x its bar — and was
+  evicted as uncertain at SE 7,814.
+  Partly mitigated already. Two-strike retention exists precisely for this (one
+  sub-threshold draw is probation, only a second consecutive one evicts; a
+  regression still evicts immediately), evicted rules keep their receipt as the
+  negative dataset, and `/warden-power` reports the minimum detectable saving at
+  a given run count *before* tokens are spent.
+  **The gap is recovery.** Nothing retries an evicted rule, and the trigram
+  dedupe that stops a falsified rule being re-proposed does not distinguish
+  "measured negative" from "measured positive but too noisy to bank" — so a
+  good-but-unlucky rule is effectively excluded for life. The cheap first
+  version is a variance-proportional re-audit budget: spend more runs
+  re-auditing a rule whose prior verdict was positive, instead of treating every
+  audit as equal cost, which is the same Neyman logic the top-up already uses on
+  the admission side. The expensive version is re-queuing evicted-as-uncertain
+  rules when the suite's noise floor drops; that one waits on the variance work
+  above, since re-running them into the same noise would only reproduce the same
+  verdict. Do not build the eviction side of this before the false-negative rate
+  is actually measured — the A/A harness measures admission only, and guessing
+  at the other tail is how the robust-SE estimator got vetoed.
 - **Retire degenerate golden checks by addition.** Shipped in v0.40.0: `sql-08`
   replaces `sql-01`, whose `success_check` passes on the pristine fixture (it
   greps for `create index` and `user_id`, both already present), making it unable
