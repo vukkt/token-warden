@@ -146,3 +146,18 @@ Recorded so they are not re-litigated: acting directly on the artifact instead
 of measuring (the audited literature puts silent correctness failures at ~18%
 for that arm), gating on advisory axes (latency, tail risk, completion drop),
 and auto-evicting from any signal other than the frozen fixture.
+
+## Design specs
+
+Written before implementation, each carrying its outcome. Kept for provenance —
+including the one that was tested and rejected, which is the more useful record.
+
+- [docs/specs/byoa.md](docs/specs/byoa.md) — bring-your-own-agent. Shipped v0.36.0.
+- [docs/specs/split-noisy-tasks.md](docs/specs/split-noisy-tasks.md) — splitting the
+  high-variance golden tasks. Shipped v0.36.0.
+- [docs/specs/weighted-suites.md](docs/specs/weighted-suites.md) — distribution-weighted
+  suites. Shipped v0.37.0, after calibration rejected the first cut and forced an
+  effective-degrees-of-freedom correction.
+- [docs/specs/confidence-sequences.md](docs/specs/confidence-sequences.md) — anytime-valid
+  confidence sequences as a retention policy. **Tested and rejected**: the bar/SE ratio is
+  binding, so a dead rule would never exit. Two-strike retention stays.
