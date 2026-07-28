@@ -40,16 +40,23 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { benchChildEnv } from "./bench.js";
 import { runCli } from "./cli.js";
 import { type Corpus, corpusTokens, ingestCorpus } from "./corpus.js";
 import {
 	buildExtractionPrompt,
-	extractFromStdout,
 	type GroundingReport,
+	parseFacts,
 	valueAppearsIn,
+	verifyGrounding,
 } from "./extract.js";
 import { formatNumber, formatRounded } from "./format.js";
-import { defaultSpawn, interrogate, type SpawnLike } from "./interrogate.js";
+import {
+	callClaude,
+	defaultSpawn,
+	interrogate,
+	type SpawnLike,
+} from "./interrogate.js";
 import { distillModel } from "./model-call.js";
 import {
 	buildIndex,
@@ -292,6 +299,12 @@ export interface RagbenchArgs {
 	sweep: boolean;
 	/** Explicit opt-in to spending tokens. Never defaulted on. */
 	yes: boolean;
+	/** Restrict the end-to-end run to these arms. Empty means all four.
+	 * Exists so a single arm can be re-validated after a change without
+	 * re-buying the other three — but note that a subset run is NOT comparable
+	 * with a full run, because the arms are only paired when they answer the
+	 * same questions in the same session. */
+	arms: string[];
 }
 
 /** Default per-question retrieval budget, in tokens.
@@ -310,12 +323,20 @@ export function parseArgs(argv: string[]): RagbenchArgs {
 		json: false,
 		sweep: false,
 		yes: false,
+		arms: [],
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
 		if (flag === "--sweep") args.sweep = true;
 		else if (flag === "--yes") args.yes = true;
-		else if (flag === "--dir") args.dir = String(argv[++i] ?? "");
+		else if (flag === "--arm") {
+			const name = String(argv[++i] ?? "");
+			const known = [...STRATEGIES, "agent"];
+			if (!known.includes(name)) {
+				throw new Error(`--arm must be one of: ${known.join(", ")}`);
+			}
+			args.arms.push(name);
+		} else if (flag === "--dir") args.dir = String(argv[++i] ?? "");
 		else if (flag === "--budget") {
 			const n = Number(argv[++i]);
 			if (!Number.isInteger(n) || n < 1) {
@@ -509,17 +530,74 @@ export function scoreAnswer(
  * assembled. Unpaired arms would confound retrieval quality with question mix,
  * which is the mistake that makes most published RAG comparisons unreadable.
  */
+/**
+ * Consecutive environment failures that abort the whole run.
+ *
+ * Mirrors `ENV_FAILURE_STREAK` in `bench.ts`, and exists for the same reason.
+ * The FIRST end-to-end burn of this benchmark hit a rate limit at question 5,
+ * failed every remaining call, and cheerfully reported "33.3% accuracy" for all
+ * four arms — 4 of 12 correct because 8 of 12 never ran. Every arm scored
+ * identically because none of them were measured. That number was garbage with
+ * a decimal point on it, and this is the guard that makes producing it
+ * impossible.
+ *
+ * Four, like bench.ts: enough that a single flaky call cannot abort a paid run,
+ * few enough that a dead environment is not discovered forty calls later.
+ */
+export const ENV_FAILURE_STREAK = 4;
+
+export interface EndToEndRun {
+	rows: EndToEndResult[];
+	/**
+	 * Set when the run was cut short by consecutive environment failures. When
+	 * true the rows are EVIDENCE OF NOTHING and must not be scored — the
+	 * renderer refuses to print an accuracy table.
+	 */
+	aborted: boolean;
+	abortReason: string | null;
+}
+
 export function runEndToEnd(
 	dir: string,
 	budgetTokens: number,
-	deps: { spawn?: SpawnLike } = {},
-): EndToEndResult[] {
+	deps: {
+		spawn?: SpawnLike;
+		sleep?: (ms: number) => void;
+		/** Arms to run; empty/undefined means all of them. */
+		arms?: string[];
+	} = {},
+): EndToEndRun {
 	const { corpus, questions } = loadSuite(dir);
 	const index = buildIndex(corpus.chunks);
 	const out: EndToEndResult[] = [];
+	const wanted = deps.arms ?? [];
+	const runs = (arm: string): boolean =>
+		wanted.length === 0 || wanted.includes(arm);
+	let streak = 0;
+	let abortReason: string | null = null;
+
+	/** Record a row and update the environment-failure streak. Returns true when
+	 * the caller must stop. A NON-environmental failure (an unparseable reply,
+	 * say) resets nothing and never aborts — that is a result, not a dead API. */
+	const record = (row: EndToEndResult, environmental: boolean): boolean => {
+		out.push(row);
+		if (row.error !== null && environmental) {
+			streak++;
+			if (streak >= ENV_FAILURE_STREAK) {
+				abortReason =
+					`${streak} consecutive environment failures (last: ${row.error}).` +
+					" Nothing here is a measurement.";
+				return true;
+			}
+		} else if (row.error === null) {
+			streak = 0;
+		}
+		return false;
+	};
 
 	for (const question of questions) {
 		for (const strategy of STRATEGIES) {
+			if (!runs(strategy)) continue;
 			const retrieval = retrieve(
 				strategy,
 				corpus,
@@ -532,33 +610,43 @@ export function runEndToEnd(
 				renderContext(retrieval),
 				corpus,
 				deps.spawn,
+				deps.sleep,
 			);
 			const scored = scoreAnswer(question, answer.report);
-			out.push({
-				questionId: question.id,
-				arm: strategy,
-				contextTokens: retrieval.tokens,
-				correct: scored.correct,
-				ungrounded: scored.ungrounded,
-				hops: 1,
-				error: answer.error,
-			});
+			const stop = record(
+				{
+					questionId: question.id,
+					arm: strategy,
+					contextTokens: retrieval.tokens,
+					correct: scored.correct,
+					ungrounded: scored.ungrounded,
+					hops: 1,
+					error: answer.error,
+				},
+				answer.environmentFailure,
+			);
+			if (stop) return { rows: out, aborted: true, abortReason };
 		}
 		// The agentic arm, which is the only one that can issue a query it could
 		// not have written before seeing the first result.
+		if (!runs("agent")) continue;
 		const agent = interrogate(corpus, question.question, { index, ...deps });
 		const scored = scoreAnswer(question, agent.report);
-		out.push({
-			questionId: question.id,
-			arm: "agent",
-			contextTokens: agent.contextTokens,
-			correct: scored.correct,
-			ungrounded: scored.ungrounded,
-			hops: agent.hops,
-			error: agent.error,
-		});
+		const stop = record(
+			{
+				questionId: question.id,
+				arm: "agent",
+				contextTokens: agent.contextTokens,
+				correct: scored.correct,
+				ungrounded: scored.ungrounded,
+				hops: agent.hops,
+				error: agent.error,
+			},
+			agent.environmentFailure,
+		);
+		if (stop) return { rows: out, aborted: true, abortReason };
 	}
-	return out;
+	return { rows: out, aborted: false, abortReason: null };
 }
 
 /** Single-shot: one context, one model call, verified. */
@@ -567,33 +655,60 @@ function answerOnce(
 	context: string,
 	corpus: Corpus,
 	spawn?: SpawnLike,
-): { report: GroundingReport | null; error: string | null } {
-	const run = spawn ?? defaultSpawn;
-	const result = run(
-		"claude",
-		[
-			"-p",
-			buildExtractionPrompt(question, context),
-			"--model",
-			distillModel(),
-			"--max-turns",
-			"1",
-			"--output-format",
-			"json",
-		],
-		{ encoding: "utf8", timeout: 120_000, maxBuffer: 16 * 1024 * 1024 },
+	sleep?: (ms: number) => void,
+): {
+	report: GroundingReport | null;
+	error: string | null;
+	environmentFailure: boolean;
+} {
+	// Shares `callClaude` with the agent arm so both get the same bounded retry
+	// on rate limits and the same failure classification. Two hand-rolled spawn
+	// sites would drift, and the arm that drifted would look better or worse for
+	// a reason that has nothing to do with its architecture.
+	const called = callClaude(
+		spawn ?? defaultSpawn,
+		buildExtractionPrompt(question, context),
+		sleep,
 	);
-	if (result.error !== undefined || result.status !== 0) {
-		return { report: null, error: "model call failed" };
+	if (!called.ok) {
+		return {
+			report: null,
+			error: called.failure.reason,
+			environmentFailure: called.failure.environmental,
+		};
 	}
-	const extracted = extractFromStdout(result.stdout, corpus.chunks);
-	return extracted.ok
-		? { report: extracted.report, error: null }
-		: { report: null, error: extracted.reason };
+	const parsed = parseFacts(called.text);
+	if (!parsed.ok) {
+		return { report: null, error: parsed.reason, environmentFailure: false };
+	}
+	return {
+		report: verifyGrounding(parsed.facts, corpus.chunks, parsed.malformed),
+		error: null,
+		environmentFailure: false,
+	};
 }
 
-/** Aggregate the end-to-end rows into one line per architecture. */
-export function renderEndToEnd(rows: EndToEndResult[]): string {
+/**
+ * Aggregate the end-to-end rows into one line per architecture.
+ *
+ * REFUSES to print an accuracy table for an aborted run. That refusal is the
+ * feature: the alternative is a table of percentages computed over calls that
+ * never happened, and a percentage is far more persuasive than it is true.
+ */
+export function renderEndToEnd(run: EndToEndRun): string {
+	const { rows } = run;
+	if (run.aborted) {
+		return [
+			"ABORTED — no verdict.",
+			"",
+			run.abortReason ?? "environment failure",
+			"",
+			`${rows.length} ${rows.length === 1 ? "run was" : "runs were"} attempted before the abort and ${rows.length === 1 ? "is" : "are"} NOT scored.`,
+			"An accuracy figure computed over calls that never reached the model",
+			"would be indistinguishable in shape from a real one, so none is shown.",
+			"Re-run when the environment is healthy.",
+		].join("\n");
+	}
 	const arms = [...new Set(rows.map((r) => r.arm))];
 	const lines: string[] = [];
 	lines.push(
@@ -640,13 +755,15 @@ export function renderEndToEnd(rows: EndToEndResult[]): string {
 export function main(argv: string[]): number {
 	const args = parseArgs(argv);
 	if (args.yes) {
-		const rows = runEndToEnd(args.dir, args.budget);
-		if (args.json) console.log(JSON.stringify({ rows }, null, 2));
+		const run = runEndToEnd(args.dir, args.budget, { arms: args.arms });
+		if (args.json) console.log(JSON.stringify(run, null, 2));
 		else {
 			console.log("=== end-to-end benchmark (SPENDS TOKENS) ===\n");
-			console.log(renderEndToEnd(rows));
+			console.log(renderEndToEnd(run));
 		}
-		return 0;
+		// Non-zero on abort so a scripted caller cannot mistake a dead
+		// environment for a completed benchmark.
+		return run.aborted ? 1 : 0;
 	}
 	if (args.sweep) {
 		const { corpus } = loadSuite(args.dir);

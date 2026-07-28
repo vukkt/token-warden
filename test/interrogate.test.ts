@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { type Corpus, chunkDocument, parseDocument } from "../src/corpus.js";
 import {
+	backoffMs,
 	buildPlanPrompt,
+	callClaude,
+	classifyFailure,
 	type InterrogationResult,
 	interrogate,
+	MAX_ATTEMPTS,
 	MAX_HOPS,
 	parsePlan,
 	type SpawnLike,
@@ -98,12 +102,36 @@ describe("buildPlanPrompt", () => {
 	it("marks an empty context explicitly rather than leaving a blank", () => {
 		expect(buildPlanPrompt("q", "", 3)).toContain("(nothing yet)");
 	});
+
+	it("asks the model to decompose the question before deciding", () => {
+		// The first real burn returned {"done":true} on hop 1 for all 12 golden
+		// questions, because the old prompt ended with "search again ONLY if...".
+		// Naming the required parts is what makes the stop/continue decision
+		// concrete instead of a default.
+		const p = buildPlanPrompt("q", "excerpt", 3);
+		expect(p).toContain("what the question REQUIRES");
+		expect(p).toContain("more than one fact");
+	});
+
+	it("tells the model to search in the missing document's vocabulary", () => {
+		// A follow-up phrased in the question's own words re-retrieves what was
+		// already read; dedupe then makes the hop informationless but not free.
+		expect(buildPlanPrompt("q", "e", 2)).toContain(
+			"words the MISSING document would use",
+		);
+	});
+
+	it("keeps the decline path — an uncovered corpus must still stop", () => {
+		// Two of the twelve golden questions are unanswerable. An agent that
+		// cannot stop searches four times and then invents.
+		expect(buildPlanPrompt("q", "e", 2)).toContain("plainly does not cover");
+	});
 });
 
 describe("interrogate", () => {
 	it("stops as soon as the model says it has enough", () => {
 		const { spawn } = scriptedSpawn(['{"done":true}', FACT]);
-		const r = interrogate(corpus, "leverage ratio", { spawn });
+		const r = interrogate(corpus, "leverage ratio", { spawn, sleep: () => {} });
 		expect(r.hops).toBe(1);
 		expect(r.error).toBeNull();
 		expect(r.report?.accepted).toHaveLength(1);
@@ -116,7 +144,10 @@ describe("interrogate", () => {
 			'{"done":true}',
 			FACT,
 		]);
-		const r = interrogate(corpus, "Restricted Payments", { spawn });
+		const r = interrogate(corpus, "Restricted Payments", {
+			spawn,
+			sleep: () => {},
+		});
 		expect(r.queries).toEqual([
 			"Restricted Payments",
 			"debt to Adjusted EBITDA",
@@ -131,13 +162,13 @@ describe("interrogate", () => {
 			...Array(20).fill('{"search":"more"}'),
 			FACT,
 		]);
-		const r = interrogate(corpus, "anything", { spawn });
+		const r = interrogate(corpus, "anything", { spawn, sleep: () => {} });
 		expect(r.hops).toBe(MAX_HOPS);
 	});
 
 	it("stops on an invalid plan rather than looping", () => {
 		const { spawn } = scriptedSpawn(["not json at all", FACT]);
-		const r = interrogate(corpus, "leverage", { spawn });
+		const r = interrogate(corpus, "leverage", { spawn, sleep: () => {} });
 		expect(r.hops).toBe(1);
 		expect(r.error).toBeNull();
 	});
@@ -153,16 +184,20 @@ describe("interrogate", () => {
 		const once = scriptedSpawn(['{"done":true}', FACT]);
 		const twoHop = interrogate(corpus, "leverage ratio", {
 			spawn: repeated.spawn,
+			sleep: () => {},
 		});
-		const oneHop = interrogate(corpus, "leverage ratio", { spawn: once.spawn });
+		const oneHop = interrogate(corpus, "leverage ratio", {
+			spawn: once.spawn,
+			sleep: () => {},
+		});
 		expect(twoHop.contextTokens).toBe(oneHop.contextTokens);
 	});
 
 	it("fails closed with a reason when the planning call fails", () => {
 		const spawn: SpawnLike = () => ({ status: 1 });
-		const r = interrogate(corpus, "q", { spawn });
+		const r = interrogate(corpus, "q", { spawn, sleep: () => {} });
 		expect(r.report).toBeNull();
-		expect(r.error).toBe("planning call failed");
+		expect(r.error).toContain("planning call failed");
 	});
 
 	it("fails closed when the CLI reports an error envelope", () => {
@@ -170,13 +205,16 @@ describe("interrogate", () => {
 			status: 0,
 			stdout: JSON.stringify({ is_error: true, result: "quota exhausted" }),
 		});
-		const r = interrogate(corpus, "q", { spawn });
-		expect(r.error).toBe("planning call failed");
+		const r = interrogate(corpus, "q", { spawn, sleep: () => {} });
+		expect(r.error).toContain("planning call failed");
+		// A quota-death envelope must be classed as ENVIRONMENTAL so the caller
+		// aborts instead of scoring the run.
+		expect(r.environmentFailure).toBe(true);
 	});
 
 	it("fails closed when the final answer is not parseable", () => {
 		const { spawn } = scriptedSpawn(['{"done":true}', "I could not find it."]);
-		const r = interrogate(corpus, "q", { spawn });
+		const r = interrogate(corpus, "q", { spawn, sleep: () => {} });
 		expect(r.report).toBeNull();
 		expect(r.error).toContain("not JSON");
 	});
@@ -197,20 +235,105 @@ describe("interrogate", () => {
 			],
 		});
 		const { spawn } = scriptedSpawn(['{"done":true}', fabricated]);
-		const r: InterrogationResult = interrogate(corpus, "q", { spawn });
+		const r: InterrogationResult = interrogate(corpus, "q", {
+			spawn,
+			sleep: () => {},
+		});
 		expect(r.report?.accepted).toHaveLength(0);
 		expect(r.report?.rejected[0]?.reason).toBe("value-not-in-quote");
 	});
 
 	it("passes the retrieved excerpts into the planning prompt", () => {
 		const { spawn, prompts } = scriptedSpawn(['{"done":true}', FACT]);
-		interrogate(corpus, "leverage ratio", { spawn });
+		interrogate(corpus, "leverage ratio", { spawn, sleep: () => {} });
 		expect(prompts[0]).toContain("2.6x");
 	});
 
 	it("honors a caller-supplied hop cap", () => {
 		const { spawn } = scriptedSpawn(['{"search":"a"}', '{"search":"b"}', FACT]);
-		const r = interrogate(corpus, "q", { spawn, maxHops: 2 });
+		const r = interrogate(corpus, "q", { spawn, maxHops: 2, sleep: () => {} });
 		expect(r.hops).toBe(2);
+	});
+});
+
+describe("classifyFailure", () => {
+	it("flags a known rate-limit signature", () => {
+		expect(
+			classifyFailure(1, "API Error 429 rate limit exceeded", undefined)
+				.environmental,
+		).toBe(true);
+	});
+
+	it("flags a silent non-zero exit as environmental", () => {
+		// The third agent burn: 6 of 12 calls died as "exited 1 with no stderr"
+		// and the guard stayed silent, so the run neither retried nor aborted and
+		// produced a half-empty table that looked like a measurement. A CLI
+		// rejecting a bad request says so; silence plus non-zero is infra.
+		const f = classifyFailure(1, "", undefined);
+		expect(f.environmental).toBe(true);
+		expect(f.reason).toContain("no stderr");
+	});
+
+	it("does NOT flag a real error message as environmental", () => {
+		// A genuine defect must never be laundered into "the environment died".
+		expect(
+			classifyFailure(1, "unknown option --frobnicate", undefined)
+				.environmental,
+		).toBe(false);
+	});
+
+	it("does not flag a clean exit with no stderr", () => {
+		expect(classifyFailure(0, "", undefined).environmental).toBe(false);
+	});
+
+	it("carries the stderr head so a failure is diagnosable", () => {
+		expect(classifyFailure(2, "boom happened", undefined).reason).toContain(
+			"boom happened",
+		);
+	});
+});
+
+describe("backoffMs", () => {
+	it("grows exponentially so a transient limit gets time to clear", () => {
+		expect(backoffMs(1)).toBe(2000);
+		expect(backoffMs(2)).toBe(4000);
+		expect(backoffMs(1)).toBeLessThan(backoffMs(2));
+	});
+});
+
+describe("callClaude retry", () => {
+	it("retries an environmental failure up to MAX_ATTEMPTS", () => {
+		let calls = 0;
+		const spawn: SpawnLike = () => {
+			calls++;
+			return { status: 1, stderr: "429 rate limit" };
+		};
+		const r = callClaude(spawn, "p", () => {});
+		expect(r.ok).toBe(false);
+		expect(calls).toBe(MAX_ATTEMPTS);
+	});
+
+	it("does NOT retry a genuine bad request", () => {
+		// Retrying an argument error fails identically three times and only
+		// wastes wall-clock.
+		let calls = 0;
+		const spawn: SpawnLike = () => {
+			calls++;
+			return { status: 1, stderr: "unknown option --nope" };
+		};
+		callClaude(spawn, "p", () => {});
+		expect(calls).toBe(1);
+	});
+
+	it("returns the first success without further attempts", () => {
+		let calls = 0;
+		const spawn: SpawnLike = () => {
+			calls++;
+			if (calls === 1) return { status: 1, stderr: "529 overloaded" };
+			return { status: 0, stdout: JSON.stringify({ result: "hi" }) };
+		};
+		const r = callClaude(spawn, "p", () => {});
+		expect(r.ok && r.text).toBe("hi");
+		expect(calls).toBe(2);
 	});
 });

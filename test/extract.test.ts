@@ -162,17 +162,19 @@ describe("parseFacts", () => {
 
 	it("drops a fact with no citation rather than accepting it", () => {
 		// An uncitable fact cannot be verified, and an unverified fact is exactly
-		// what this module refuses to emit.
+		// what this module refuses to emit. It is dropped per-fact and counted.
 		const { chunkId: _omit, ...noCitation } = fact();
 		const r = parseFacts(JSON.stringify({ facts: [noCitation] }));
-		expect(r.ok).toBe(false);
+		expect(r.ok && r.facts).toHaveLength(0);
+		expect(r.ok && r.malformed).toBe(1);
 	});
 
 	it("rejects a non-finite value", () => {
 		const r = parseFacts(
 			'{"facts":[{"metric":"m","period":"p","value":"NaN","chunkId":"c","quote":"q"}]}',
 		);
-		expect(r.ok).toBe(false);
+		expect(r.ok && r.facts).toHaveLength(0);
+		expect(r.ok && r.malformed).toBe(1);
 	});
 });
 
@@ -219,5 +221,64 @@ describe("buildExtractionPrompt", () => {
 		);
 		expect(p).toContain("What was revenue?");
 		expect(p).toContain("[c#0] revenue 4,182.6");
+	});
+});
+
+describe("schema tolerance learned from the first burn", () => {
+	it("accepts a fact with NO period — a covenant threshold has none", () => {
+		// fin-06 returned period:"" because "Restricted Payments below 3.25 to
+		// 1.00" is a standing limit, not a quarterly figure. The old min(1)
+		// rejected the whole reply and forced the model to invent a period.
+		const r = parseFacts(
+			JSON.stringify({
+				facts: [{ ...fact(), period: "" }],
+			}),
+		);
+		expect(r.ok && r.facts).toHaveLength(1);
+	});
+
+	it("accepts a covenant period stated as a phrase", () => {
+		// fin-11 blew the old 60-char bound.
+		const long =
+			"as of the last day of any fiscal quarter following a Material Acquisition";
+		expect(long.length).toBeGreaterThan(60);
+		const r = parseFacts(
+			JSON.stringify({ facts: [{ ...fact(), period: long }] }),
+		);
+		expect(r.ok && r.facts[0]?.period).toBe(long);
+	});
+
+	it("drops ONE malformed fact instead of discarding the whole reply", () => {
+		// The defect: a single over-long field threw away correctly cited
+		// figures alongside it. Per-fact validation is the same rule
+		// verifyGrounding already applies.
+		const r = parseFacts(
+			JSON.stringify({ facts: [fact(), { metric: "broken" }, fact()] }),
+		);
+		expect(r.ok).toBe(true);
+		if (r.ok) {
+			expect(r.facts).toHaveLength(2);
+			expect(r.malformed).toBe(1);
+		}
+	});
+
+	it("counts malformed facts separately from ungrounded ones", () => {
+		// A shape problem (often ours) must never be hidden inside a
+		// hallucination metric.
+		const report = verifyGrounding([fact()], chunks, 3);
+		expect(report.malformed).toBe(3);
+		expect(report.rejected).toHaveLength(0);
+		expect(report.groundedness).toBe(1);
+	});
+
+	it("still refuses a fact with no citation", () => {
+		const { chunkId: _omit, ...noCitation } = fact();
+		const r = parseFacts(JSON.stringify({ facts: [noCitation] }));
+		expect(r.ok && r.facts).toHaveLength(0);
+		expect(r.ok && r.malformed).toBe(1);
+	});
+
+	it("rejects a reply that is not a facts envelope at all", () => {
+		expect(parseFacts('{"answer":"42"}').ok).toBe(false);
 	});
 });

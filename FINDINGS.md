@@ -685,3 +685,98 @@ Reproduce (no tokens):
 npx tsx validation/empirical-calibration.ts --agent sql --mode eviction \
   --trials 400 --runs 2 --cycles 12
 ```
+
+## First end-to-end RAG burn: three defects in the instrument, then a result (2026-07-28)
+
+The zero-token retrieval frontier (v0.42.0) measured CONTEXT ASSEMBLY. This is
+the first burn that put a real model behind it. It took four runs, and the first
+three were about the instrument rather than the answer — which is the point of
+writing them down.
+
+### Burn 1: the benchmark reported a number from a dead environment
+
+A transient rate limit killed every call from `fin-05` onward. All four arms
+reported an identical **33.3% accuracy** — 4 of 12 correct because 8 of 12 never
+reached the model. Identical scores across four architectures is the tell: none
+of them were measured.
+
+`ragbench` had no equivalent of the `ENV_FAILURE_STREAK` guard that `bench.ts`
+has carried since v0.38.0. Fixed: 4 consecutive environmental failures abort the
+run, `renderEndToEnd` REFUSES to print an accuracy table for an aborted run (no
+header, no percentages), and `main` exits non-zero. Also added bounded
+exponential retry and real failure diagnostics — every failure had been the bare
+string `"model call failed"`, which could not distinguish a rate limit from a bad
+flag.
+
+### Burn 2: the multi-hop arm was not multi-hop
+
+Completed 48/48. But `hops` was **1.0 on all 12 questions** — the agent replied
+`{"done":true}` on the first hop every time. The arm was being billed as an
+architecture while running as single-shot BM25 plus one wasted planning call.
+
+Cause was the prompt, which ended "Search again ONLY if the excerpts are missing
+something specific you can name." It worked exactly as written. The fix was NOT
+to encourage searching — an arm biased toward hopping buys a nicer number with
+tokens it did not need. It was to make the decision concrete: name what the
+question requires, check each part against what was retrieved, and search in the
+vocabulary of the MISSING document rather than the question's own words.
+
+### Burn 3: our own schema rejected the answers the hard questions need
+
+The prompt fix worked (`fin-06` hopped), but `fin-06` and `fin-11` then failed
+validation. `period` was `min(1).max(60)` — designed for income-statement facts,
+which always have a period, and applied to every fact:
+
+- `fin-06` returned `period: ""`, because a COVENANT THRESHOLD has no period.
+  "Restricted Payments permitted below 3.25 to 1.00" is a standing limit.
+- `fin-11` exceeded 60 chars, because covenant periods are phrases, not labels.
+
+The schema was rejecting the answer SHAPE that the cross-document questions
+require — a validation bound doubling as an unstated domain assumption. Worse,
+one malformed fact discarded the WHOLE reply. Now validated per fact (the same
+rule `verifyGrounding` already applied), with malformed facts counted separately
+from ungrounded ones so a schema bug can never hide inside a hallucination
+metric.
+
+Burn 3 also exposed a classifier gap: 6 of 12 calls died as `exited 1 with no
+stderr`, matched no signature, and so were neither retried nor aborted. A CLI
+rejecting a genuinely bad request says so; silence plus a non-zero exit is
+infrastructure. Silent non-zero exits are now environmental.
+
+### Burn 4: the actual result
+
+**11 of 12 completed, 11 of 11 correct**, hop distribution `{1: 10, 2: 2}`.
+
+| question | result | hops | ctx tok |
+|---|---|---|---|
+| fin-06 (cross-document covenant) | **correct** | **2** | 1,478 |
+| fin-08 (unanswerable) | correct (declined) | 2 | 1,109 |
+| the other 10 | 9 correct, 1 model-content failure | 1 | ~795 |
+
+`fin-06` is the one that matters. It is the question built so that no single
+lexical query retrieves both halves — the covenant says "Restricted Payments"
+and "3.25 to 1.00", the filing says "repurchased 4.1 million shares" and "2.6x".
+In the paired four-arm burn, **`bm25` and `section` both got it WRONG**. The
+agent arm gets it right by issuing a second query it could not have written
+before seeing the first result. That is the multi-hop architecture doing the one
+thing it exists to do, on the one question that requires it.
+
+Cost discipline held: 10 of 12 questions still stop at hop 1. The arm hops when
+the question needs it and not otherwise.
+
+### What is still NOT established
+
+- **No accuracy ranking between the four arms.** Burn 4 was an `--arm agent`
+  subset run; arms are only comparable when they answer the same questions in
+  the same session under the same environment. Burn 2's paired table put raw
+  accuracy at full 75.0 / bm25 75.0 / section 83.3 / agent 58.3, but 9 of 48 runs
+  failed unevenly, and excluding failures REVERSES the order (full 100%, bm25
+  90%, agent 87.5%, section 83.3%) on different denominators. Both tables are
+  n=12 with a one-to-two-question spread. Neither supports a ranking.
+- **Zero ungrounded claims across every burn.** The citation gate has rejected
+  nothing on real output. Unit tests prove it fires on fabricated input, so this
+  is "no fabrication detected", not a demonstration that the gate earns its
+  place.
+- **`fin-07` did not fail as predicted.** The paraphrase question ("borrowing
+  capacity" vs "undrawn capacity") was answered correctly by both lexical arms.
+  The predicted weakness did not bind at this budget.

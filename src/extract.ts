@@ -50,11 +50,29 @@ import { parseClaudeEnvelope, stripJsonFence } from "./model-call.js";
 export const factSchema = z.object({
 	/** What was measured, e.g. "total revenue", "operating margin". */
 	metric: z.string().min(1).max(120),
-	/** The reporting period the value belongs to, e.g. "Q3 2024", "FY2023".
+	/**
+	 * The reporting period the value belongs to, e.g. "Q3 2024", "FY2023".
 	 * Free text: filings label periods inconsistently and normalizing here would
 	 * silently discard the document's own wording, which is what a human auditor
-	 * needs to see. */
-	period: z.string().min(1).max(60),
+	 * needs to see.
+	 *
+	 * OPTIONAL, and the bound is generous — both learned from a real burn. The
+	 * original `min(1).max(60)` was designed for income-statement facts, which
+	 * always have a period, and then applied to every fact. It rejected the two
+	 * cross-document questions outright:
+	 *
+	 * - `fin-06` returned `period: ""` because a COVENANT THRESHOLD has no
+	 *   period. "Restricted Payments are permitted below 3.25 to 1.00" is a
+	 *   standing limit, not a quarterly figure. Demanding a period there forces
+	 *   the model to invent one, which is the opposite of what this module wants.
+	 * - `fin-11` exceeded 60 characters, because covenant periods are phrases
+	 *   ("as of the last day of any fiscal quarter following a Material
+	 *   Acquisition") rather than labels.
+	 *
+	 * So the schema was rejecting the answer SHAPE that the multi-hop questions
+	 * require — a validation bound doubling as an unstated domain assumption.
+	 */
+	period: z.string().max(160).default(""),
 	value: z.number().finite(),
 	/** Scale/unit as stated by the document: "millions", "%", "x", "bps". */
 	unit: z.string().max(40).default(""),
@@ -67,10 +85,15 @@ export const factSchema = z.object({
 
 export type Fact = z.infer<typeof factSchema>;
 
-/** The model is asked for this envelope. A bare array is also tolerated on
+/**
+ * The model is asked for this envelope. A bare array is also tolerated on
  * parse, because that is the single most common shape drift and rejecting it
- * would discard good extractions over punctuation. */
-const extractionSchema = z.object({ facts: z.array(factSchema).max(200) });
+ * would discard good extractions over punctuation.
+ *
+ * `facts` is validated PER ELEMENT rather than as a whole (see `parseFacts`),
+ * so this shape only pins the envelope.
+ */
+const envelopeShape = z.object({ facts: z.array(z.unknown()).max(200) });
 
 /** Why a fact was rejected. Kept as a closed set so the report can aggregate
  * failure MODES rather than just a count — "the citations do not resolve" and
@@ -88,6 +111,12 @@ export interface RejectedFact {
 export interface GroundingReport {
 	accepted: Fact[];
 	rejected: RejectedFact[];
+	/** Facts dropped by the SCHEMA before grounding could be checked. Reported
+	 * separately from `rejected` because the two mean different things: a
+	 * malformed fact is a shape problem (often ours — see `period`), an
+	 * ungrounded one is a truth problem. Folding them together would hide a
+	 * schema bug inside a hallucination metric. */
+	malformed: number;
 	/** `accepted / (accepted + rejected)`; 1 when nothing was extracted, since
 	 * an empty extraction has no ungrounded claims in it. Reported alongside the
 	 * counts precisely so an empty result cannot masquerade as a perfect one. */
@@ -155,6 +184,7 @@ export function valueAppearsIn(value: number, text: string): boolean {
 export function verifyGrounding(
 	facts: Fact[],
 	chunks: Chunk[],
+	malformed = 0,
 ): GroundingReport {
 	const byId = new Map(chunks.map((c) => [c.chunkId, c]));
 	const accepted: Fact[] = [];
@@ -181,6 +211,7 @@ export function verifyGrounding(
 	return {
 		accepted,
 		rejected,
+		malformed,
 		groundedness: total === 0 ? 1 : accepted.length / total,
 	};
 }
@@ -196,23 +227,36 @@ export function verifyGrounding(
  */
 export function parseFacts(
 	replyText: string,
-): { ok: true; facts: Fact[] } | { ok: false; reason: string } {
+):
+	| { ok: true; facts: Fact[]; malformed: number }
+	| { ok: false; reason: string } {
 	let raw: unknown;
 	try {
 		raw = JSON.parse(stripJsonFence(replyText));
 	} catch {
 		return { ok: false, reason: "extraction reply was not JSON" };
 	}
-	const wrapped = extractionSchema.safeParse(
+	const envelope = envelopeShape.safeParse(
 		Array.isArray(raw) ? { facts: raw } : raw,
 	);
-	if (!wrapped.success) {
-		return {
-			ok: false,
-			reason: `extraction reply did not match the fact schema: ${wrapped.error.issues[0]?.message ?? "unknown"}`,
-		};
+	if (!envelope.success) {
+		return { ok: false, reason: "extraction reply was not a facts envelope" };
 	}
-	return { ok: true, facts: wrapped.data.facts };
+	// PER-FACT validation. The all-or-nothing version discarded every fact in a
+	// reply because ONE of them had a malformed field, which is how a single
+	// over-long `period` string threw away correctly cited figures alongside it.
+	// Dropping the bad element and keeping the rest is not leniency — it is the
+	// same rule `verifyGrounding` already applies, which rejects individual
+	// facts rather than the batch. A malformed fact is still never repaired and
+	// never emitted; it is counted.
+	const facts: Fact[] = [];
+	let malformed = 0;
+	for (const candidate of envelope.data.facts) {
+		const parsed = factSchema.safeParse(candidate);
+		if (parsed.success) facts.push(parsed.data);
+		else malformed++;
+	}
+	return { ok: true, facts, malformed };
 }
 
 /** Parse a raw `claude -p --output-format json` stdout straight through to
@@ -226,7 +270,10 @@ export function extractFromStdout(
 	if (!envelope.ok) return { ok: false, reason: envelope.reason };
 	const parsed = parseFacts(envelope.result);
 	if (!parsed.ok) return { ok: false, reason: parsed.reason };
-	return { ok: true, report: verifyGrounding(parsed.facts, chunks) };
+	return {
+		ok: true,
+		report: verifyGrounding(parsed.facts, chunks, parsed.malformed),
+	};
 }
 
 /**

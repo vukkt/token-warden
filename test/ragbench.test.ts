@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { SpawnLike } from "../src/interrogate.js";
 import {
+	ENV_FAILURE_STREAK,
 	knee,
 	loadSuite,
 	main,
@@ -248,6 +250,19 @@ describe("parseArgs", () => {
 		expect(() => parseArgs(["--budget", "abc"])).toThrow(/positive integer/);
 	});
 
+	it("accepts --arm for a subset run and rejects an unknown arm", () => {
+		expect(parseArgs(["--arm", "agent"]).arms).toEqual(["agent"]);
+		expect(parseArgs(["--arm", "bm25", "--arm", "full"]).arms).toEqual([
+			"bm25",
+			"full",
+		]);
+		expect(() => parseArgs(["--arm", "embeddings"])).toThrow(/--arm must be/);
+	});
+
+	it("defaults to every arm when --arm is absent", () => {
+		expect(parseArgs([]).arms).toEqual([]);
+	});
+
 	it("rejects an unknown flag rather than ignoring it", () => {
 		expect(() => parseArgs(["--embeddings"])).toThrow(/unknown flag/);
 	});
@@ -307,6 +322,7 @@ describe("scoreAnswer", () => {
 			},
 		],
 		rejected: [],
+		malformed: 0,
 		groundedness: 1,
 	});
 
@@ -326,7 +342,12 @@ describe("scoreAnswer", () => {
 			expect: { value: null, unit: "", period: "" },
 		});
 		expect(
-			scoreAnswer(q, { accepted: [], rejected: [], groundedness: 1 }).correct,
+			scoreAnswer(q, {
+				accepted: [],
+				rejected: [],
+				malformed: 0,
+				groundedness: 1,
+			}).correct,
 		).toBe(true);
 		expect(scoreAnswer(q, grounded(4150)).correct).toBe(false);
 	});
@@ -352,6 +373,7 @@ describe("scoreAnswer", () => {
 					reason: "unknown-chunk" as const,
 				},
 			],
+			malformed: 0,
 			groundedness: 0,
 		};
 		expect(scoreAnswer(question(), report).ungrounded).toBe(1);
@@ -392,28 +414,107 @@ describe("runEndToEnd", () => {
 	};
 
 	it("runs every arm against every question, paired", () => {
-		const rows = runEndToEnd(SUITE, 600, { spawn });
+		const { rows } = runEndToEnd(SUITE, 600, { spawn, sleep: () => {} });
 		const questions = new Set(rows.map((r) => r.questionId));
 		for (const arm of ["full", "bm25", "section", "agent"]) {
 			expect(rows.filter((r) => r.arm === arm).length).toBe(questions.size);
 		}
 	});
 
+	it("runs only the requested arm when --arm is given", () => {
+		const { rows } = runEndToEnd(SUITE, 600, {
+			spawn,
+			sleep: () => {},
+			arms: ["agent"],
+		});
+		expect(new Set(rows.map((r) => r.arm))).toEqual(new Set(["agent"]));
+	});
+
 	it("includes the agentic arm with its hop count", () => {
-		const rows = runEndToEnd(SUITE, 600, { spawn });
+		const { rows } = runEndToEnd(SUITE, 600, { spawn, sleep: () => {} });
 		const agent = rows.filter((r) => r.arm === "agent");
 		expect(agent.length).toBeGreaterThan(0);
 		for (const row of agent) expect(row.hops).toBeGreaterThanOrEqual(1);
 	});
 
 	it("records a failure reason instead of throwing", () => {
-		const rows = runEndToEnd(SUITE, 600, { spawn: () => ({ status: 1 }) });
+		const { rows } = runEndToEnd(SUITE, 600, {
+			spawn: () => ({ status: 1 }),
+			sleep: () => {},
+		});
 		expect(rows.every((r) => r.error !== null)).toBe(true);
 		expect(rows.every((r) => r.correct === false)).toBe(true);
+	});
+
+	it("does NOT abort on non-environmental failures", () => {
+		// An unparseable reply is a result, not a dead API. Aborting on it would
+		// discard a real (bad) measurement.
+		const { aborted } = runEndToEnd(SUITE, 600, {
+			spawn: () => ({ status: 1, stderr: "malformed flag" }),
+			sleep: () => {},
+		});
+		expect(aborted).toBe(false);
+	});
+
+	it("ABORTS after a streak of environment failures", () => {
+		// The defect this guard exists for: the first real burn hit a rate limit
+		// at question 5, failed every remaining call, and reported "33.3%
+		// accuracy" for all four arms -- 4 of 12 correct because 8 of 12 never
+		// ran.
+		const run = runEndToEnd(SUITE, 600, {
+			spawn: () => ({ status: 1, stderr: "API Error 429 rate limit exceeded" }),
+			sleep: () => {},
+		});
+		expect(run.aborted).toBe(true);
+		expect(run.rows.length).toBe(ENV_FAILURE_STREAK);
+		expect(run.abortReason).toContain("consecutive environment failures");
+	});
+
+	it("a success resets the environment-failure streak", () => {
+		// Three failures then a success must not abort -- transient flakiness is
+		// not a dead environment.
+		let n = 0;
+		const flaky: SpawnLike = () => {
+			n++;
+			if (n % 4 !== 0) return { status: 1, stderr: "429 rate limit" };
+			return {
+				status: 0,
+				stdout: JSON.stringify({ result: JSON.stringify({ facts: [] }) }),
+			};
+		};
+		expect(
+			runEndToEnd(SUITE, 600, { spawn: flaky, sleep: () => {} }).aborted,
+		).toBe(false);
 	});
 });
 
 describe("renderEndToEnd", () => {
+	it("REFUSES to print an accuracy table for an aborted run", () => {
+		// A percentage computed over calls that never reached the model is
+		// indistinguishable in shape from a real one, and far more persuasive
+		// than it is true.
+		const text = renderEndToEnd({
+			rows: [
+				{
+					questionId: "q",
+					arm: "bm25",
+					contextTokens: 500,
+					correct: true,
+					ungrounded: 0,
+					hops: 1,
+					error: null,
+				},
+			],
+			aborted: true,
+			abortReason: "4 consecutive environment failures (last: 429).",
+		});
+		expect(text).toContain("ABORTED — no verdict");
+		// No table header and no percentage anywhere: the prose may discuss
+		// accuracy, but no NUMBER may be presented as one.
+		expect(text).not.toContain("arm          questions");
+		expect(text).not.toContain("%");
+	});
+
 	const row = (over: Record<string, unknown> = {}) => ({
 		questionId: "q",
 		arm: "bm25",
@@ -426,18 +527,23 @@ describe("renderEndToEnd", () => {
 	});
 
 	it("explains that ungrounded claims measure the gate, not the model", () => {
-		expect(renderEndToEnd([row()])).toContain("measured value of the gate");
+		expect(
+			renderEndToEnd({ rows: [row()], aborted: false, abortReason: null }),
+		).toContain("measured value of the gate");
 	});
 
 	it("says plainly when runs failed rather than dropping them", () => {
-		const text = renderEndToEnd([
-			row(),
-			row({ error: "boom", correct: false }),
-		]);
+		const text = renderEndToEnd({
+			rows: [row(), row({ error: "boom", correct: false })],
+			aborted: false,
+			abortReason: null,
+		});
 		expect(text).toContain("1 of 2 runs failed outright");
 	});
 
 	it("omits the failure note when nothing failed", () => {
-		expect(renderEndToEnd([row()])).not.toContain("failed outright");
+		expect(
+			renderEndToEnd({ rows: [row()], aborted: false, abortReason: null }),
+		).not.toContain("failed outright");
 	});
 });
