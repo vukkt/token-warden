@@ -12,10 +12,10 @@ that it saves more tokens than it costs to carry. Rules that fail are evicted. R
 already passed are re-tested and evicted when they stop paying.
 
 ```text
-  version    0.41.0            tests       1029 across 47 files
-  released   46 versions       coverage    96.9% lines, CI-enforced floor
-  built      2026-06 to now    source      38 modules, 12.7k lines
-  license    MIT               test code   17.4k lines
+  version    0.42.0            tests       1172 across 52 files
+  released   47 versions       coverage    97.0% lines, CI-enforced floor
+  built      2026-06 to now    source      43 modules, 14.6k lines
+  license    MIT               test code   18.8k lines
 ```
 
 ---
@@ -118,14 +118,75 @@ Roughly 0.33x on Haiku, 1.67x on Opus, 3.3x on Fable. Any row is reproducible wi
 
 ---
 
+## Context architecture
+
+The same question, one level up: **one big prompt, or a retrieval pipeline?**
+That is normally settled by argument. It is an empirical question with a different answer
+per corpus, and `/warden-ragbench` measures it — at **zero tokens**, because whether a
+strategy put the answer in front of the model is decidable without calling one.
+
+Measured on a 5-document financial corpus (a 10-K, its prior year, an earnings-call
+transcript, a segment table, and an HTML credit agreement) against 12 golden questions
+with known answers:
+
+```text
+  answer recall vs retrieval budget
+
+  budget      bm25   section      full
+     200       44%       44%      100%
+     400       89%      100%      100%
+     600      100%      100%      100%
+   2,400      100%      100%      100%
+```
+
+| Architecture | Cost/question | Answer recall | Doc recall | Verdict |
+|---|---|---|---|---|
+| Mega-prompt (whole corpus) | 4,474 tok | 100% | 100% | Never misses. Pays for everything, every question, forever. |
+| Lexical retrieval (`bm25`) | 597 tok | 100% | 87.5% | **7.5x cheaper**, same answers |
+| Section retrieval | 398 tok | 100% | 87.5% | **11.2x cheaper**, same answers |
+
+The knee is real — recall collapses to 44% at 200 tokens — and everything to the right of
+it is context that changed no answer. **A corpus nobody filtered and a rule nobody measured
+are the same mistake at different scales**, which is why this lives here rather than in a
+separate tool.
+
+The `doc recall` column is the honest asterisk on the other two: on one multi-document
+question retrieval finds the *figure* without retrieving *every* source document the answer
+depends on. That is a right answer for a slightly wrong reason, and it is reported as its
+own column rather than folded into the headline.
+
+> A 5-document corpus is small enough that the mega-prompt is a legitimate architecture.
+> Retrieval savings scale with corpus size while retrieval cost does not, so 11.2x is a
+> floor, not a headline. The tool prints that caveat with the number.
+
+Three things the pipeline does that are worth naming:
+
+- **Every extracted fact must cite its source and quote the span containing its value**,
+  and that check runs mechanically, without a model. Schema validation cannot catch a
+  fabricated figure — a made-up number is a valid `number`. Claims that fail are rejected
+  and counted, turning hallucination from an invisible failure into a reported column.
+- **Two of the twelve golden questions have no answer in the corpus**, and one has a
+  guidance range sitting exactly where the actual would be. They are scored inversely:
+  correct means the pipeline declined. A pipeline that cannot say "not in these documents"
+  will always find something.
+- **Retrieval is lexical, deliberately** — financial answers turn on exact periods, and an
+  embedding places "Q3 2023 revenue" and "Q3 2024 revenue" on top of each other. The cost
+  is paraphrase blindness, and one golden question is in the suite *because* it fails
+  there. It is the bar a semantic retriever would have to clear.
+
+Not yet measured: end-to-end answer accuracy against a live model. Recall bounds accuracy
+from above; it does not substitute for it. That distinction is kept explicit.
+
+---
+
 ## Engineering
 
 The measurement discipline is the product, so the codebase is held to it.
 
 | | |
 |---|---|
-| **Tests** | 1029 across 47 files. 17.4k lines of test code against 12.7k of source. |
-| **Coverage** | 96.9% lines, 96.0% statements, 97.1% functions, 89.1% branches, behind a ratcheted floor CI fails on. |
+| **Tests** | 1172 across 52 files. 18.8k lines of test code against 14.6k of source. |
+| **Coverage** | 97.0% lines, 96.2% statements, 97.4% functions, 89.2% branches, behind a ratcheted floor CI fails on. |
 | **Pipeline** | Staged: quality gates test, fixture and coverage, which gate validate, which gates release. Actions SHA-pinned, least-privilege tokens, `npm ci`. |
 | **Types** | Strict TypeScript with `noUncheckedIndexedAccess`. Zero `any`, zero `@ts-ignore`, zero non-null assertions across src and test. |
 | **Data** | SQLite with 16 versioned migrations, applied transactionally under `BEGIN IMMEDIATE` so two concurrent processes cannot both apply one. |
@@ -133,10 +194,13 @@ The measurement discipline is the product, so the codebase is held to it.
 
 Three decisions that show the standard better than the metrics do:
 
-- **It measured its own false-positive rate and published the bad news.** A zero-token A/A
-  harness run against real recorded data put the gate's false-positive rate at **8.8%**,
-  against the ~2.5% a synthetic model had predicted. The larger number is the one in the
-  docs.
+- **It measured its own error rates and published the bad news — both tails.** A zero-token
+  A/A harness put the gate's false-POSITIVE rate at **8.8%**, against the ~2.5% a synthetic
+  model predicted; the larger number is the one in the docs. The false-NEGATIVE rate went
+  unmeasured until v0.42.0, and the roadmap forbade building anything to fix it until it
+  was measured. It is now: a rule that genuinely saves 2% of a run is falsely evicted
+  **79.8%** of the time over twelve re-audits. The unflattering tail turned out to be an
+  order of magnitude larger than the flattering one, and it reordered the roadmap.
 - **It rejected one of its own features.** A tail-robust estimator looked like an
   improvement until calibration showed it *raised* the false-positive rate. It ships as an
   advisory flag and is kept out of the gate.
@@ -151,8 +215,8 @@ Three decisions that show the standard better than the metrics do:
 | | |
 |---|---|
 | First commit | 2026-06-11 |
-| Releases | 46 tagged versions across ~7 weeks |
-| Current | v0.41.0 |
+| Releases | 47 tagged versions across ~7 weeks |
+| Current | v0.42.0 |
 | Cadence | Ships behind a green pipeline; every release note names what is unproven |
 
 Recent arc: variance-aware verdicts and Neyman allocation, empirical self-calibration, a
@@ -195,8 +259,14 @@ npm run bench -- --agent all      # freeze baselines, once
 npx tsx src/select.ts --agent sql # measure pending candidates
 ```
 
-The bench step spends real tokens — `/warden-power` sizes it first, for free. 20 commands
-cover reporting, cost, A/B benchmarking of models and prompts, governance and team sharing.
+The bench step spends real tokens — `/warden-power` sizes it first, for free. 21 commands
+cover reporting, cost, A/B benchmarking of models, prompts and context architectures,
+governance and team sharing. The context-architecture benchmark runs for free:
+
+```bash
+npx tsx src/ragbench.ts --sweep              # recall/cost frontier, zero tokens
+npx tsx src/ragbench.ts --dir <your-corpus>  # point it at your own documents
+```
 
 ---
 

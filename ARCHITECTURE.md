@@ -80,6 +80,21 @@ exactly like `sql` or `backend`.
 | `gate.ts` | Inter-agent `SendMessage` approval prompt (sanitized, fails open) |
 | `sanitize.ts` | Single presentation-security chokepoint (control/ANSI stripping) |
 | `db.ts` / `types.ts` | SQLite access, versioned migrations, shared types |
+| `rules.ts` / `stats.ts` / `format.ts` / `model-call.ts` / `memory.ts` / `cli.ts` | Shared vocabulary: what a rule is, the estimators and gate constants, output formatting, the `claude -p` envelope, memory-file IO, the CLI entry convention |
+
+### Context sources (v0.42.0)
+
+A memory rule is one kind of context that must pay for itself. A retrieved
+document chunk is another. These modules make the second kind measurable by the
+same gate, and are independent of the rule pipeline above.
+
+| Module | Responsibility |
+| --- | --- |
+| `corpus.ts` | Ingest md/txt/csv/html; chunk on the document's own structure, not fixed windows; every chunk carries a char span so a citation is checkable. Deterministic and model-free — it is the ground truth extraction is verified against |
+| `retrieve.ts` | Retrieval strategies as measurable configs: `full` (mega-prompt), `bm25`, `section`. Lexical by choice — exact periods decide financial answers, and it stays deterministic and zero-token |
+| `extract.ts` | Structured extraction behind a groundedness gate: every fact cites a chunk and quotes the span containing its value, checked mechanically without a model. Failures are rejected and counted |
+| `interrogate.ts` | The multi-hop arm, bounded at 4 hops — for questions whose second query depends on the first result |
+| `ragbench.ts` | The architecture comparison (`/warden-ragbench`). Zero tokens by default; `--yes` runs it end to end |
 
 ## Data model (`~/.token-warden/warden.db`, SQLite)
 

@@ -557,6 +557,111 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.42.0 — the other error tail, and retrieval as a second context source
+
+- **The harness imports the real retention policy instead of copying it.**
+  `twoStrikeRetention` was extracted and exported from `select.ts` so
+  `validation/empirical-calibration.ts` measures the policy that actually ships.
+  A reimplementation inside the harness would be free to drift from production,
+  and a calibration number produced by a drifted copy is worse than no number —
+  it carries authority it has not earned.
+
+- **The false-negative rate is measured before anything is built to fix it.**
+  ROADMAP's own gating sentence forbade eviction-recovery machinery until the
+  Type II rate existed, on the grounds that guessing at an unmeasured tail is how
+  the robust-SE estimator got vetoed. The measurement came first; the result
+  (79.8% false eviction at a 2% true saving) then reorders the roadmap, rather
+  than the roadmap deciding what the measurement should show.
+
+- **The default `--mode eviction` run is at 2 runs/side, and that is stated as a
+  worst case rather than smoothed over.** Eligibility needs 2x runs-per-side of
+  recorded replicates and the deepest `sql` task has 5, so runs=3 cannot be
+  reported yet. The number is published with that constraint attached instead of
+  extrapolating a friendlier one.
+
+- **Retrieval is a CONTEXT SOURCE, not a new product.** A memory rule and a
+  retrieved chunk are the same kind of object: tokens somebody claims are worth
+  carrying. Framing retrieval as a second source for the existing gate is what
+  keeps this from being scope creep — the alternative, a separate RAG product
+  with its own unmeasured claims, is the thing this repo exists to argue against.
+
+- **Corpus parsing is deterministic and model-free by REQUIREMENT.** The corpus
+  is the ground truth that extracted facts are verified against. If a model
+  produced the chunk spans, the verifier and the thing verified would share a
+  failure mode, and the check would be theatre. This is a correctness constraint
+  that happens to also be free, not a cost saving that happens to work.
+
+- **Chunk on the document's declared structure, not fixed windows.** A fixed
+  window severs a table from the header row naming its units and period, and an
+  unlabeled number is not a fact. The cost is variable chunk size, which is why
+  the retrieval budget is denominated in tokens rather than in a count of chunks
+  — a `k = 5` comparison between strategies whose contexts differ 15x in size is
+  not a comparison of retrieval quality.
+
+- **Lexical retrieval over embeddings, with the cost stated.** Financial answers
+  turn on exact periods; an embedding puts "Q3 2023 revenue" and "Q3 2024
+  revenue" on top of each other, which is the distinction the answer depends on.
+  BM25 is also deterministic and zero-token, so re-running last month's benchmark
+  reproduces last month's retrieval — an embedding API would put a priced,
+  versioned, non-reproducible service underneath the measurement. The admitted
+  cost is paraphrase blindness, and `fin-07` is in the suite BECAUSE it fails
+  there. A semantic retriever is welcome once it beats this baseline by more than
+  the suite's noise.
+
+- **Every extracted fact must cite and quote; the check runs without a model.**
+  Schema validation cannot catch a fabricated figure — a made-up number is a
+  valid number. Requiring a resolvable `chunkId` plus a verbatim span containing
+  the value, then checking both mechanically, converts fabrication from an
+  invisible failure into a counted one (`GroundingReport.rejected`). A verifier
+  that asked a model whether the model was right would be the same coin flipped
+  twice.
+
+- **The groundedness check does not claim to verify INTERPRETATION.** A value
+  truthfully quoted from the prior-year comparative passes every check. That is
+  stated in the module header rather than left for a user to discover, because
+  the gap between "copied" and "correct" is exactly where a confident-sounding
+  pipeline does its damage.
+
+- **Value matching enumerates renderings; it does not use a tolerance.** A
+  tolerance window is how a verifier starts accepting numbers that are merely
+  CLOSE to something in the document — the failure it exists to catch. Accounting
+  parentheses are honored for negatives only, so the sign convention cannot be
+  laundered by the check itself.
+
+- **The unanswerable questions are the most important rows in the suite.** Two of
+  twelve golden questions have no answer in the corpus, and one of them
+  (`fin-08`) has a GUIDANCE range sitting where the actual would be. A pipeline
+  that cannot decline will always produce something, and on a retrieval miss that
+  something is invented — a failure invisible on every answerable question. They
+  are scored inversely: correct means the pipeline declined.
+
+- **The corpus is synthetic on purpose.** Beyond avoiding licensing and PII
+  exposure, a real 10-K lets a model answer from pre-training instead of from the
+  retrieved context, which would make a retrieval benchmark measure memorization.
+
+- **The zero-token mode is the default and the paid mode is opt-in.** Whether a
+  strategy put the answer in front of the model is decidable without calling one,
+  and recall bounds end-to-end accuracy from above. Token spend stays an operator
+  decision, never a side effect of running a report — the same rule every other
+  burn path in this repo follows.
+
+- **The 11.2x saving ships with its own caveat attached to the output, not
+  buried in a doc.** A 5-document corpus is small enough that the mega-prompt is
+  a legitimate architecture. `renderSweep` prints that the ratio is a FLOOR for a
+  real document set, because a number that travels without its caveat will be
+  quoted without it.
+
+- **`full` (the mega-prompt) is a first-class arm, not a straw man.** It has
+  recall 1.0 by construction and zero retrieval risk, and below some corpus size
+  it genuinely wins. The point of measuring it is to find where that stops being
+  true for a given corpus, rather than assuming retrieval is always correct.
+
+- **The multi-hop arm is justified narrowly.** It wins where the second query
+  depends on the first result (`fin-06`: the covenant and the filing share no
+  vocabulary) and pays extra round-trips for nothing everywhere else. Its hop
+  count is reported next to its context tokens so the extra model calls are never
+  hidden inside a context figure that looks competitive.
+
 ## v0.40.0 — hardening pass: what we fixed, and what we deliberately did not
 
 - **A degenerate golden check is retired by ADDITION, never by edit.** `sql-01`'s

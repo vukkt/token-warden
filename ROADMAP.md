@@ -173,6 +173,30 @@ what remains is running the experiments and recording their results:
   `TOKEN_WARDEN_AUTO_SELECT=1` lets the SessionStart hook spawn the selector
   detached (busiest agent first, 24h cooldown). Stays off by default until
   variance handling earns enough trust to flip it.
+- **Hybrid retrieval, admitted by measurement.** The retrieval added in v0.42.0
+  is lexical (BM25), which is deterministic, zero-token and exact on the periods
+  and identifiers financial questions turn on — and blind to paraphrase. The
+  shipped suite contains `fin-07` specifically because it fails there: the corpus
+  says "undrawn capacity under its Revolving Credit Facility" and the question
+  asks about "borrowing capacity". A semantic or hybrid retriever is the obvious
+  next step, and the discipline for admitting it is already written: it must beat
+  BM25 on the same suite by more than the suite's own noise, or the vector index
+  has not earned its infrastructure. Do NOT add an embedding dependency before
+  that comparison exists — it would put a priced, versioned, non-reproducible
+  service underneath a measurement whose whole value is reproducibility.
+- **A bigger corpus before quoting a bigger ratio.** `--sweep` currently reports
+  `section` matching mega-prompt recall at 11.2x lower cost, on 5 documents and
+  4,474 tokens. That ratio is a floor and is labelled as one in the output, but a
+  floor measured on a toy corpus is still a toy measurement. The retrieval saving
+  scales with corpus size while retrieval cost does not, so the number to publish
+  is the one from a corpus large enough that the mega-prompt is not a serious
+  option. Blocked on nothing but a corpus.
+- **End-to-end accuracy has not been run.** `--yes` is implemented and tested
+  through a spawn seam, but has never been executed against a real model, so the
+  project has zero-token RECALL numbers and no ACCURACY numbers. Recall bounds
+  accuracy from above; it does not substitute for it. Until that burn happens,
+  no claim about answer quality — or about what the groundedness gate catches in
+  practice — is supported.
 - **Better candidate quality.** Beyond the false-economy guard, the
   verdict-grounded eviction feedback (v0.32.0), and best-of-K sampling
   (v0.34.0), further distiller prompt and model tuning so proposals clear

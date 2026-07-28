@@ -1,5 +1,89 @@
 # Changelog
 
+## v0.42.0 — 2026-07-28
+
+Two additions: the gate's unmeasured error tail, and a second kind of context
+for the gate to measure.
+
+### The false-eviction rate, measured
+
+The A/A harness has published the gate's false-POSITIVE rate since v0.35.0
+(8.8% empirical against a ~2.5% synthetic claim). Its false-NEGATIVE rate was
+never measured, and ROADMAP explicitly forbade building eviction-recovery
+machinery until it was — "guessing at the other tail is how the robust-SE
+estimator got vetoed."
+
+`validation/empirical-calibration.ts --mode eviction` closes it, at zero token
+cost: resample the agent's own recorded runs, subtract a KNOWN true saving to
+synthesize a rule that genuinely earns, and replay it through the real verdict
+path for N consecutive re-audits carrying probation state. `twoStrikeRetention`
+is now EXPORTED from `src/select.ts` and imported by the harness rather than
+reimplemented, because a reimplementation is free to drift from the policy it
+claims to measure.
+
+On `sql`, 2 runs/side, 12 re-audits, 400 trials: a rule truly saving 2% of a run
+is falsely evicted **79.8%** of the time. 5% -> 60.8%, 10% -> 25.0%, 20% ->
+1.5%. **The Type II tail is an order of magnitude worse than the Type I tail.**
+Two-strike retention holds — no trial ever evicted on cycle 1, asserted in test
+— but it only buys delay; the median failure lands on cycle 4-7. The conclusion
+is that recovery matters more than admission precision, and that the binding
+constraint is suite variance rather than retention policy.
+
+Also fixes mode gating: `--mode eviction` previously also ran the permutation
+block, which tested `mode !== "bootstrap"`.
+
+### Context architecture: retrieval as a second measurable context source
+
+The project's one idea is that context must pay for itself. Until now the unit
+was a memory RULE. A retrieved document chunk is the same kind of object — it
+occupies context, it costs tokens on every call, and somebody is asserting
+without evidence that it earns its place. So retrieval enters as a second
+context source for the gate that already exists, not as a separate product.
+
+New modules:
+
+- `src/corpus.ts` — ingestion for md/txt/csv/html. Chunks on the document's own
+  declared structure rather than fixed windows, because a fixed window severs a
+  table from the header row naming its units and period, and an unlabeled number
+  is not a fact. Every chunk carries a char span, which is what makes a citation
+  checkable. Deterministic and model-free by requirement, not by thrift: the
+  corpus is the ground truth extracted facts are checked against, so a
+  model-produced span would make the check circular.
+- `src/retrieve.ts` — `full` (mega-prompt), `bm25`, `section` (expand a hit to
+  its whole section). Lexical, deliberately: financial questions turn on exact
+  periods, and an embedding places "Q3 2023 revenue" and "Q3 2024 revenue" on
+  top of each other. It is also zero-token and deterministic, so re-running last
+  month's benchmark gives last month's retrieval. Stated cost: it misses
+  paraphrase, and the suite includes a question it fails for that reason.
+- `src/extract.ts` — structured extraction behind a GROUNDEDNESS gate. Every
+  fact must cite a chunk and quote the span containing its value; the citation
+  is then checked mechanically, without a model. Facts that fail are rejected
+  and counted, never merely flagged. This converts fabrication from an invisible
+  failure into a counted one. It does not prove correct INTERPRETATION — a value
+  truthfully quoted from the prior-year column passes — and that limit is stated
+  in the module rather than papered over.
+- `src/interrogate.ts` — the multi-hop arm, bounded at 4 hops. Justified
+  narrowly: it wins where the second query depends on the first result, and
+  pays extra round-trips for nothing everywhere else.
+- `src/ragbench.ts` — the comparison. Default mode is ZERO TOKENS, because
+  whether a strategy put the answer in front of the model is decidable without
+  calling one. `--yes` runs it end to end against a real model.
+
+`benchmarks/finance/` ships a synthetic 5-document corpus and 12 golden
+questions. Synthetic on purpose: no licensing or PII exposure, and no chance a
+model answers a real 10-K from memory instead of from the context, which would
+make the benchmark measure pre-training recall rather than retrieval.
+
+First result (`npx tsx src/ragbench.ts --sweep`, zero tokens): `section`
+retrieval matches the mega-prompt's recall from **400 tokens/question — 11.2x
+cheaper** than carrying all 4,474; `bm25` from 600. Recall collapses to 44% at
+200, so the knee is real. The caveat ships with the number: a 5-document corpus
+is small enough that the mega-prompt is a legitimate architecture, and the
+saving scales with corpus size while retrieval cost does not, so 11.2x is a
+FLOOR for a real document set rather than a headline.
+
+New command `/warden-ragbench`. 1,172 tests (up from 1,034).
+
 ## v0.41.0 — 2026-07-26
 
 The deferred shared-module extractions from v0.40.0, plus a correction to that
