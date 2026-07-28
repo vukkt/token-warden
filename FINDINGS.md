@@ -631,3 +631,57 @@ Re-run any time: `npx tsx validation/naive-headroom-experiment.ts` (positive
 control; `--yes` to spend tokens), `./validation/run.sh sql` (controlled on the
 shipped agent), or `npx tsx validation/dress-rehearsal.ts` (zero-token pipeline
 walk-through).
+
+## False evictions: the other tail, measured (2026-07-28, v0.42.0)
+
+The gate's false-POSITIVE rate has been published since v0.35.0 (8.8% empirical,
+against a ~2.5% synthetic claim). Its false-NEGATIVE rate was never measured, and
+ROADMAP.md explicitly forbade building eviction-recovery machinery until it was —
+"guessing at the other tail is how the robust-SE estimator got vetoed."
+
+`validation/empirical-calibration.ts --mode eviction` closes that. It is zero
+token: it resamples the agent's own recorded golden runs, subtracts a KNOWN true
+saving to synthesize a rule that genuinely earns, and replays it through the real
+verdict path — `assessDelta` -> `verdictWithReason` -> `twoStrikeRetention`,
+imported from `src/select.ts`, not reimplemented — for N consecutive re-audits,
+carrying probation state exactly as the selector does. It reports how often a
+genuinely good rule is binned, and on which cycle.
+
+`sql` pool, 2 runs/side, 12 consecutive re-audits, 400 trials/row, rent 25:
+
+| True saving | Falsely evicted [95% CI] | Median cycle |
+|---|---|---|
+| 2.0% (945 tok) | **79.8%** [75.5%, 83.4%] | 4 |
+| 5.0% (2,362 tok) | **60.8%** [55.9%, 65.4%] | 6 |
+| 10.0% (4,724 tok) | **25.0%** [21.0%, 29.5%] | 7 |
+| 20.0% (9,448 tok) | **1.5%** [0.7%, 3.2%] | 5 |
+
+**The Type II tail is an order of magnitude worse than the Type I tail.** A rule
+saving 945 tokens every single run — 17x its own rent — is more likely than not
+to be thrown away, and the median failure lands on the fourth re-audit rather
+than the first. Two-strike retention works as designed (no trial ever evicted on
+cycle 1, asserted in test) but it only buys delay: given enough re-audits, a
+modest true effect eventually draws two consecutive unlucky samples.
+
+Three consequences, stated rather than acted on:
+
+- **Recovery matters more than admission precision.** Effort spent tightening the
+  keep threshold is spent on the smaller error. Nothing currently retries an
+  evicted rule, and the trigram dedupe does not distinguish "measured negative"
+  from "measured positive but too noisy to bank."
+- **The binding constraint is suite variance, not policy.** At 2 runs/side the
+  `sql` suite's own noise is comparable to the effects being measured. Cutting
+  suite variance moves both tails at once; tuning the retention rule moves one
+  and costs the other.
+- **This cannot yet be measured at the default 3 runs/side.** Eligibility needs
+  >= 2x runs-per-side recorded replicates per task, and the deepest `sql` task
+  has 5. The numbers above are therefore a WORST case for run count and a best
+  case for pool depth. They are not extrapolated to runs=3; that row will exist
+  when the pool does.
+
+Reproduce (no tokens):
+
+```bash
+npx tsx validation/empirical-calibration.ts --agent sql --mode eviction \
+  --trials 400 --runs 2 --cycles 12
+```

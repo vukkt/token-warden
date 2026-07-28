@@ -53,7 +53,9 @@ import {
 	allocateTopUpRuns,
 	assessDelta,
 	mergeSummaries,
+	twoStrikeRetention,
 	verdict,
+	verdictWithReason,
 } from "../src/select.js";
 import { confidenceZ, effectiveRent } from "../src/stats.js";
 
@@ -64,6 +66,10 @@ const DEFAULT_TRIALS = 2000;
 const DEFAULT_PERM_RUNS = 2;
 const DEFAULT_BOOT_RUNS = 3;
 const DEFAULT_RENT = 25;
+/** Consecutive re-audits simulated per rule in eviction mode. Twelve is a
+ * year of monthly re-audits, or a quarter of weekly ones — long enough for two
+ * consecutive unlucky draws to be a real risk rather than a curiosity. */
+const DEFAULT_CYCLES = 12;
 const DEFAULT_SEED = 42;
 const INJECTED_FRACS = [0, 0.02, 0.05, 0.1, 0.2];
 
@@ -186,6 +192,66 @@ export function candidateKept(
 }
 
 /**
+ * FALSE EVICTION — the tail the A/A harness does not cover.
+ *
+ * `candidateKept` above models ADMISSION: a rule arriving for the first time.
+ * Eviction is a different path with different logic. A rule already in memory is
+ * re-audited, and two-strike retention applies: one sub-threshold draw puts it on
+ * probation and it SURVIVES; only a second CONSECUTIVE sub-threshold draw evicts.
+ *
+ * So the false-eviction rate is not a property of a single trial — it is a
+ * property of a SEQUENCE. A genuinely earning rule survives one unlucky draw by
+ * design; what matters is how often it draws two in a row before the noise
+ * averages out. That is what this simulates: `cycles` consecutive re-audits of a
+ * rule whose TRUE saving is `trueSaving`, carrying probation state between them
+ * exactly as the ledger does.
+ *
+ * Uses the real `assessDelta`, `verdictWithReason` and `twoStrikeRetention`, so
+ * the policy under measurement is the shipped policy and cannot drift from it.
+ *
+ * Returns the cycle index (1-based) at which the rule was wrongly evicted, or
+ * null if it survived all of them. Every eviction here is a FALSE one by
+ * construction: the injected effect is real and positive.
+ */
+export function falseEvictionTrial(
+	rng: () => number,
+	groups: ReplicateGroup[],
+	runsPerSide: number,
+	rent: number,
+	trueSaving: number,
+	cycles: number,
+): number | null {
+	let probation = 0;
+	for (let cycle = 1; cycle <= cycles; cycle++) {
+		// A re-audit re-measures the active set with and without the rule. The
+		// rule genuinely saves `trueSaving`, so the WITHOUT side costs more.
+		const without = groups.map((group) =>
+			toSummary(group.taskId, resample(rng, group.totals, runsPerSide), "w"),
+		);
+		const withRule = groups.map((group) =>
+			toSummary(
+				group.taskId,
+				resample(rng, group.totals, runsPerSide).map((t) =>
+					Math.max(0, t - trueSaving),
+				),
+				"m",
+			),
+		);
+		const a = assessDelta(without, withRule, rent);
+		// An environment failure aborts the whole decision and writes nothing —
+		// the rule keeps its status AND its probation counter. Not an eviction.
+		if (a.environmentFailure) continue;
+		const base = verdictWithReason(a.delta, rent, a.regression);
+		const outcome = twoStrikeRetention(true, probation, a.regression, base);
+		if (outcome.status === "evicted") return cycle;
+		// probationWrite: true records a strike, false clears it, null leaves it.
+		if (outcome.probationWrite === true) probation = 1;
+		else if (outcome.probationWrite === false) probation = 0;
+	}
+	return null;
+}
+
+/**
  * One A/A permutation trial. Exchangeable split (true delta 0 by
  * construction); uncertain verdicts get the hybrid bootstrap top-up from the
  * held-out replicates (see header). Returns whether the null rule was KEPT —
@@ -278,7 +344,7 @@ export function wilson(k: number, n: number): { lo: number; hi: number } {
 	return { lo: Math.max(0, center - half), hi: Math.min(1, center + half) };
 }
 
-export type CalibrationMode = "permutation" | "bootstrap" | "both";
+export type CalibrationMode = "permutation" | "bootstrap" | "eviction" | "both";
 
 export interface EmpiricalArgs {
 	agent: string | null;
@@ -289,6 +355,8 @@ export interface EmpiricalArgs {
 	bootRuns: number;
 	rent: number;
 	seed: number;
+	/** Consecutive re-audits simulated per rule in eviction mode. */
+	cycles: number;
 }
 
 export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
@@ -301,6 +369,7 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 		bootRuns: DEFAULT_BOOT_RUNS,
 		rent: DEFAULT_RENT,
 		seed: DEFAULT_SEED,
+		cycles: DEFAULT_CYCLES,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
@@ -312,11 +381,22 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 			const path = argv[++i];
 			if (!path) throw new Error("--db requires a path");
 			args.dbPath = path;
+		} else if (flag === "--cycles") {
+			const n = Number(argv[++i]);
+			if (!Number.isInteger(n) || n < 1) {
+				throw new Error("--cycles must be a positive integer");
+			}
+			args.cycles = n;
 		} else if (flag === "--mode") {
 			const mode = argv[++i] ?? "";
-			if (mode !== "permutation" && mode !== "bootstrap" && mode !== "both") {
+			if (
+				mode !== "permutation" &&
+				mode !== "bootstrap" &&
+				mode !== "eviction" &&
+				mode !== "both"
+			) {
 				throw new Error(
-					`--mode must be permutation, bootstrap, or both (got "${mode}")`,
+					`--mode must be permutation, bootstrap, eviction, or both (got "${mode}")`,
 				);
 			}
 			args.mode = mode;
@@ -393,7 +473,7 @@ function reportAgent(
 		);
 	}
 
-	if (args.mode !== "bootstrap") {
+	if (args.mode === "permutation" || args.mode === "both") {
 		if (permEligible.length < 2) {
 			console.log(`permutation A/A: ${INSUFFICIENT}`);
 		} else {
@@ -411,7 +491,7 @@ function reportAgent(
 		}
 	}
 
-	if (args.mode !== "permutation") {
+	if (args.mode === "bootstrap" || args.mode === "both") {
 		if (bootEligible.length < 2) {
 			console.log(`bootstrap: ${INSUFFICIENT}`);
 		} else {
@@ -449,6 +529,63 @@ function reportAgent(
 					[tag.padStart(20), ci(kept, args.trials).padStart(26)].join("  "),
 				);
 			}
+		}
+	}
+
+	if (args.mode === "eviction" || args.mode === "both") {
+		if (bootEligible.length < 2) {
+			console.log(`eviction: ${INSUFFICIENT}`);
+			return;
+		}
+		const all = bootEligible.flatMap((g) => g.totals);
+		const pooledMean = all.reduce((a, b) => a + b, 0) / all.length;
+		console.log(
+			`false eviction (runs=${args.bootRuns}/side, ${bootEligible.length} tasks, ` +
+				`${args.cycles} consecutive re-audits, ${args.trials} trials/row):`,
+		);
+		console.log(
+			[
+				"true saving".padStart(20),
+				"evicted [95% CI]".padStart(26),
+				"median cycle".padStart(14),
+			].join("  "),
+		);
+		for (const frac of INJECTED_FRACS) {
+			// A true saving of 0 is not a false eviction — the rule genuinely is
+			// not earning, and evicting it is the gate working. Skip that row.
+			if (frac === 0) continue;
+			const trueSaving = Math.round(pooledMean * frac);
+			const rng = mulberry32(agentSeed ^ (0xe00 + Math.round(frac * 1000)));
+			let evicted = 0;
+			const cyclesAt: number[] = [];
+			for (let i = 0; i < args.trials; i++) {
+				const at = falseEvictionTrial(
+					rng,
+					bootEligible,
+					args.bootRuns,
+					args.rent,
+					trueSaving,
+					args.cycles,
+				);
+				if (at !== null) {
+					evicted++;
+					cyclesAt.push(at);
+				}
+			}
+			const med =
+				cyclesAt.length === 0
+					? "-"
+					: String(
+							cyclesAt.sort((a, b) => a - b)[Math.floor(cyclesAt.length / 2)] ??
+								"-",
+						);
+			console.log(
+				[
+					`${pct(frac)} (${trueSaving} tok)`.padStart(20),
+					ci(evicted, args.trials).padStart(26),
+					med.padStart(14),
+				].join("  "),
+			);
 		}
 	}
 }

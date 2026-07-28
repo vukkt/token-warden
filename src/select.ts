@@ -1002,7 +1002,7 @@ function deadMeasurementError(
 	});
 }
 
-interface ProbationOutcome extends ReasonedVerdict {
+export interface ProbationOutcome extends ReasonedVerdict {
 	probation: boolean;
 	/** Pending write to `rules.probation`: true = record a strike, false = clear
 	 * one, null = leave it alone. Returned rather than written so the policy is
@@ -1021,16 +1021,25 @@ interface ProbationOutcome extends ReasonedVerdict {
  * a passing re-audit clears the strike. A regression still evicts immediately
  * (safety invariant).
  */
-function applyProbationPolicy(
-	plan: MeasurementPlan,
+/**
+ * Two-strike retention, as a pure function of the only three things it depends
+ * on. Split out from `applyProbationPolicy` so the calibration harness can run
+ * the REAL policy rather than a re-implementation of it — a re-implemented copy
+ * would drift, and a harness that measures a copy measures a fiction.
+ *
+ * `isReAudit` gates the whole policy: a candidate being admitted for the first
+ * time gets no probation, and a regression evicts immediately regardless.
+ */
+export function twoStrikeRetention(
+	isReAudit: boolean,
+	priorProbation: number,
 	regression: boolean,
 	base: ReasonedVerdict,
 ): ProbationOutcome {
-	const { rule } = plan;
-	if (plan.kind !== "re-audit" || regression) {
+	if (!isReAudit || regression) {
 		return { ...base, probation: false, probationWrite: null };
 	}
-	if (base.status === "evicted" && rule.probation === 0) {
+	if (base.status === "evicted" && priorProbation === 0) {
 		return {
 			status: "active",
 			reason: `probation (strike 1 of 2): ${base.reason} — retained; a second consecutive sub-threshold re-audit evicts`,
@@ -1049,8 +1058,21 @@ function applyProbationPolicy(
 	return {
 		...base,
 		probation: false,
-		probationWrite: rule.probation !== 0 ? false : null,
+		probationWrite: priorProbation !== 0 ? false : null,
 	};
+}
+
+function applyProbationPolicy(
+	plan: MeasurementPlan,
+	regression: boolean,
+	base: ReasonedVerdict,
+): ProbationOutcome {
+	return twoStrikeRetention(
+		plan.kind === "re-audit",
+		plan.rule.probation,
+		regression,
+		base,
+	);
 }
 
 /** Everything the persistence step needs about a finished measurement. Both

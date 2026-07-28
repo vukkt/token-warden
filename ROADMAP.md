@@ -100,9 +100,17 @@ what remains is running the experiments and recording their results:
   the admission side. The expensive version is re-queuing evicted-as-uncertain
   rules when the suite's noise floor drops; that one waits on the variance work
   above, since re-running them into the same noise would only reproduce the same
-  verdict. Do not build the eviction side of this before the false-negative rate
-  is actually measured — the A/A harness measures admission only, and guessing
-  at the other tail is how the robust-SE estimator got vetoed.
+  verdict. **The false-negative rate is now measured** (v0.42.0). The prerequisite this
+  entry set for itself is met: `validation/empirical-calibration.ts --mode
+  eviction` replays a rule of known true saving through the REAL
+  `assessDelta` -> `verdictWithReason` -> `twoStrikeRetention` path for N
+  consecutive re-audits, resampling the agent's own recorded runs. On the `sql`
+  pool at 2 runs/side over 12 re-audits, a rule truly saving 2% of a run is
+  evicted **79.8%** of the time; 5% -> 60.8%; 10% -> 25.0%; 20% -> 1.5%. The
+  Type II tail is an order of magnitude worse than the 7.5-8.8% Type I tail, and
+  two-strike retention only delays it (median eviction cycle 4-7, never cycle 1).
+  That number, not intuition, is what the recovery work above should now be
+  sized against — and it says recovery matters more than admission precision.
 - **Close the loop on the agent PROMPT, not just its memory.** `/warden-evolve`
   already exists and is the feed-forward analog of the distiller aimed at base
   instructions: it proposes a rewrite of the prompt body (frontmatter preserved

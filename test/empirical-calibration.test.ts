@@ -4,6 +4,7 @@ import type { GoldenReplicateRun } from "../src/db.js";
 import {
 	bootstrapTrial,
 	candidateKept,
+	falseEvictionTrial,
 	groupReplicates,
 	parseEmpiricalArgs,
 	permutationTrial,
@@ -277,5 +278,65 @@ describe("parseEmpiricalArgs", () => {
 	it("throws on a bad --agent and a bad --mode", () => {
 		expect(() => parseEmpiricalArgs(["--agent", "nope"])).toThrow(/--agent/);
 		expect(() => parseEmpiricalArgs(["--mode", "sideways"])).toThrow(/--mode/);
+	});
+});
+
+describe("falseEvictionTrial", () => {
+	const groups: ReplicateGroup[] = [
+		{ taskId: "t1", totals: [40000, 42000, 41000, 43000] },
+		{ taskId: "t2", totals: [50000, 52000, 51000, 53000] },
+		{ taskId: "t3", totals: [46000, 48000, 47000, 45000] },
+	];
+
+	it("returns null when a large true saving survives every re-audit", () => {
+		// A saving of 20k tokens/run against ~46k totals is far outside the
+		// resampling noise, so no cycle should produce two consecutive
+		// sub-threshold re-audits.
+		const rng = mulberry32(1);
+		expect(falseEvictionTrial(rng, groups, 2, 25, 20000, 12)).toBeNull();
+	});
+
+	it("evicts a rule whose true saving is zero", () => {
+		// Zero true saving means every re-audit is measuring noise, so the
+		// two-strike policy should bin it — and report the cycle it happened on.
+		const rng = mulberry32(2);
+		const cycle = falseEvictionTrial(rng, groups, 2, 25, 0, 12);
+		expect(cycle).not.toBeNull();
+		expect(cycle).toBeGreaterThanOrEqual(2);
+		expect(cycle).toBeLessThanOrEqual(12);
+	});
+
+	it("never evicts before cycle 2 — one strike is probation, not eviction", () => {
+		// The whole point of two-strike retention: a single unlucky re-audit
+		// must not be able to bin a rule. If this ever returns 1 the harness
+		// has drifted from the real policy in src/select.ts.
+		for (let seed = 1; seed <= 200; seed++) {
+			const cycle = falseEvictionTrial(mulberry32(seed), groups, 2, 25, 0, 12);
+			if (cycle !== null) expect(cycle).toBeGreaterThanOrEqual(2);
+		}
+	});
+
+	it("is deterministic for a given seed", () => {
+		const a = falseEvictionTrial(mulberry32(7), groups, 2, 25, 500, 12);
+		const b = falseEvictionTrial(mulberry32(7), groups, 2, 25, 500, 12);
+		expect(a).toBe(b);
+	});
+
+	it("evicts a small true saving more often than a large one", () => {
+		// Power is monotone in effect size. This is the property the reported
+		// table rests on, so it is asserted rather than eyeballed.
+		const rate = (saving: number): number => {
+			let evicted = 0;
+			for (let seed = 1; seed <= 150; seed++) {
+				if (
+					falseEvictionTrial(mulberry32(seed), groups, 2, 25, saving, 12) !==
+					null
+				) {
+					evicted++;
+				}
+			}
+			return evicted / 150;
+		};
+		expect(rate(1000)).toBeGreaterThan(rate(15000));
 	});
 });
