@@ -64,12 +64,16 @@ what remains is running the experiments and recording their results:
   1684 lines, `distill.ts` in-degree 7 -> 1, CLI shims 25 -> 6. Both hubs were
   accidents — four modules wanted pure text helpers from the distiller, three
   wanted one formatter or three estimators from the selector.
-  Open: `withDb` (open + `finally db.close()`, 23 hand-written copies). It was
-  written during this pass and removed before commit rather than shipped
-  unused, because unlike the entry shim it rewrites the BODY of every call site
-  and so needs its own verification rather than riding along on a mechanical
-  trailer replacement. The four fail-open hooks must keep their own boundary:
-  "exit 0 whatever happens" is different knowledge from "report and exit 1".
+  `withDb` (open + `finally db.close()`) SHIPPED in v0.43.0, after being written
+  and withheld once because it rewrites the BODY of every call site rather than
+  a uniform trailer. It lives in `db.ts` beside `openDb`, so no call site gained
+  an import to adopt it; 21 hand-written lifetimes became one. `collect` keeps
+  its own `openHookDb` (a shortened `busy_timeout` so a contended write is
+  retriable inside the hook's budget), and the four fail-open hooks keep their
+  own boundary: "exit 0 whatever happens" is different knowledge from "report
+  and exit 1". Three read-only import allowlists (`contradict`, `cohort`,
+  `confirm`) name the helper explicitly and were updated deliberately —
+  `withDb` is the same capability as `openDb`, which is why those tests exist.
 - **Cut golden-suite variance further.** Real runs varied >25%, burying modest
   savings under noise. Shipped in v0.34.0: `/warden-health` now ranks golden
   tasks by run-to-run variance so the noisiest are named with evidence. Also
@@ -93,12 +97,23 @@ what remains is running the experiments and recording their results:
   **The gap is recovery.** Nothing retries an evicted rule, and the trigram
   dedupe that stops a falsified rule being re-proposed does not distinguish
   "measured negative" from "measured positive but too noisy to bank" — so a
-  good-but-unlucky rule is effectively excluded for life. The cheap first
-  version is a variance-proportional re-audit budget: spend more runs
-  re-auditing a rule whose prior verdict was positive, instead of treating every
-  audit as equal cost, which is the same Neyman logic the top-up already uses on
-  the admission side. The expensive version is re-queuing evicted-as-uncertain
-  rules when the suite's noise floor drops; that one waits on the variance work
+  good-but-unlucky rule is effectively excluded for life.
+  **The variance-proportional re-audit budget SHIPPED in v0.43.0** — spend more
+  evidence re-auditing a rule with a banked margin instead of treating every
+  audit as equal cost. Measured on the `sql` pool at 2 runs/side: a rule truly
+  saving 10% of a run is evicted 5.4% of the time instead of 16.3%, 5% -> 32.5%
+  from 53.8%, at ~1.5 extra suite passes per re-audit. Two design guesses were
+  measured and discarded first, and the shape that worked is NOT the one this
+  entry proposed: extra runs on the measured side alone are worth nothing (the
+  delta's error sums both sides, so the frozen side sets a floor no one-sided
+  budget can cross), and Neyman placement — the house style — is actively worse
+  than spreading the same runs uniformly at 2 runs/task, where the variance
+  estimate carries one degree of freedom. See FINDINGS.md; the lesson is that
+  the admission side's tuning does not transfer to the retention side.
+  Still open: the trigram dedupe still cannot tell a measured negative from a
+  measured positive that was too noisy to bank, so nothing re-queues a
+  good-but-unlucky rule. The expensive version — re-queuing evicted-as-uncertain
+  rules when the suite's noise floor drops — still waits on the variance work
   above, since re-running them into the same noise would only reproduce the same
   verdict. **The false-negative rate is now measured** (v0.42.0). The prerequisite this
   entry set for itself is met: `validation/empirical-calibration.ts --mode
@@ -106,7 +121,11 @@ what remains is running the experiments and recording their results:
   `assessDelta` -> `verdictWithReason` -> `twoStrikeRetention` path for N
   consecutive re-audits, resampling the agent's own recorded runs. On the `sql`
   pool at 2 runs/side over 12 re-audits, a rule truly saving 2% of a run is
-  evicted **79.8%** of the time; 5% -> 60.8%; 10% -> 25.0%; 20% -> 1.5%. The
+  evicted **78.2%** of the time; 5% -> 53.8%; 10% -> 16.3%; 20% -> 0.2%.
+  (Figures corrected in v0.43.0: the first cut of the harness decided each
+  re-audit on its first look, which the selector has never done — it always
+  spends a top-up pass on a verdict within noise. The published 79.8/60.8/25.0
+  described a stricter pipeline than the one that ships.) The
   Type II tail is an order of magnitude worse than the 7.5-8.8% Type I tail, and
   two-strike retention only delays it (median eviction cycle 4-7, never cycle 1).
   That number, not intuition, is what the recovery work above should now be

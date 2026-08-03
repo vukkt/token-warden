@@ -23,9 +23,9 @@ import {
 	getRuleById,
 	insertRule,
 	listRulesByAgent,
-	openDb,
 	type RuleRow,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import {
 	distillModel,
@@ -249,13 +249,10 @@ export function runCompress(
 
 export function main(argv: string[]): number {
 	const args = parseCompressArgs(argv);
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		console.log(runCompress(db, args));
 		return 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

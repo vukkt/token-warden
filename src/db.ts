@@ -273,6 +273,36 @@ export function openDb(path: string = defaultDbPath()): WardenDb {
 }
 
 /**
+ * Open the ledger, run `body`, and close the connection whatever happens.
+ *
+ * Every command wrote this by hand: `const db = openDb(); try { ... } finally {
+ * db.close(); }`. Twenty-two copies of one lifetime is twenty-two chances for a
+ * `finally` to go missing, and a leaked handle keeps a WAL lock the next warden
+ * process then waits on — the SQLITE_BUSY class of bug this repo has already
+ * shipped once.
+ *
+ * NOT for the fail-open hooks. `collect` opens with a shortened `busy_timeout`
+ * so a contended write can be retried inside the hook's budget, and a hook must
+ * exit 0 whatever happens; that is different knowledge from "open the ledger",
+ * and it keeps its own `openHookDb`.
+ */
+export function withDb<T>(body: (db: WardenDb) => T): T;
+export function withDb<T>(path: string, body: (db: WardenDb) => T): T;
+export function withDb<T>(
+	pathOrBody: string | ((db: WardenDb) => T),
+	maybeBody?: (db: WardenDb) => T,
+): T {
+	const body = typeof pathOrBody === "function" ? pathOrBody : maybeBody;
+	if (!body) throw new Error("withDb: no body supplied");
+	const db = typeof pathOrBody === "string" ? openDb(pathOrBody) : openDb();
+	try {
+		return body(db);
+	} finally {
+		db.close();
+	}
+}
+
+/**
  * Unwrap the row an `INSERT ... RETURNING` promised. better-sqlite3 types
  * `.get()` as possibly-undefined; for these statements that can only happen if
  * the insert did not land, which means a corrupt or concurrently-mangled DB.

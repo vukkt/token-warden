@@ -1,5 +1,84 @@
 # Changelog
 
+## v0.43.0 — 2026-08-03
+
+The variance-proportional RE-AUDIT budget: the retention-side analogue of the
+Neyman top-up the admission side has used since v0.24.0. v0.42.0 measured the
+gate's Type II tail and concluded that recovery matters more than admission
+precision; this is the first policy built on that conclusion.
+
+### The policy
+
+A re-audit that lands within noise of the bar now buys extra measurement rounds
+when — and only when — noise, rather than the rule, is what threatens it. The
+stake is the rule's banked margin over its own bar; the threat is the noise band
+of the current draw at the gate's own confidence multiple. Their ratio sets the
+budget, capped at two extra rounds (`MAX_RETENTION_ROUNDS`).
+
+Nothing about the keep/evict inequality moves. The bar, the confidence multiple
+and two-strike retention are untouched, a regression still evicts immediately,
+and CANDIDATES get no retention rounds at all — admission is byte-identical to
+v0.42.0. `--retention-rounds 0` restores the old behaviour as the control arm.
+
+### Two designs measured and discarded before this one
+
+Both would have shipped on intuition; the zero-token harness rejected both.
+
+- **Extra rounds on the measured side only** — the shape ROADMAP itself
+  proposed. Worth nothing (78.2% -> 79.1% false eviction at a 2% true saving) at
+  2.2 extra passes per re-audit. The delta's error sums BOTH sides, so no budget
+  spent on one side can cross the floor the frozen side sets. Retention rounds
+  therefore re-measure both sides.
+- **Neyman placement for those rounds** — the house style everywhere else in the
+  codebase. Actively harmful: same tokens, uniform placement instead, and a 5%
+  rule's false eviction falls 49.6% -> 29.3%, a 10% rule's 11.9% -> 2.0%. At 2
+  runs/task the variance estimate carries one degree of freedom, so
+  concentrating a round on "the noisiest task" chases an artifact. Retention
+  rounds are placed uniformly; the first top-up keeps Neyman.
+
+### Measured effect (sql pool, 2 runs/side, 12 re-audits, 3,000 trials, zero tokens)
+
+| True saving | control | with budget | passes/audit |
+|---|---|---|---|
+| 2.0% | 78.2% | **70.3%** | 0.87 -> 2.37 |
+| 5.0% | 53.8% | **32.5%** | 0.84 -> 2.22 |
+| 10.0% | 16.3% | **5.4%** | 0.75 -> 1.62 |
+| 20.0% | 0.2% | 0.3% | 0.48 -> 0.65 |
+
+A rule genuinely saving 10% of a run is three times likelier to survive its own
+re-audits. The 20% row is the control that should not move, and does not: a
+decisively measured rule buys no rounds. It does not close the tail — a 2% rule
+is still evicted 70% of the time, and suite variance remains the binding
+constraint.
+
+### Harness correction
+
+`--mode eviction` decided every simulated re-audit on its first look, but
+`measureWithTopUp` has always spent a top-up pass when the verdict lands within
+noise. The v0.42.0 table therefore measured a stricter pipeline than the one
+that ships; corrected control column 78.2% / 53.8% / 16.3% against the published
+79.8% / 60.8% / 25.0%. The v0.42.0 conclusion survives, its magnitudes do not.
+Same class of error as burn 1 of the RAG benchmark, and recorded as such in
+FINDINGS.md.
+
+### Repository
+
+`withDb(body)` in `db.ts` replaces 21 hand-written `const db = openDb(); try {
+... } finally { db.close(); }` blocks — the last open item from the v0.41.0
+shared-module extractions, withheld then because it rewrites the BODY of every
+call site rather than a uniform trailer. It sits beside `openDb` so no command
+gained an import to adopt it. `collect` keeps its own `openHookDb` (shortened
+`busy_timeout` so a contended write stays retriable inside the hook's budget).
+The three read-only import allowlists that name the helper (`contradict`,
+`cohort`, `confirm`) were updated deliberately: `withDb` is the same capability
+as `openDb`, which is exactly what those tests exist to police.
+
+Also: `DeltaAssessment` carries `confidenceMultiple` so the budget reasons about
+the same noise band the gate does rather than forming a second opinion; the
+receipt now records the reference side AS COMPARED, including retention runs;
+`falseEvictionTrial` reports what a sequence cost in passes, not only whether it
+survived. `--retention-rounds N` on both `/warden-select` and the harness.
+
 ## v0.42.0 — 2026-07-28
 
 Two additions: the gate's unmeasured error tail, and a second kind of context

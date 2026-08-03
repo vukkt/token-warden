@@ -38,9 +38,9 @@ import {
 import {
 	getActiveRules,
 	getRulesetVersion,
-	openDb,
 	type RuleRow,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { knownAgents } from "./registry.js";
 
@@ -177,8 +177,7 @@ function benchOne(
 }
 
 export function main(args: ModelbenchArgs): void {
-	const db = openDb();
-	try {
+	withDb((db) => {
 		if (args.agent !== "all") {
 			const { comparison, benchTokens } = benchOne(db, args.agent, args);
 			console.log("");
@@ -211,9 +210,7 @@ export function main(args: ModelbenchArgs): void {
 		}
 		console.log(formatCategoryRegressions(comparisons));
 		reportMetaCost(db, totalBenchTokens);
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

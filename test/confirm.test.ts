@@ -157,7 +157,7 @@ describe("confirm.ts is structurally incapable of changing a rule", () => {
 			.map((s) => s.replace(/\btype\b/, "").trim())
 			.filter(Boolean);
 		expect(new Set(imported)).toEqual(
-			new Set(["getActiveRules", "latestReceipts", "openDb", "ReceiptRow"]),
+			new Set(["getActiveRules", "latestReceipts", "withDb", "ReceiptRow"]),
 		);
 	});
 

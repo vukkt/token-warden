@@ -38,8 +38,8 @@
  * same as any warden command); the harness itself only SELECTs.
  *
  *   npx tsx validation/empirical-calibration.ts [--agent <name>] [--db <path>]
- *     [--mode permutation|bootstrap|both] [--trials N] [--runs N] [--rent N]
- *     [--seed N]
+ *     [--mode permutation|bootstrap|eviction|both] [--trials N] [--runs N]
+ *     [--rent N] [--seed N] [--cycles N] [--retention-rounds N]
  */
 import { pathToFileURL } from "node:url";
 import { summarizeTask, type TaskSummary } from "../src/bench.js";
@@ -52,7 +52,9 @@ import { assertKnownAgent, knownAgents } from "../src/registry.js";
 import {
 	allocateTopUpRuns,
 	assessDelta,
+	MAX_RETENTION_ROUNDS,
 	mergeSummaries,
+	retentionRounds,
 	twoStrikeRetention,
 	verdict,
 	verdictWithReason,
@@ -206,29 +208,65 @@ export function candidateKept(
  * rule whose TRUE saving is `trueSaving`, carrying probation state between them
  * exactly as the ledger does.
  *
- * Uses the real `assessDelta`, `verdictWithReason` and `twoStrikeRetention`, so
- * the policy under measurement is the shipped policy and cannot drift from it.
+ * Uses the real `assessDelta`, `verdictWithReason`, `allocateTopUpRuns`,
+ * `retentionRounds` and `twoStrikeRetention`, so the policy under measurement
+ * is the shipped policy and cannot drift from it.
  *
- * Returns the cycle index (1-based) at which the rule was wrongly evicted, or
- * null if it survived all of them. Every eviction here is a FALSE one by
- * construction: the injected effect is real and positive.
+ * The re-audit TOP-UP is modelled here too (added 2026-07-31). It was missing
+ * from the first cut of this harness, which therefore measured a re-audit that
+ * decides on its first look — something the selector has never done, since
+ * `measureWithTopUp` spends a pass whenever the verdict is within noise of the
+ * bar. The published 79.8%/60.8%/25.0% table was produced by that shorter path
+ * and is superseded by the numbers in FINDINGS.md; measuring a policy the code
+ * does not implement is the same class of error as burn 1 of the RAG benchmark.
+ *
+ * `maxRetentionRounds` is the knob under test: 0 reproduces the single-top-up
+ * behaviour that shipped before v0.43.0, and is the control arm.
+ *
+ * Returns the cycle index (1-based) at which the rule was wrongly evicted (null
+ * if it survived all of them) alongside what the sequence COST in extra
+ * measurement passes — a retention policy that buys survival is only worth
+ * having if the price is reported next to it. Every eviction here is a FALSE
+ * one by construction: the injected effect is real and positive.
  */
+export interface EvictionTrialSpec {
+	groups: ReplicateGroup[];
+	runsPerSide: number;
+	rent: number;
+	/** The rule's genuine per-run saving. Also stands in for its BANKED delta:
+	 * the ledger is assumed to record the rule at its true worth. A real banked
+	 * value carries the winner's curse (admitted draws are biased high), which
+	 * would widen the margin and so buy FEWER retention rounds — this assumption
+	 * is therefore optimistic about the policy, and is stated in FINDINGS.md. */
+	trueSaving: number;
+	cycles: number;
+	maxRetentionRounds: number;
+}
+
+export interface EvictionTrialResult {
+	/** 1-based cycle of the false eviction, or null if the rule survived. */
+	evictedAt: number | null;
+	/** Re-audits actually simulated (fewer than `cycles` when it was evicted). */
+	reAudits: number;
+	/** Top-up rounds spent across those re-audits — the policy's token cost. */
+	topUpRounds: number;
+}
+
 export function falseEvictionTrial(
 	rng: () => number,
-	groups: ReplicateGroup[],
-	runsPerSide: number,
-	rent: number,
-	trueSaving: number,
-	cycles: number,
-): number | null {
+	spec: EvictionTrialSpec,
+): EvictionTrialResult {
+	const { groups, runsPerSide, rent, trueSaving, cycles } = spec;
 	let probation = 0;
+	let topUpRounds = 0;
+	let reAudits = 0;
 	for (let cycle = 1; cycle <= cycles; cycle++) {
 		// A re-audit re-measures the active set with and without the rule. The
 		// rule genuinely saves `trueSaving`, so the WITHOUT side costs more.
-		const without = groups.map((group) =>
+		let without = groups.map((group) =>
 			toSummary(group.taskId, resample(rng, group.totals, runsPerSide), "w"),
 		);
-		const withRule = groups.map((group) =>
+		let withRule = groups.map((group) =>
 			toSummary(
 				group.taskId,
 				resample(rng, group.totals, runsPerSide).map((t) =>
@@ -237,18 +275,75 @@ export function falseEvictionTrial(
 				"m",
 			),
 		);
-		const a = assessDelta(without, withRule, rent);
+		let a = assessDelta(without, withRule, rent);
 		// An environment failure aborts the whole decision and writes nothing —
 		// the rule keeps its status AND its probation counter. Not an eviction.
 		if (a.environmentFailure) continue;
+		reAudits++;
+		// The measured (toppable) side of a re-audit is the WITHOUT configuration:
+		// the baseline already carries the rule. Same budget shape as the
+		// selector — one full duplicate of the first measured pass per round,
+		// placed by the real Neyman allocator.
+		const perRound = without.reduce((sum, s) => sum + s.results.length, 0);
+		const budget =
+			1 +
+			Math.min(spec.maxRetentionRounds, retentionRounds(trueSaving, rent, a));
+		/** One round's runs for a side. `allocation` null = a uniform full pass,
+		 * which is what a retention round spends; the first round is placed by
+		 * the real Neyman allocator, as the selector does. */
+		const round = (
+			tag: string,
+			saving: number,
+			allocation: ReturnType<typeof allocateTopUpRuns>,
+		): TaskSummary[] => {
+			const extra: TaskSummary[] = [];
+			for (const group of groups) {
+				const n = allocation
+					? (allocation.get(group.taskId) ?? 0)
+					: runsPerSide;
+				if (n > 0) {
+					extra.push(
+						toSummary(
+							group.taskId,
+							resample(rng, group.totals, n).map((t) =>
+								Math.max(0, t - saving),
+							),
+							tag,
+						),
+					);
+				}
+			}
+			return extra;
+		};
+		for (let r = 0; r < budget && a.uncertain; r++) {
+			// Mirrors `measureWithTopUp`: the first round is one-sided and Neyman
+			// placed; retention rounds re-run both sides uniformly. Both
+			// differences were measured before being adopted (see FINDINGS.md).
+			const retention = r >= 1;
+			const extra = round(
+				`t${cycle}-${r}`,
+				0,
+				retention ? null : allocateTopUpRuns(withRule, without, perRound),
+			);
+			if (extra.length === 0) break;
+			without = mergeSummaries(without, extra);
+			if (retention) {
+				const extraRef = round(`r${cycle}-${r}`, trueSaving, null);
+				if (extraRef.length > 0) withRule = mergeSummaries(withRule, extraRef);
+			}
+			topUpRounds++;
+			a = assessDelta(without, withRule, rent);
+		}
 		const base = verdictWithReason(a.delta, rent, a.regression);
 		const outcome = twoStrikeRetention(true, probation, a.regression, base);
-		if (outcome.status === "evicted") return cycle;
+		if (outcome.status === "evicted") {
+			return { evictedAt: cycle, reAudits, topUpRounds };
+		}
 		// probationWrite: true records a strike, false clears it, null leaves it.
 		if (outcome.probationWrite === true) probation = 1;
 		else if (outcome.probationWrite === false) probation = 0;
 	}
-	return null;
+	return { evictedAt: null, reAudits, topUpRounds };
 }
 
 /**
@@ -357,6 +452,9 @@ export interface EmpiricalArgs {
 	seed: number;
 	/** Consecutive re-audits simulated per rule in eviction mode. */
 	cycles: number;
+	/** Retention cap for the eviction mode's policy arm; the control arm is
+	 * always 0, so one invocation reports both. */
+	retentionRounds: number;
 }
 
 export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
@@ -370,6 +468,7 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 		rent: DEFAULT_RENT,
 		seed: DEFAULT_SEED,
 		cycles: DEFAULT_CYCLES,
+		retentionRounds: MAX_RETENTION_ROUNDS,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
@@ -381,6 +480,14 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 			const path = argv[++i];
 			if (!path) throw new Error("--db requires a path");
 			args.dbPath = path;
+		} else if (flag === "--retention-rounds") {
+			const n = Number(argv[++i]);
+			if (!Number.isInteger(n) || n < 0 || n > MAX_RETENTION_ROUNDS) {
+				throw new Error(
+					`--retention-rounds must be an integer in 0..${MAX_RETENTION_ROUNDS}`,
+				);
+			}
+			args.retentionRounds = n;
 		} else if (flag === "--cycles") {
 			const n = Number(argv[++i]);
 			if (!Number.isInteger(n) || n < 1) {
@@ -544,46 +651,75 @@ function reportAgent(
 				`${args.cycles} consecutive re-audits, ${args.trials} trials/row):`,
 		);
 		console.log(
+			`retention budget: control (0 extra rounds, pre-v0.43.0) vs <=${args.retentionRounds} ` +
+				"extra rounds. Same bar, same two-strike policy — only the evidence differs.",
+		);
+		console.log(
 			[
 				"true saving".padStart(20),
-				"evicted [95% CI]".padStart(26),
+				"evicted@0 [95% CI]".padStart(26),
+				`evicted@${args.retentionRounds} [95% CI]`.padStart(26),
 				"median cycle".padStart(14),
+				"top-ups/audit 0->N".padStart(19),
 			].join("  "),
 		);
+		/** One arm of the comparison, at a fixed retention cap. */
+		const evictionArm = (
+			trueSaving: number,
+			maxRetentionRounds: number,
+		): { evicted: number; median: string; roundsPerAudit: number } => {
+			// Same seed per arm: both arms see the IDENTICAL draw sequence, so the
+			// difference between them is the policy and not the RNG.
+			const rng = mulberry32(agentSeed ^ (0xe00 + Math.round(trueSaving)));
+			let evicted = 0;
+			let rounds = 0;
+			let audits = 0;
+			const cyclesAt: number[] = [];
+			for (let i = 0; i < args.trials; i++) {
+				const result = falseEvictionTrial(rng, {
+					groups: bootEligible,
+					runsPerSide: args.bootRuns,
+					rent: args.rent,
+					trueSaving,
+					cycles: args.cycles,
+					maxRetentionRounds,
+				});
+				rounds += result.topUpRounds;
+				audits += result.reAudits;
+				if (result.evictedAt !== null) {
+					evicted++;
+					cyclesAt.push(result.evictedAt);
+				}
+			}
+			return {
+				evicted,
+				median:
+					cyclesAt.length === 0
+						? "-"
+						: String(
+								cyclesAt.sort((a, b) => a - b)[
+									Math.floor(cyclesAt.length / 2)
+								] ?? "-",
+							),
+				roundsPerAudit: audits === 0 ? 0 : rounds / audits,
+			};
+		};
 		for (const frac of INJECTED_FRACS) {
 			// A true saving of 0 is not a false eviction — the rule genuinely is
 			// not earning, and evicting it is the gate working. Skip that row.
 			if (frac === 0) continue;
 			const trueSaving = Math.round(pooledMean * frac);
-			const rng = mulberry32(agentSeed ^ (0xe00 + Math.round(frac * 1000)));
-			let evicted = 0;
-			const cyclesAt: number[] = [];
-			for (let i = 0; i < args.trials; i++) {
-				const at = falseEvictionTrial(
-					rng,
-					bootEligible,
-					args.bootRuns,
-					args.rent,
-					trueSaving,
-					args.cycles,
-				);
-				if (at !== null) {
-					evicted++;
-					cyclesAt.push(at);
-				}
-			}
-			const med =
-				cyclesAt.length === 0
-					? "-"
-					: String(
-							cyclesAt.sort((a, b) => a - b)[Math.floor(cyclesAt.length / 2)] ??
-								"-",
-						);
+			const control = evictionArm(trueSaving, 0);
+			const policy = evictionArm(trueSaving, args.retentionRounds);
 			console.log(
 				[
 					`${pct(frac)} (${trueSaving} tok)`.padStart(20),
-					ci(evicted, args.trials).padStart(26),
-					med.padStart(14),
+					ci(control.evicted, args.trials).padStart(26),
+					ci(policy.evicted, args.trials).padStart(26),
+					policy.median.padStart(14),
+					`${control.roundsPerAudit.toFixed(2)}->${policy.roundsPerAudit.toFixed(2)}`.padStart(
+						19,
+					),
 				].join("  "),
 			);
 		}

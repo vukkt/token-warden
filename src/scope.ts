@@ -25,9 +25,9 @@ import { runCli } from "./cli.js";
 import {
 	getRuleById,
 	listRulesByAgent,
-	openDb,
 	setRuleScope,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { compileActiveMemory } from "./memory.js";
 import { assertKnownAgent } from "./registry.js";
@@ -117,13 +117,10 @@ export function runScope(db: WardenDb, args: ScopeArgs): string {
 
 export function main(argv: string[]): number {
 	const args = parseScopeArgs(argv);
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		console.log(runScope(db, args));
 		return 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

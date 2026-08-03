@@ -211,7 +211,9 @@ describe("contradict main()", () => {
 			.filter(Boolean);
 		// Read-only allowlist. Adding anything that writes a `rules` row — or a
 		// raw `db.prepare`/`db.exec` escape hatch — must fail here first.
-		expect(imported.sort()).toEqual(["getActiveRules", "openDb"]);
+		// `withDb` replaced `openDb` in v0.43.0: same capability (open the ledger,
+		// close it again), so the read-only guarantee is unchanged.
+		expect(imported.sort()).toEqual(["getActiveRules", "withDb"]);
 		expect(source).not.toMatch(/\bdb\.(prepare|exec|transaction)\b/);
 		expect(source).not.toMatch(
 			/\b(decideRule|insertRule|insertAuthoredRule|setRuleProbation|setRuleProtected|setRuleScope|bumpRulesetVersion|recordReceipt|upsertRun)\b/,

@@ -8,3 +8,6 @@ validation/*.db
 validation/*.db-*
 validation/results/
 validation/.burn-state
+
+# /warden-share writes exported ledgers here when run from the plugin root.
+.warden/

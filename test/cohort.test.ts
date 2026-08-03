@@ -292,7 +292,7 @@ describe("cohort.ts is structurally incapable of changing a rule", () => {
 		// An explicit allowlist: a SELECT and the connection opener, nothing else.
 		expect(new Set(imported)).toEqual(
 			new Set([
-				"openDb",
+				"withDb",
 				"realWorkTotalsByVersion",
 				"VersionedTotal",
 				"WardenDb",

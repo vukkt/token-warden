@@ -20,7 +20,7 @@ import {
 	approveLatestQuestion,
 	defaultDbPath,
 	insertQuestion,
-	openDb,
+	withDb,
 } from "./db.js";
 import { displayText } from "./sanitize.js";
 
@@ -167,8 +167,7 @@ export async function main(): Promise<void> {
 	const message = extractMessage(JSON.parse(await readStdin()));
 	if (message === null) return;
 
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		const storedBody = truncateBody(message.body, STORED_BODY_CHARS);
 		// Sanitize the route for the log file too; from/to are stored raw and
 		// sanitized at render time (status.ts), matching the rule-body pattern.
@@ -194,9 +193,7 @@ export async function main(): Promise<void> {
 			logLine(`asked [${route}] "${truncateBody(message.body, 80)}"`);
 			console.log(JSON.stringify(buildAskResponse(message)));
 		}
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /**

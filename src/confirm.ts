@@ -20,8 +20,8 @@ import {
 import {
 	getActiveRules,
 	latestReceipts,
-	openDb,
 	type ReceiptRow,
+	withDb,
 } from "./db.js";
 import { formatRounded as fmt } from "./format.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
@@ -185,8 +185,7 @@ export function parseConfirmArgs(argv: string[]): ConfirmArgs {
 export function main(argv: string[]): number {
 	const args = parseConfirmArgs(argv);
 	const agents = args.agent ? [args.agent] : knownAgents();
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		const results = agents.map((agent) => {
 			const activeIds = new Set(getActiveRules(db, agent).map((r) => r.id));
 			const fixture = fixtureSide(latestReceipts(db, agent), activeIds);
@@ -215,9 +214,7 @@ export function main(argv: string[]): number {
 		return args.gate && results.some((r) => r.verdict === "contradicted")
 			? 1
 			: 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

@@ -26,7 +26,6 @@ import {
 	getActiveRules,
 	getRulesetVersion,
 	lastEvictions,
-	openDb,
 	type ProjectCurvePoint,
 	type ProjectUsage,
 	projectUsage,
@@ -39,6 +38,7 @@ import {
 	type ToolCostRollup,
 	toolCostRollup,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { formatNumber as fmt, pctChange } from "./format.js";
 import { knownAgents } from "./registry.js";
@@ -425,11 +425,8 @@ export function renderStatus(db: WardenDb): string {
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
 runCli(import.meta.url, () => {
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		console.log(renderStatus(db));
-	} finally {
-		db.close();
-	}
+	});
 });
 /* v8 ignore stop */

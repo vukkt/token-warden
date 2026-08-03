@@ -45,12 +45,12 @@ import {
 	getRulesetVersion,
 	listCandidates,
 	oldestDecidedActiveRule,
-	openDb,
 	type RuleRow,
 	type RunConfig,
 	recordReceipt,
 	setRuleProbation,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import {
 	compileActiveMemory,
@@ -441,6 +441,11 @@ export interface DeltaAssessment extends DeltaResult {
 	/** True when the keep/evict verdict could flip within `WARDEN_CONFIDENCE_Z`
 	 * standard errors — the signal to spend a top-up measurement. */
 	uncertain: boolean;
+	/** The confidence multiple the `uncertain` test actually used: the configured
+	 * z, widened by the effective-degrees-of-freedom inflation for this suite.
+	 * Surfaced so a policy that reasons about the same noise band (the retention
+	 * budget) uses the gate's own multiple rather than a second opinion. */
+	confidenceMultiple: number;
 	/** The saving after dropping derailment outliers (robust location). Null when
 	 * robust aggregation could not run (runs=1). */
 	robustDelta: number | null;
@@ -569,6 +574,7 @@ function unmeasurable(set: ComparisonSet): DeltaAssessment {
 		standardError: null,
 		standardErrorBasis: null,
 		uncertain: false,
+		confidenceMultiple: confidenceZ(),
 		robustDelta: null,
 		tailRisk: false,
 		completionDrop: set.completionDrop,
@@ -638,6 +644,7 @@ export function assessDelta(
 		regression,
 		standardError,
 		standardErrorBasis: basis,
+		confidenceMultiple: z,
 		uncertain,
 		robustDelta,
 		tailRisk,
@@ -732,6 +739,72 @@ function neediestStratum(strata: Stratum[]): Stratum | null {
 	return best;
 }
 
+// ---------------------------------------------------------------------------
+// Retention budget (the re-audit side of the same Neyman logic)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cap on the EXTRA top-up rounds a re-audit may buy beyond the first.
+ *
+ * Bounded on purpose: every round is one more full duplicate of the measured
+ * side, so an uncapped budget would let one stubbornly noisy rule consume an
+ * invocation's whole token allowance. Two is the point where the marginal SE
+ * cut per round has fallen to ~13% (SE ~ 1/sqrt(n): 3 passes -> 4 passes) —
+ * past that the tokens buy more by going to the next rule.
+ */
+export const MAX_RETENTION_ROUNDS = 2;
+
+/**
+ * Variance-proportional RE-AUDIT budget — the retention-side analogue of the
+ * Neyman top-up allocation, which already spends admission runs where the
+ * variance is rather than uniformly.
+ *
+ * The measured motivation (v0.42.0, FINDINGS.md): the gate's Type II tail is an
+ * order of magnitude worse than its Type I tail. On the `sql` pool at 2
+ * runs/side a rule TRULY saving 2% of a run is falsely evicted 79.8% of the
+ * time; 5% -> 60.8%, 10% -> 25.0%. Two-strike retention only delays that (no
+ * trial ever evicts on cycle 1, but the median failure lands on cycle 4-7),
+ * because it buys a second LOOK at the same noise rather than more evidence.
+ *
+ * So spend more evidence — but only where noise, not the rule, is what
+ * threatens it. The stake is the rule's banked margin over its own bar
+ * (`measured_delta - 2x rent`); the threat is the noise band of the current
+ * draw (`z x SE`, the gate's own multiple). Their ratio says how many times the
+ * present measurement could swallow everything the ledger claims the rule is
+ * worth:
+ *
+ *   threat = z x SE / (banked delta - bar)
+ *
+ * A decisive measurement (threat <= 1: the noise band is smaller than the
+ * margin at stake) buys nothing and gets no extra rounds — this is a budget for
+ * noise, not a discount on the bar. Each further multiple of the margin that
+ * the noise band covers buys one more round, capped.
+ *
+ * Deliberately NOT a change to the keep/evict inequality: the bar, the
+ * confidence multiple and two-strike retention are all untouched. A rule that
+ * has genuinely stopped earning still evicts — it just does so on more
+ * evidence, and pays for that evidence out of the re-audit budget rather than
+ * out of a wrong verdict.
+ *
+ * Returns 0 for anything with nothing established to protect: an unbanked rule,
+ * one banked at or below its bar, a measurement with no estimable SE, or a
+ * REGRESSION (which evicts immediately by safety invariant — buying rounds for
+ * a rule that made the suite worse would be paying to delay a correct verdict).
+ */
+export function retentionRounds(
+	bankedDelta: number | null,
+	contextCost: number,
+	assessment: DeltaAssessment,
+): number {
+	const se = assessment.standardError;
+	if (assessment.regression || bankedDelta === null || se === null) return 0;
+	const margin = bankedDelta - 2 * effectiveRent(contextCost);
+	if (margin <= 0) return 0;
+	const threat = (assessment.confidenceMultiple * se) / margin;
+	if (!Number.isFinite(threat)) return 0;
+	return Math.min(MAX_RETENTION_ROUNDS, Math.max(0, Math.ceil(threat) - 1));
+}
+
 /** Combine two measurement passes of the same configuration: pool the raw
  * results per task and re-summarize. */
 export function mergeSummaries(
@@ -781,6 +854,9 @@ interface Decision {
 	uncertain: boolean;
 	/** True when an extra measurement pass was spent on this decision. */
 	toppedUp: boolean;
+	/** How many top-up rounds were spent. >1 means the retention budget bought
+	 * extra evidence before de-activating an established rule. */
+	topUpRounds: number;
 	/** True when the rule's measured cost was tail-heavy (outlier runs materially
 	 * moved the saving) — surfaced so a human can see the savings are unstable. */
 	tailRisk: boolean;
@@ -829,6 +905,11 @@ export interface SelectOptions {
 	 * evenly — the control arm for benchmarking the allocation strategy
 	 * (deferred from v0.24.0; see DECISIONS.md). */
 	uniformTopUp?: boolean;
+	/** Cap on the EXTRA top-up rounds a re-audit may buy to protect a rule with
+	 * a banked margin (see `retentionRounds`). Defaults to
+	 * `MAX_RETENTION_ROUNDS`; 0 restores the pre-v0.43.0 single-top-up
+	 * behaviour, which is also the control arm when measuring the policy. */
+	retentionRounds?: number;
 	/** Recorded into each rule receipt for provenance: the model the suite ran
 	 * under and a hash of the golden suite it was measured against. */
 	measuredModel?: string | null;
@@ -884,6 +965,15 @@ interface MeasurementPlan {
 	 * most once per invocation and never at all if nothing needs it. */
 	reference: () => TaskSummary[];
 	measure: (suffix: string, allocation?: RunAllocation) => TaskSummary[];
+	/** Re-measure the REFERENCE configuration, for decisions whose retention
+	 * rounds buy evidence on both sides (re-audits). Absent on candidate plans,
+	 * whose reference is the invocation-wide baseline and must stay fixed.
+	 * The result is merged into THIS decision's copy only — the memoized
+	 * baseline other decisions share is never mutated mid-invocation. */
+	measureReference?: (
+		suffix: string,
+		allocation?: RunAllocation,
+	) => TaskSummary[];
 	measuredSide: MeasuredSide;
 	evictWhenUncertain: boolean;
 	reasonPrefix: string;
@@ -896,6 +986,7 @@ interface SelectionRun {
 	options: SelectOptions;
 	topUpBudget: number;
 	uniformTopUp: boolean;
+	retentionRounds: number;
 	/** The injected runner wrapped in the per-pass environment-failure guard. */
 	measureSuite: SuiteRunner;
 }
@@ -941,41 +1032,109 @@ function guardEnvironment(agent: string, runner: SuiteRunner): SuiteRunner {
 interface MeasuredComparison {
 	assessment: DeltaAssessment;
 	toppedUp: boolean;
+	/** Top-up rounds actually spent (0 when the first assessment was decisive). */
+	rounds: number;
 	measured: TaskSummary[];
+	/** The reference side AS COMPARED: the memoized pass plus any runs a
+	 * retention round added to it. The receipt must record what was actually
+	 * measured against, not the pass the decision started from. */
+	reference: TaskSummary[];
+}
+
+/** Extra rounds this decision may spend beyond the first top-up. Only re-audits
+ * get any: a candidate has no banked margin to protect, and paying more to
+ * admit a rule we cannot yet show earns is the false-POSITIVE direction the
+ * gate is deliberately strict about. */
+function extraRoundsFor(
+	run: SelectionRun,
+	plan: MeasurementPlan,
+	assessment: DeltaAssessment,
+): number {
+	if (plan.kind !== "re-audit" || run.retentionRounds <= 0) return 0;
+	return Math.min(
+		run.retentionRounds,
+		retentionRounds(
+			plan.rule.measured_delta,
+			plan.rule.context_cost,
+			assessment,
+		),
+	);
 }
 
 /** Measure the plan's configuration against its reference, topping up the
- * measured side when the verdict is within noise of the threshold. */
+ * measured side while the verdict is within noise of the threshold and the
+ * decision still has rounds to spend. */
 function measureWithTopUp(
 	run: SelectionRun,
 	plan: MeasurementPlan,
 ): MeasuredComparison {
 	let measured = plan.measure("");
+	let reference = plan.reference();
 	const assess = (): DeltaAssessment =>
 		plan.measuredSide === "without-rule"
-			? assessDelta(measured, plan.reference(), plan.rule.context_cost)
-			: assessDelta(plan.reference(), measured, plan.rule.context_cost);
-	const assessment = assess();
+			? assessDelta(measured, reference, plan.rule.context_cost)
+			: assessDelta(reference, measured, plan.rule.context_cost);
+	let assessment = assess();
 	if (!assessment.uncertain || run.topUpBudget <= 0) {
-		return { assessment, toppedUp: false, measured };
+		return { assessment, toppedUp: false, rounds: 0, measured, reference };
 	}
-	// Spend a top-up pass worth of runs (one full duplicate of the measured
-	// side), but place them by variance: Neyman allocation pours runs into the
-	// high-variance tasks that dominate the SE rather than re-running every
-	// task. `measured` is always the side being topped up (the candidate's
-	// with-rule side, or the re-audit's without side).
-	const budget = measured.reduce((total, s) => total + s.results.length, 0);
-	// --uniform-top-up: spend the same budget as one full uniform suite pass
-	// instead of pouring it into high-variance tasks (the control arm when
-	// benchmarking the allocation strategy itself).
-	const allocation = run.uniformTopUp
-		? null
-		: allocateTopUpRuns(plan.reference(), measured, budget);
-	const extra = allocation
-		? plan.measure("-topup", allocation)
-		: plan.measure("-topup"); // runs=1: no variance signal — uniform fallback
-	measured = mergeSummaries(measured, extra);
-	return { assessment: assess(), toppedUp: true, measured };
+	// The first round's budget: a full duplicate of the FIRST measured pass.
+	// Fixed here rather than recomputed per round, so it cannot grow against the
+	// merged side. Retention rounds need no budget figure — they re-run the
+	// suite uniformly, one pass per side.
+	const perRound = measured.reduce((total, s) => total + s.results.length, 0);
+	// The retention budget is decided once, from the first (cheapest) look, so
+	// the cost of a decision is knowable before the rounds are spent.
+	const budget = 1 + extraRoundsFor(run, plan, assessment);
+	let rounds = 0;
+	while (rounds < budget && assessment.uncertain) {
+		// Spend the round's runs by variance: Neyman allocation pours them into
+		// the high-variance tasks that dominate the SE rather than re-running
+		// every task. `measured` is always the side being topped up (the
+		// candidate's with-rule side, or the re-audit's without side), and it
+		// carries the runs already spent, so each round allocates against the
+		// variance that is still there.
+		// --uniform-top-up: spend the same budget as one full uniform suite pass
+		// instead, the control arm for benchmarking the allocation strategy.
+		// RETENTION rounds (every round after the first) differ from the ordinary
+		// top-up in both respects, and both differences are measured on the sql
+		// pool at 2 runs/side over 12 re-audits (FINDINGS.md, 3,000 trials):
+		//
+		//  - BOTH SIDES. Topping up one side cannot cut the delta's error below
+		//    what the FIXED side contributes, so a one-sided budget moved the
+		//    false-eviction rate not at all (78.2% -> 79.1% at a 2% true saving).
+		//  - UNIFORMLY. Neyman placement is optimal for KNOWN strata variances;
+		//    at 2 runs/task the variance estimate carries one degree of freedom,
+		//    so concentrating a whole round on whichever task drew widest chases
+		//    an artifact and leaves every other task at its original noise. Same
+		//    tokens, spread evenly: a 5% rule's false eviction falls 49.6% ->
+		//    29.3%, a 10% rule's 11.9% -> 2.0%.
+		//
+		// The FIRST round is untouched — same side, same Neyman placement, same
+		// cost, same label — so nothing about an ordinary uncertain top-up (the
+		// only kind a candidate can get) changes.
+		const retention = rounds >= 1;
+		const allocation =
+			retention || run.uniformTopUp
+				? null
+				: allocateTopUpRuns(reference, measured, perRound);
+		// First round keeps the bare "-topup" label so every previously recorded
+		// measurement pass still matches by name.
+		const suffix = rounds === 0 ? "-topup" : `-topup${rounds + 1}`;
+		const extra = allocation
+			? plan.measure(suffix, allocation)
+			: plan.measure(suffix); // runs=1: no variance signal — uniform fallback
+		measured = mergeSummaries(measured, extra);
+		if (retention && plan.measureReference) {
+			reference = mergeSummaries(
+				reference,
+				plan.measureReference(`-ref${rounds + 1}`),
+			);
+		}
+		rounds++;
+		assessment = assess();
+	}
+	return { assessment, toppedUp: rounds > 0, rounds, measured, reference };
 }
 
 /**
@@ -1175,7 +1334,8 @@ function persistDecision(
  * verdict and its receipt. Throws EnvironmentFailureError instead of deciding
  * when the measurement died environmentally. */
 function runDecision(run: SelectionRun, plan: MeasurementPlan): Decision {
-	const { assessment, toppedUp, measured } = measureWithTopUp(run, plan);
+	const { assessment, toppedUp, rounds, measured, reference } =
+		measureWithTopUp(run, plan);
 	if (assessment.environmentFailure) {
 		throw deadMeasurementError(run.agent, plan, measured);
 	}
@@ -1195,9 +1355,10 @@ function runDecision(run: SelectionRun, plan: MeasurementPlan): Decision {
 	persistDecision(run, plan, {
 		assessment,
 		measured,
-		// Memoized: the assessment above already benched it. Resolved out here so
-		// the transaction can never wrap a benchmark pass.
-		reference: plan.reference(),
+		// The reference as compared, including any retention-round runs merged
+		// into it. Already benched above, so the transaction never wraps a
+		// benchmark pass.
+		reference,
 		decidedAt: new Date().toISOString(),
 		status,
 		reason: plan.reasonPrefix + reason,
@@ -1212,6 +1373,7 @@ function runDecision(run: SelectionRun, plan: MeasurementPlan): Decision {
 		status,
 		uncertain,
 		toppedUp,
+		topUpRounds: rounds,
 		tailRisk,
 		completionDrop,
 		probation,
@@ -1346,6 +1508,18 @@ function reAuditPlan(
 				false,
 				allocation,
 			),
+		// The reference here is the active set the rule already lives in, so a
+		// retention round can re-measure it — unlike a candidate's reference,
+		// which is the invocation-wide baseline shared with every other decision.
+		// `recordBaselines` stays false: these are extra measurement runs for one
+		// verdict, not a new frozen baseline.
+		measureReference: (suffix, allocation) =>
+			run.measureSuite(
+				activeSet,
+				`audit-${target.id}${suffix}`,
+				false,
+				allocation,
+			),
 		measuredSide: "without-rule",
 		evictWhenUncertain: false,
 		reasonPrefix: "re-audit: ",
@@ -1376,6 +1550,7 @@ export function selectForAgent(
 			options,
 			topUpBudget: options.topUpBudget ?? 1,
 			uniformTopUp: options.uniformTopUp ?? false,
+			retentionRounds: options.retentionRounds ?? MAX_RETENTION_ROUNDS,
 			measureSuite: guardEnvironment(agent, runner),
 		};
 		const baseline = lazyPass(() =>
@@ -1473,6 +1648,7 @@ interface SelectArgs {
 	runs: number;
 	topUp: number;
 	uniformTopUp: boolean;
+	retentionRounds: number;
 }
 
 export function parseSelectArgs(argv: string[]): SelectArgs {
@@ -1484,6 +1660,7 @@ export function parseSelectArgs(argv: string[]): SelectArgs {
 		runs: 3,
 		topUp: 1,
 		uniformTopUp: false,
+		retentionRounds: MAX_RETENTION_ROUNDS,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		switch (argv[i]) {
@@ -1502,6 +1679,10 @@ export function parseSelectArgs(argv: string[]): SelectArgs {
 			case "--uniform-top-up":
 				args.uniformTopUp = true;
 				break;
+			case "--retention-rounds":
+				args.retentionRounds = Number(argv[i + 1]);
+				i++;
+				break;
 			default:
 				throw new Error(`unknown flag: ${argv[i]}`);
 		}
@@ -1512,6 +1693,15 @@ export function parseSelectArgs(argv: string[]): SelectArgs {
 	}
 	if (!Number.isInteger(args.topUp) || args.topUp < 0) {
 		throw new Error("--top-up must be a non-negative integer");
+	}
+	if (
+		!Number.isInteger(args.retentionRounds) ||
+		args.retentionRounds < 0 ||
+		args.retentionRounds > MAX_RETENTION_ROUNDS
+	) {
+		throw new Error(
+			`--retention-rounds must be an integer in 0..${MAX_RETENTION_ROUNDS}`,
+		);
 	}
 	return args;
 }
@@ -1578,7 +1768,13 @@ function benchSuiteRunner(
 function decisionFlags(decision: Decision, weightedSuite: boolean): string {
 	const flags: string[] = [];
 	if (decision.regression) flags.push("REGRESSION");
-	if (decision.toppedUp) flags.push("topped-up");
+	if (decision.toppedUp) {
+		flags.push(
+			decision.topUpRounds > 1
+				? `topped-up x${decision.topUpRounds} (retention budget)`
+				: "topped-up",
+		);
+	}
 	if (decision.uncertain) flags.push("LOW-CONFIDENCE");
 	if (decision.tailRisk) flags.push("TAIL-RISK");
 	if (decision.completionDrop) flags.push("COMPLETION-DROP");
@@ -1650,15 +1846,15 @@ function reportAbort(abort: EnvironmentAbort): void {
 }
 
 export function main(args: SelectArgs): void {
-	const db = openDb();
-	try {
+	withDb((db) => {
 		const tasks: GoldenTask[] = loadGoldenTasks(args.agent);
 		// Surfaced on every decision line when the suite is distribution-weighted,
 		// so a weighted verdict is never mistaken for a plain one.
 		const weightedSuite = tasks.some((t) => t.weight !== 1);
 
 		console.log(
-			`Selecting for agent=${args.agent} (runs=${args.runs} per config, top-up budget ${args.topUp})`,
+			`Selecting for agent=${args.agent} (runs=${args.runs} per config, top-up budget ${args.topUp},` +
+				` retention rounds <=${args.retentionRounds})`,
 		);
 		const report = selectForAgent(
 			db,
@@ -1667,6 +1863,7 @@ export function main(args: SelectArgs): void {
 			{
 				topUpBudget: args.topUp,
 				uniformTopUp: args.uniformTopUp,
+				retentionRounds: args.retentionRounds,
 				measuredModel: loadAgentDefinition(args.agent).model,
 				fixtureHash: goldenSuiteHash(args.agent),
 			},
@@ -1684,9 +1881,7 @@ export function main(args: SelectArgs): void {
 			);
 		}
 		if (report.aborted !== null) reportAbort(report.aborted);
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

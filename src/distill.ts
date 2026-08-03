@@ -26,12 +26,12 @@ import {
 	getActiveRules,
 	insertRule,
 	listRulesByAgent,
-	openDb,
 	RUN_TOTAL_TOKENS_SQL,
 	type RunRow,
 	recentEvictedRules,
 	recentQuestionsFrom,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import {
 	distillModel,
@@ -289,8 +289,7 @@ export function parseDistillArgs(argv: string[]): DistillArgs {
 }
 
 export function distill(args: DistillArgs): void {
-	const db = openDb();
-	try {
+	withDb((db) => {
 		const run = db
 			.prepare<unknown[], RunRow>("SELECT * FROM runs WHERE id = ?")
 			.get(args.runId);
@@ -436,9 +435,7 @@ export function distill(args: DistillArgs): void {
 				`run ${run.id}: new candidate ${id} for ${run.agent}: "${rule.body}"`,
 			);
 		}
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

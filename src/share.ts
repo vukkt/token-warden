@@ -14,7 +14,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runCli } from "./cli.js";
-import { getActiveRules, openDb, type RuleRow } from "./db.js";
+import { getActiveRules, type RuleRow, withDb } from "./db.js";
 import { assertKnownAgent } from "./registry.js";
 
 export interface SharedRule {
@@ -107,8 +107,7 @@ export function parseShareArgs(argv: string[]): ShareArgs {
 }
 
 export function main(args: ShareArgs): void {
-	const db = openDb();
-	try {
+	withDb((db) => {
 		const rules = getActiveRules(db, args.agent);
 		const ledger = toSharedLedger(args.agent, rules, new Date().toISOString());
 		const outPath =
@@ -125,9 +124,7 @@ export function main(args: ShareArgs): void {
 		} else {
 			console.log("Commit it to share measured memory with your team.");
 		}
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

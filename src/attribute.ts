@@ -27,10 +27,10 @@
 import { readFileSync } from "node:fs";
 import { runCli } from "./cli.js";
 import {
-	openDb,
 	type ToolCostRollup,
 	toolCostRollup,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { formatNumber as fmt } from "./format.js";
 import { displayText } from "./sanitize.js";
@@ -296,12 +296,9 @@ function runRollup(db: WardenDb, args: AttributeArgs): number {
 export function main(argv: string[]): number {
 	const args = parseAttributeArgs(argv);
 	if (args.transcript !== null) return runTranscript(args, args.transcript);
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		return runRollup(db, args);
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

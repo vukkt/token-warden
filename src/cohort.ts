@@ -26,10 +26,10 @@
  */
 import { runCli } from "./cli.js";
 import {
-	openDb,
 	realWorkTotalsByVersion,
 	type VersionedTotal,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { formatRounded as fmt } from "./format.js";
 import { knownAgents } from "./registry.js";
@@ -282,8 +282,7 @@ export function parseCohortArgs(argv: string[]): CohortArgs {
 export function main(argv: string[]): number {
 	const args = parseCohortArgs(argv);
 	const agents = args.agent ? [args.agent] : knownAgents();
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		const results = agents.map((agent) =>
 			assessAgentCohorts(db, agent, args.minN, args.project ?? undefined),
 		);
@@ -305,9 +304,7 @@ export function main(argv: string[]): number {
 			return 1;
 		}
 		return 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

@@ -634,6 +634,18 @@ walk-through).
 
 ## False evictions: the other tail, measured (2026-07-28, v0.42.0)
 
+> **SUPERSEDED (2026-08-03, v0.43.0) — the table below measures a path the
+> selector never ran.** This first cut of the harness decided every simulated
+> re-audit on its FIRST look, but `measureWithTopUp` has always spent a top-up
+> pass whenever the verdict lands within noise of the bar. The rates were
+> therefore pessimistic by roughly the value of that pass. The conclusion the
+> section draws — Type II >> Type I, recovery matters more than admission
+> precision — survives the correction and is what motivated v0.43.0; the
+> specific percentages do not. Corrected numbers are in the v0.43.0 section
+> below. Kept unedited as the record: this is the same class of error as burn 1
+> of the RAG benchmark, an instrument measuring something other than the thing
+> it names.
+
 The gate's false-POSITIVE rate has been published since v0.35.0 (8.8% empirical,
 against a ~2.5% synthetic claim). Its false-NEGATIVE rate was never measured, and
 ROADMAP.md explicitly forbade building eviction-recovery machinery until it was —
@@ -780,3 +792,110 @@ the question needs it and not otherwise.
 - **`fin-07` did not fail as predicted.** The paraphrase question ("borrowing
   capacity" vs "undrawn capacity") was answered correctly by both lexical arms.
   The predicted weakness did not bind at this budget.
+
+## The retention budget: two wrong guesses, then a measured win (2026-08-03, v0.43.0)
+
+v0.42.0 measured the Type II tail and concluded that recovery matters more than
+admission precision. This is the first policy built on that conclusion, and the
+useful part of the record is that the design I would have shipped on intuition
+was worth nothing. Every number below is zero-token: recorded `sql` golden runs
+resampled through the real `assessDelta` -> `verdictWithReason` ->
+`twoStrikeRetention` path, 3,000 trials/row, 2 runs/side, 12 consecutive
+re-audits, rent 25.
+
+### First: the harness was measuring a policy the code does not implement
+
+Before any of this, the v0.42.0 eviction harness had to be fixed. It decided
+each simulated re-audit on its first look. The selector has never done that —
+`measureWithTopUp` spends a top-up pass whenever the verdict lands within noise
+of the bar. So the published 79.8% / 60.8% / 25.0% table described a stricter
+pipeline than the one that ships. Corrected control column: 78.2% / 53.8% /
+16.3%. The direction of the v0.42.0 conclusion is unchanged; its magnitudes are
+superseded.
+
+### Guess 1: more rounds on the measured side. Worth nothing.
+
+The obvious first design, and the one the roadmap itself proposed — spend the
+extra runs the way the admission-side Neyman top-up already spends them.
+
+| True saving | control | +2 one-sided rounds |
+|---|---|---|
+| 2% (945 tok) | 78.2% | 79.1% |
+| 5% (2,362 tok) | 53.8% | 53.0% |
+| 10% (4,724 tok) | 16.3% | 15.0% |
+
+Nothing, at 2.2 extra passes per re-audit. In hindsight it is arithmetic: the
+delta's error is the sum of BOTH sides' contributions, so pouring runs into one
+side drives its term toward zero and leaves the total pinned at whatever the
+fixed side contributes. A re-audit tops up the without-rule side; the baseline
+it compares against is measured once and frozen. No budget spent on one side can
+cross that floor. **A policy that cannot in principle work will not work, and
+2.2 wasted passes per re-audit is what not checking costs.**
+
+### Guess 2: place those rounds by Neyman allocation. Actively harmful.
+
+With both sides topped up the policy started working, so the next question was
+placement, and the whole codebase already answers it: Neyman, concentrate runs
+where the variance is. Measured, same tokens, same rounds, only placement
+differing:
+
+| True saving | Neyman placement | uniform placement |
+|---|---|---|
+| 2% | 78.1% | 72.3% |
+| 5% | 49.6% | 29.3% |
+| 10% | 11.9% | 2.0% |
+
+Neyman is optimal for KNOWN stratum variances. At 2 runs per task the variance
+estimate carries ONE degree of freedom, so "the noisiest task" is mostly a
+statement about which task happened to draw wide — and the allocator responds by
+handing that artifact the entire round while every other task keeps its original
+noise. The admission-side top-up survives this because it is a single round
+resolving a verdict already near the bar; a retention budget spending several
+rounds compounds the error. **The house style was the wrong answer here, and only
+the harness could say so.**
+
+### What shipped, and what it buys
+
+Retention rounds (every round after the first) re-measure BOTH sides UNIFORMLY.
+The first round is untouched — same side, same Neyman placement, same cost, same
+`-topup` label — so an ordinary uncertain top-up, the only kind a candidate can
+ever get, behaves exactly as it did.
+
+| True saving | control (v0.42.0 path) | with retention budget | top-up passes/audit |
+|---|---|---|---|
+| 2.0% (945 tok) | 78.2% [76.7, 79.6] | **70.3%** [68.6, 71.9] | 0.87 -> 2.37 |
+| 5.0% (2,362 tok) | 53.8% [52.0, 55.6] | **32.5%** [30.9, 34.2] | 0.84 -> 2.22 |
+| 10.0% (4,724 tok) | 16.3% [15.0, 17.6] | **5.4%** [4.6, 6.3] | 0.75 -> 1.62 |
+| 20.0% (9,448 tok) | 0.2% [0.1, 0.5] | 0.3% [0.1, 0.5] | 0.48 -> 0.65 |
+
+A rule genuinely saving 10% of a run is three times likelier to survive its own
+re-audits; at 5% the false-eviction rate falls by a third of its own value. The
+20% row is the control that should NOT move, and does not — a rule that clears
+the bar decisively buys no rounds, because the budget is a function of the noise
+band relative to the rule's banked margin, not a discount on the bar.
+
+### What this is not
+
+- **The bar, the confidence multiple and two-strike retention are untouched.** A
+  rule that has genuinely stopped earning still evicts, on more evidence. The
+  Type I direction cannot move: candidates get no retention rounds at all, so
+  admission is byte-identical to v0.42.0.
+- **The cost is real and is the reason for the cap.** ~1.5 extra suite passes per
+  re-audit at the effect sizes where it helps. `--retention-rounds 0` restores
+  the old behaviour and is the control arm.
+- **It does not close the tail.** A 2% rule is still evicted 70% of the time.
+  Suite variance remains the binding constraint, exactly as v0.42.0 said; this
+  buys evidence against the noise rather than reducing it.
+- **The banked delta is assumed to equal the rule's true worth.** Real banked
+  values carry the winner's curse (admitted draws are biased high), which widens
+  the apparent margin and so buys FEWER rounds. The assumption is optimistic
+  about the policy in the direction of spending less, not more.
+- **`sql` only, 2 runs/side.** The other three agents still lack the replicate
+  depth to run this at all.
+
+Reproduce (no tokens, deterministic):
+
+```bash
+npx tsx validation/empirical-calibration.ts --agent sql --mode eviction \
+  --trials 3000 --runs 2 --cycles 12
+```
