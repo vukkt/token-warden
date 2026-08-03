@@ -27,9 +27,9 @@ import {
 	getRuleById,
 	insertAuthoredRule,
 	listRulesByAgent,
-	openDb,
 	setRuleProtected,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { compileActiveMemory } from "./memory.js";
 import { assertKnownAgent } from "./registry.js";
@@ -139,13 +139,10 @@ export function runProtect(db: WardenDb, args: ProtectArgs): string {
 
 export function main(argv: string[]): number {
 	const args = parseProtectArgs(argv);
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		console.log(runProtect(db, args));
 		return 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

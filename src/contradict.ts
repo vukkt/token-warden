@@ -15,13 +15,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli } from "./cli.js";
-import { getActiveRules, openDb } from "./db.js";
+import { getActiveRules, withDb } from "./db.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
 import type { RuleId } from "./types.js";
 
 /**
  * INVARIANT (enforced by test/contradict.test.ts "cannot evict"): this module
- * imports exactly two things from `db.js` — `openDb` and `getActiveRules` —
+ * imports exactly two things from `db.js` — `withDb` and `getActiveRules` —
  * and both are reads. It owns no path that writes a `rules` row, and the
  * lexical check is best-effort by construction (a shared-topic heuristic, not
  * evidence), so it must never be able to act on its own output. Removing a
@@ -256,8 +256,7 @@ export function main(argv: string[]): number {
 		return 0;
 	}
 	const agents = args.agent ? [args.agent] : knownAgents();
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		let any = false;
 		const blocks = agents.map((agent) => {
 			const rules = getActiveRules(db, agent);
@@ -267,9 +266,7 @@ export function main(argv: string[]): number {
 		});
 		console.log(blocks.join("\n\n"));
 		return args.gate && any ? 1 : 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

@@ -28,8 +28,8 @@ import {
 	type GoldenReplicateRun,
 	getActiveRules,
 	goldenReplicateRuns,
-	openDb,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { formatRounded as fmt } from "./format.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
@@ -371,8 +371,7 @@ interface PowerJson {
 export function main(argv: string[]): number {
 	const args = parsePowerArgs(argv);
 	const agents = args.agent ? [args.agent] : knownAgents();
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		const reports: string[] = [];
 		const json: PowerJson[] = [];
 		for (const agent of agents) {
@@ -442,9 +441,7 @@ export function main(argv: string[]): number {
 		if (args.json) console.log(JSON.stringify(json, null, 2));
 		else console.log(reports.join("\n\n"));
 		return 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

@@ -33,13 +33,13 @@ import {
 	getBaseline,
 	getRuleById,
 	getRulesetVersion,
-	openDb,
 	RUN_TOTAL_TOKENS_SQL,
 	type RuleRow,
 	type RunConfig,
 	recordBaseline,
 	upsertRun,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { compileMemoryMd } from "./memory.js";
 import { knownAgents, userAgentsDir, userBenchmarksDir } from "./registry.js";
@@ -1292,8 +1292,7 @@ function pctOfRun1(current: number, run1: number): string {
 }
 
 export function main(args: BenchArgs, suite: typeof runSuite = runSuite): void {
-	const db = openDb();
-	try {
+	withDb((db) => {
 		const agents = args.agent === "all" ? knownAgents() : [args.agent];
 		let benchTokens = 0;
 		for (const agent of agents) {
@@ -1313,9 +1312,7 @@ export function main(args: BenchArgs, suite: typeof runSuite = runSuite): void {
 				"WARNING: Benchmarking overhead exceeded 10% of the week's collected real-work tokens.",
 			);
 		}
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

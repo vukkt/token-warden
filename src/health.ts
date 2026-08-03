@@ -34,8 +34,8 @@ import {
 	type GoldenTaskTotal,
 	getActiveRules,
 	goldenTaskTotals,
-	openDb,
 	type RuleRow,
+	withDb,
 } from "./db.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
@@ -187,8 +187,7 @@ export function parseHealthArgs(argv: string[]): HealthArgs {
 export function main(argv: string[], nowMs = Date.now()): number {
 	const args = parseHealthArgs(argv);
 	const agents = args.agent ? [args.agent] : knownAgents();
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		let anyStale = false;
 		const results = agents.map((agent) => {
 			const stale = staleRules(
@@ -212,9 +211,7 @@ export function main(argv: string[], nowMs = Date.now()): number {
 						.join("\n\n"),
 		);
 		return args.gate && anyStale ? 1 : 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

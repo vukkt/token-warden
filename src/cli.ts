@@ -15,11 +15,10 @@
  * "report the error", which is the opposite contract. They keep their own
  * shims and their own `installFailOpenHandlers`.
  *
- * A `withDb` helper (open + `finally db.close()`, 23 hand-written copies)
- * belongs here too and is deliberately NOT included yet: unlike the entry
- * shim, adopting it rewrites the BODY of every command rather than replacing a
- * uniform trailer, so it is a separate change with its own verification rather
- * than a rider on this one. Tracked in ROADMAP.
+ * The matching `withDb` helper (open + `finally db.close()`) shipped separately
+ * in v0.43.0 and lives in `db.js`, not here: it is a ledger-lifetime concern,
+ * and putting it beside `openDb` means no call site gained an import to adopt
+ * it. Same hook exemption applies — `collect` keeps its own `openHookDb`.
  */
 import { pathToFileURL } from "node:url";
 

@@ -21,10 +21,10 @@ import {
 	agentTokenMix,
 	getActiveRules,
 	latestReceipts,
-	openDb,
 	type ReceiptRow,
 	realWorkTotalsByVersion,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { usd } from "./format.js";
 import { blendedDollarsPerToken, type Price, priceFor } from "./pricing.js";
@@ -296,8 +296,7 @@ export function parseCostArgs(argv: string[]): CostArgs {
 export function main(argv: string[]): number {
 	const args = parseCostArgs(argv);
 	const agents = args.agent ? [args.agent] : knownAgents();
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		if (args.project) {
 			const projections = agents.map((agent) =>
 				projectAgent(db, agent, args.weeks, args.sessionsPerWeek),
@@ -321,9 +320,7 @@ export function main(argv: string[]): number {
 			);
 		}
 		return 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

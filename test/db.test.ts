@@ -7,6 +7,7 @@ import {
 	candidateCounts,
 	decideRule,
 	getRuleById,
+	getRulesetVersion,
 	getRunBySession,
 	goldenReplicateRuns,
 	insertQuestion,
@@ -22,6 +23,7 @@ import {
 	setRuleProbation,
 	upsertRun,
 	type WardenDb,
+	withDb,
 } from "../src/db.js";
 
 let dir: string;
@@ -185,6 +187,43 @@ describe("openDb / migrations", () => {
 		} finally {
 			stderr.mockRestore();
 		}
+	});
+});
+
+describe("withDb", () => {
+	const dbPath = (): string => join(dir, "with.db");
+
+	it("returns the body's value and closes the connection", () => {
+		let captured: WardenDb | undefined;
+		const version = withDb(dbPath(), (db) => {
+			captured = db;
+			return getRulesetVersion(db, "sql");
+		});
+		expect(version).toBe(0);
+		// A closed better-sqlite3 handle throws on any statement — the check that
+		// the `finally` actually ran, rather than trusting the shape of the code.
+		expect(() => (captured as WardenDb).pragma("user_version")).toThrow();
+	});
+
+	it("closes the connection when the body THROWS — the whole point", () => {
+		let captured: WardenDb | undefined;
+		expect(() =>
+			withDb(dbPath(), (db) => {
+				captured = db;
+				throw new Error("boom");
+			}),
+		).toThrow("boom");
+		expect(() => (captured as WardenDb).pragma("user_version")).toThrow();
+	});
+
+	it("defaults to the ledger path when none is given", () => {
+		// TOKEN_WARDEN_DB is set by the test setup, so the no-path overload must
+		// land on the same file `openDb()` would.
+		const written = withDb((db) => {
+			upsertRun(db, makeRun());
+			return getRunBySession(db, "s1");
+		});
+		expect(written).toBeDefined();
 	});
 });
 

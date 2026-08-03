@@ -24,9 +24,9 @@ import { runCli } from "./cli.js";
 import {
 	agentTokenMix,
 	latestReceipts,
-	openDb,
 	type ReceiptRow,
 	type WardenDb,
+	withDb,
 } from "./db.js";
 import { formatNumber as fmt } from "./format.js";
 import { blendedDollarsPerToken, priceFor } from "./pricing.js";
@@ -133,8 +133,7 @@ export function parseReceiptArgs(argv: string[]): ReceiptArgs {
 export function main(argv: string[]): number {
 	const args = parseReceiptArgs(argv);
 	const agents = args.agent ? [args.agent] : knownAgents();
-	const db = openDb();
-	try {
+	return withDb((db) => {
 		if (args.json) {
 			const out: Record<string, ReceiptRow[]> = {};
 			for (const agent of agents) out[agent] = latestReceipts(db, agent);
@@ -143,9 +142,7 @@ export function main(argv: string[]): number {
 		}
 		console.log(agents.map((agent) => renderReceipts(db, agent)).join("\n\n"));
 		return 0;
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

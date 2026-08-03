@@ -42,8 +42,8 @@ import {
 	defaultDbPath,
 	getActiveRules,
 	getRulesetVersion,
-	openDb,
 	type RuleRow,
+	withDb,
 } from "./db.js";
 import { parseClaudeEnvelope } from "./model-call.js";
 import { assertKnownAgent, userAgentsDir } from "./registry.js";
@@ -282,8 +282,7 @@ export function main(args: EvolveArgs): void {
 	const variant = parseAgentDefinition(proposed, "proposal");
 	const baseDef = parseAgentDefinition(current, agentPath);
 
-	const db = openDb();
-	try {
+	withDb((db) => {
 		const tasks: GoldenTask[] = loadGoldenTasks(args.agent);
 		const rules: RuleRow[] = getActiveRules(db, args.agent);
 		const run = (
@@ -360,9 +359,7 @@ export function main(args: EvolveArgs): void {
 		}
 
 		reportMetaCost(db, benchTokens);
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

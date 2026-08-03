@@ -27,7 +27,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import { runCli } from "./cli.js";
-import { insertRule, listRulesByAgent, openDb, type RuleRow } from "./db.js";
+import { insertRule, listRulesByAgent, type RuleRow, withDb } from "./db.js";
 import { isValidAgentName, knownAgents } from "./registry.js";
 import { contextCost, trigramSimilarity } from "./rules.js";
 import { LEDGER_MARKER, type SharedRule } from "./share.js";
@@ -211,8 +211,7 @@ export function main(args: AdoptArgs): void {
 		);
 	}
 
-	const db = openDb();
-	try {
+	withDb((db) => {
 		const existing = listRulesByAgent(db, ledger.agent);
 		const { adopt, skipped } = planImport(existing, ledger.rules);
 		const now = new Date().toISOString();
@@ -245,9 +244,7 @@ export function main(args: AdoptArgs): void {
 					" your own golden suite before they enter memory.",
 			);
 		}
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */

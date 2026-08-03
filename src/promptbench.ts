@@ -32,8 +32,8 @@ import { formatComparison, reportMetaCost, runComparison } from "./compare.js";
 import {
 	getActiveRules,
 	getRulesetVersion,
-	openDb,
 	type RuleRow,
+	withDb,
 } from "./db.js";
 import { assertKnownAgent } from "./registry.js";
 
@@ -144,8 +144,7 @@ export function main(args: PromptbenchArgs): void {
 	const baseline: AgentDefinition = loadAgentDefinition(args.agent);
 	warnOnAgentNameMismatch(args.agent, args.variant, rawVariant);
 
-	const db = openDb();
-	try {
+	withDb((db) => {
 		// Hold the model constant (the agent's current model) so the prompt is
 		// the only variable, even if the variant file names a different model.
 		const baseModel = baseline.model;
@@ -192,9 +191,7 @@ export function main(args: PromptbenchArgs): void {
 		console.log("");
 		console.log(formatComparison(comparison));
 		reportMetaCost(db, benchTokens);
-	} finally {
-		db.close();
-	}
+	});
 }
 
 /* v8 ignore start -- CLI entry shim, exercised by e2e subprocess smoke */
