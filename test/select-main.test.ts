@@ -136,7 +136,13 @@ describe("select main() orchestration", () => {
 	}
 
 	it("does nothing when there are no candidates and nothing to audit", () => {
-		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
+		main({
+			agent: "sql",
+			runs: 2,
+			topUp: 1,
+			uniformTopUp: false,
+			retentionRounds: 2,
+		});
 
 		expect(output()).toContain(
 			"No candidates and no active rules to audit; nothing to do.",
@@ -150,7 +156,13 @@ describe("select main() orchestration", () => {
 		// the bar (2× rent of cost 10 ≈ 22) at full confidence.
 		wireRunSuite({ baseline: [1000, 1000], measured: [500, 500] });
 
-		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
+		main({
+			agent: "sql",
+			runs: 2,
+			topUp: 1,
+			uniformTopUp: false,
+			retentionRounds: 2,
+		});
 
 		const out = output();
 		expect(out).toContain(`[candidate] rule ${id} → ACTIVE`);
@@ -183,7 +195,13 @@ describe("select main() orchestration", () => {
 			topUp: [1030, 1010],
 		});
 
-		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
+		main({
+			agent: "sql",
+			runs: 2,
+			topUp: 1,
+			uniformTopUp: false,
+			retentionRounds: 2,
+		});
 
 		const out = output();
 		// The top-up pass ran against allocated tasks (label suffix "-topup").
@@ -210,7 +228,13 @@ describe("select main() orchestration", () => {
 			topUp: [1030, 1010],
 		});
 
-		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: true });
+		main({
+			agent: "sql",
+			runs: 2,
+			topUp: 1,
+			uniformTopUp: true,
+			retentionRounds: 2,
+		});
 
 		const topUpCalls = runSuiteMock.mock.calls.filter((c) =>
 			(c[3] as { label: string }).label.endsWith("-topup"),
@@ -257,7 +281,13 @@ describe("select main() orchestration", () => {
 		const id = insertCandidate("Batch the heavy path.", 10, "custom");
 		wireRunSuite({ baseline: [1000, 1000], measured: [500, 500] });
 
-		main({ agent: "custom", runs: 2, topUp: 1, uniformTopUp: false });
+		main({
+			agent: "custom",
+			runs: 2,
+			topUp: 1,
+			uniformTopUp: false,
+			retentionRounds: 2,
+		});
 
 		const out = output();
 		expect(out).toContain(`[candidate] rule ${id} → ACTIVE`);
@@ -290,7 +320,13 @@ describe("select main() orchestration", () => {
 			},
 		);
 
-		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
+		main({
+			agent: "sql",
+			runs: 2,
+			topUp: 1,
+			uniformTopUp: false,
+			retentionRounds: 2,
+		});
 
 		const out = output();
 		expect(out).toContain("ABORTED: environment failure");
@@ -338,7 +374,13 @@ describe("select main() orchestration", () => {
 			},
 		);
 
-		main({ agent: "sql", runs: 2, topUp: 1, uniformTopUp: false });
+		main({
+			agent: "sql",
+			runs: 2,
+			topUp: 1,
+			uniformTopUp: false,
+			retentionRounds: 2,
+		});
 
 		const out = output();
 		expect(out).toContain("ABORTED: environment failure");
@@ -388,7 +430,13 @@ describe("select main() orchestration", () => {
 			},
 		);
 
-		main({ agent: "sql", runs: 2, topUp: 0, uniformTopUp: false });
+		main({
+			agent: "sql",
+			runs: 2,
+			topUp: 0,
+			uniformTopUp: false,
+			retentionRounds: 2,
+		});
 
 		const out = output();
 		expect(out).toContain(`[candidate] rule ${id} → ACTIVE`);
@@ -406,7 +454,13 @@ describe("select main() orchestration", () => {
 		// Suite costs the same with and without the rule: worth 0 now.
 		wireRunSuite({ baseline: [1000, 1000], measured: [1000, 1000] });
 
-		main({ agent: "sql", runs: 2, topUp: 0, uniformTopUp: false });
+		main({
+			agent: "sql",
+			runs: 2,
+			topUp: 0,
+			uniformTopUp: false,
+			retentionRounds: 2,
+		});
 
 		const out = output();
 		expect(out).toContain(`[re-audit] rule ${id} → ACTIVE`);

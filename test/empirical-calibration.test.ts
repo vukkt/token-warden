@@ -4,6 +4,7 @@ import type { GoldenReplicateRun } from "../src/db.js";
 import {
 	bootstrapTrial,
 	candidateKept,
+	type EvictionTrialSpec,
 	falseEvictionTrial,
 	groupReplicates,
 	parseEmpiricalArgs,
@@ -288,22 +289,34 @@ describe("falseEvictionTrial", () => {
 		{ taskId: "t3", totals: [46000, 48000, 47000, 45000] },
 	];
 
+	const spec = (
+		trueSaving: number,
+		maxRetentionRounds = 0,
+	): EvictionTrialSpec => ({
+		groups,
+		runsPerSide: 2,
+		rent: 25,
+		trueSaving,
+		cycles: 12,
+		maxRetentionRounds,
+	});
+
 	it("returns null when a large true saving survives every re-audit", () => {
 		// A saving of 20k tokens/run against ~46k totals is far outside the
 		// resampling noise, so no cycle should produce two consecutive
 		// sub-threshold re-audits.
 		const rng = mulberry32(1);
-		expect(falseEvictionTrial(rng, groups, 2, 25, 20000, 12)).toBeNull();
+		expect(falseEvictionTrial(rng, spec(20000)).evictedAt).toBeNull();
 	});
 
 	it("evicts a rule whose true saving is zero", () => {
 		// Zero true saving means every re-audit is measuring noise, so the
 		// two-strike policy should bin it — and report the cycle it happened on.
 		const rng = mulberry32(2);
-		const cycle = falseEvictionTrial(rng, groups, 2, 25, 0, 12);
-		expect(cycle).not.toBeNull();
-		expect(cycle).toBeGreaterThanOrEqual(2);
-		expect(cycle).toBeLessThanOrEqual(12);
+		const { evictedAt } = falseEvictionTrial(rng, spec(0));
+		expect(evictedAt).not.toBeNull();
+		expect(evictedAt).toBeGreaterThanOrEqual(2);
+		expect(evictedAt).toBeLessThanOrEqual(12);
 	});
 
 	it("never evicts before cycle 2 — one strike is probation, not eviction", () => {
@@ -311,15 +324,15 @@ describe("falseEvictionTrial", () => {
 		// must not be able to bin a rule. If this ever returns 1 the harness
 		// has drifted from the real policy in src/select.ts.
 		for (let seed = 1; seed <= 200; seed++) {
-			const cycle = falseEvictionTrial(mulberry32(seed), groups, 2, 25, 0, 12);
-			if (cycle !== null) expect(cycle).toBeGreaterThanOrEqual(2);
+			const { evictedAt } = falseEvictionTrial(mulberry32(seed), spec(0));
+			if (evictedAt !== null) expect(evictedAt).toBeGreaterThanOrEqual(2);
 		}
 	});
 
 	it("is deterministic for a given seed", () => {
-		const a = falseEvictionTrial(mulberry32(7), groups, 2, 25, 500, 12);
-		const b = falseEvictionTrial(mulberry32(7), groups, 2, 25, 500, 12);
-		expect(a).toBe(b);
+		const a = falseEvictionTrial(mulberry32(7), spec(500));
+		const b = falseEvictionTrial(mulberry32(7), spec(500));
+		expect(a).toEqual(b);
 	});
 
 	it("evicts a small true saving more often than a large one", () => {
@@ -329,8 +342,7 @@ describe("falseEvictionTrial", () => {
 			let evicted = 0;
 			for (let seed = 1; seed <= 150; seed++) {
 				if (
-					falseEvictionTrial(mulberry32(seed), groups, 2, 25, saving, 12) !==
-					null
+					falseEvictionTrial(mulberry32(seed), spec(saving)).evictedAt !== null
 				) {
 					evicted++;
 				}
@@ -338,5 +350,38 @@ describe("falseEvictionTrial", () => {
 			return evicted / 150;
 		};
 		expect(rate(1000)).toBeGreaterThan(rate(15000));
+	});
+
+	it("models the re-audit top-up the selector actually spends", () => {
+		// The first cut of this harness decided every re-audit on its first look,
+		// which the selector has never done. A rule this noisy lands uncertain, so
+		// at least one round must be bought even in the control arm.
+		const { topUpRounds, reAudits } = falseEvictionTrial(
+			mulberry32(3),
+			spec(1000),
+		);
+		expect(reAudits).toBeGreaterThan(0);
+		expect(topUpRounds).toBeGreaterThan(0);
+	});
+
+	it("the retention budget buys rounds, and buying them costs passes", () => {
+		const cost = (maxRounds: number): { evicted: number; rounds: number } => {
+			let evicted = 0;
+			let rounds = 0;
+			let audits = 0;
+			for (let seed = 1; seed <= 150; seed++) {
+				const r = falseEvictionTrial(mulberry32(seed), spec(1000, maxRounds));
+				if (r.evictedAt !== null) evicted++;
+				rounds += r.topUpRounds;
+				audits += r.reAudits;
+			}
+			return { evicted, rounds: rounds / audits };
+		};
+		const control = cost(0);
+		const policy = cost(2);
+		// More evidence per re-audit, and it is not free.
+		expect(policy.rounds).toBeGreaterThan(control.rounds);
+		// The whole point: a genuinely earning rule survives more often.
+		expect(policy.evicted).toBeLessThanOrEqual(control.evicted);
 	});
 });

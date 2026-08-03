@@ -1,6 +1,6 @@
 ---
 description: Measure pending token-warden candidate rules for an agent on the golden suite, evict or activate them, and recompile the agent's memory.
-argument-hint: <frontend|backend|sql|testing> [--runs N] [--top-up N] [--uniform-top-up]
+argument-hint: <frontend|backend|sql|testing> [--runs N] [--top-up N] [--uniform-top-up] [--retention-rounds N]
 disable-model-invocation: true
 allowed-tools: Bash(cd:*), Bash(npx tsx:*)
 ---
@@ -19,6 +19,13 @@ cd "${CLAUDE_SKILL_DIR}/.." && npx tsx src/select.ts --agent <agent> <extra flag
 `--uniform-top-up` replaces the Neyman variance-proportional top-up with one
 full uniform suite pass (same budget) — the control arm when benchmarking the
 allocation strategy itself.
+
+`--retention-rounds N` (0-2, default 2) caps the EXTRA measurement rounds a
+RE-AUDIT may buy before de-activating a rule with a banked margin. A re-audit
+whose noise band is wide relative to what the rule has already been shown to
+earn buys more evidence rather than deciding on the noisy draw; a decisive
+measurement, a regression, and every candidate promotion are unaffected. `0`
+restores the pre-v0.43.0 single-top-up behaviour and is the control arm.
 
 When it finishes, report:
 

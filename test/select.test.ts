@@ -17,6 +17,7 @@ import {
 import { compileActiveMemory, memoryFilePath } from "../src/memory.js";
 import {
 	assessDelta,
+	MAX_RETENTION_ROUNDS,
 	parseSelectArgs,
 	type SuiteRunner,
 	selectForAgent,
@@ -221,8 +222,27 @@ describe("parseSelectArgs", () => {
 	it("parses agent, runs, and top-up budget", () => {
 		expect(
 			parseSelectArgs(["--agent", "sql", "--runs", "3", "--top-up", "2"]),
-		).toEqual({ agent: "sql", runs: 3, topUp: 2, uniformTopUp: false });
+		).toEqual({
+			agent: "sql",
+			runs: 3,
+			topUp: 2,
+			uniformTopUp: false,
+			retentionRounds: MAX_RETENTION_ROUNDS,
+		});
 		expect(parseSelectArgs(["--agent", "sql"]).topUp).toBe(1);
+	});
+
+	it("parses and bounds the retention budget", () => {
+		expect(
+			parseSelectArgs(["--agent", "sql", "--retention-rounds", "0"])
+				.retentionRounds,
+		).toBe(0);
+		expect(() =>
+			parseSelectArgs(["--agent", "sql", "--retention-rounds", "9"]),
+		).toThrow(/--retention-rounds/);
+		expect(() =>
+			parseSelectArgs(["--agent", "sql", "--retention-rounds", "-1"]),
+		).toThrow(/--retention-rounds/);
 	});
 
 	it("rejects unknown agents and flags", () => {

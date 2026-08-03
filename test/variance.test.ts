@@ -9,13 +9,16 @@ import {
 	allocateTopUpRuns,
 	assessDelta,
 	betweenTaskDofInflation,
+	type DeltaAssessment,
+	MAX_RETENTION_ROUNDS,
 	mergeSummaries,
 	type RunAllocation,
+	retentionRounds,
 	type SuiteRunner,
 	selectForAgent,
 	withinTaskDofInflation,
 } from "../src/select.js";
-import { pooledVariance, sampleVariance } from "../src/stats.js";
+import { effectiveRent, pooledVariance, sampleVariance } from "../src/stats.js";
 
 /** Deterministic LCG so the property sweeps below are reproducible — a flaky
  * statistical test is worse than no test. */
@@ -921,6 +924,167 @@ describe("selectForAgent variance top-up", () => {
 		expect(getRuleById(db, decision?.rule.id ?? -1)?.decided_reason).toContain(
 			"standard error",
 		);
+	});
+});
+
+describe("retentionRounds (variance-proportional re-audit budget)", () => {
+	/** A measurement with the two fields the policy reads; everything else is
+	 * the neutral value it ignores. */
+	function assessed(
+		standardError: number | null,
+		regression = false,
+	): DeltaAssessment {
+		return {
+			delta: 0,
+			regression,
+			standardError,
+			standardErrorBasis: standardError === null ? null : "within-task",
+			uncertain: true,
+			confidenceMultiple: 2,
+			robustDelta: null,
+			tailRisk: false,
+			completionDrop: false,
+			environmentFailure: false,
+		};
+	}
+
+	// Rent 25 → cache-aware bar of ~53 tokens.
+	const bar = 2 * effectiveRent(25);
+
+	it("buys nothing for a rule with no banked margin to protect", () => {
+		expect(retentionRounds(null, 25, assessed(5000))).toBe(0);
+		expect(retentionRounds(0, 25, assessed(5000))).toBe(0);
+		expect(retentionRounds(Math.floor(bar), 25, assessed(5000))).toBe(0);
+	});
+
+	it("buys nothing without an estimable standard error", () => {
+		expect(retentionRounds(10_000, 25, assessed(null))).toBe(0);
+	});
+
+	it("buys nothing for a regression — that evicts immediately by invariant", () => {
+		expect(retentionRounds(10_000, 25, assessed(5000, true))).toBe(0);
+	});
+
+	it("buys nothing when the measurement is already decisive", () => {
+		// Noise band (2 × 100 = 200) is smaller than the ~9,947 at stake: this
+		// draw can be believed, so there is nothing to buy.
+		expect(retentionRounds(10_000, 25, assessed(100))).toBe(0);
+	});
+
+	it("grades rounds by how far the noise band reaches past the stake", () => {
+		// margin ≈ 9,947. threat = 2·SE/margin.
+		expect(retentionRounds(10_000, 25, assessed(7000))).toBe(1); // ~1.41
+		expect(retentionRounds(10_000, 25, assessed(12_000))).toBe(2); // ~2.41
+	});
+
+	it("caps the budget however hopeless the noise is", () => {
+		expect(retentionRounds(10_000, 25, assessed(10_000_000))).toBe(
+			MAX_RETENTION_ROUNDS,
+		);
+	});
+});
+
+describe("selectForAgent retention budget (end-to-end)", () => {
+	let dir: string;
+	let db: WardenDb;
+	const agent = "sql";
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-retention-"));
+		db = openDb(join(dir, "warden.db"));
+		process.env.TOKEN_WARDEN_MEMORY_DIR = join(dir, "agent-memory");
+	});
+
+	afterEach(() => {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+		delete process.env.TOKEN_WARDEN_MEMORY_DIR;
+	});
+
+	/** Bank a rule at a large measured delta, then hand back a runner whose
+	 * re-audit is noisy enough to stay uncertain however many rounds it buys —
+	 * so the number of rounds spent is the policy's alone. */
+	function seedBankedRule(): number {
+		const id = insertRule(db, {
+			agent,
+			body: "Grep for the symbol before reading whole files.",
+			contextCost: 25,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		// Noiseless admission (identical runs → SE 0), banking a margin of 2,000
+		// tokens/run. The re-audit's noise below is far wider than that margin,
+		// which is exactly the case the retention budget exists for.
+		const admit: SuiteRunner = (rules) =>
+			rules.some((r) => r.id === id)
+				? [summary("t1", [8000, 8000]), summary("t2", [8000, 8000])]
+				: [summary("t1", [10_000, 10_000]), summary("t2", [10_000, 10_000])];
+		selectForAgent(db, agent, admit);
+		expect(getRuleById(db, id)?.status).toBe("active");
+		return id;
+	}
+
+	/** A re-audit whose without-rule side is wildly noisy: the verdict stays
+	 * within the noise band no matter how much evidence is pooled. */
+	const noisyReAudit: SuiteRunner = (rules) =>
+		rules.length === 0
+			? [summary("t1", [4000, 16_000]), summary("t2", [4000, 16_000])]
+			: [summary("t1", [8000, 8000]), summary("t2", [8000, 8000])];
+
+	it("spends extra rounds on a banked rule, labelled so the passes are auditable", () => {
+		const id = seedBankedRule();
+		const labels: string[] = [];
+		const runner: SuiteRunner = (rules, label, record, alloc) => {
+			labels.push(label);
+			return noisyReAudit(rules, label, record, alloc);
+		};
+
+		const report = selectForAgent(db, agent, runner);
+
+		const decision = report.decisions.find((d) => d.kind === "re-audit");
+		expect(decision?.topUpRounds).toBe(3); // 1 ordinary + 2 retention rounds
+		expect(labels).toContain(`audit-${id}-topup`);
+		expect(labels).toContain(`audit-${id}-topup2`);
+		expect(labels).toContain(`audit-${id}-topup3`);
+	});
+
+	it("retentionRounds: 0 restores the single-top-up control arm", () => {
+		const id = seedBankedRule();
+		const labels: string[] = [];
+		const runner: SuiteRunner = (rules, label, record, alloc) => {
+			labels.push(label);
+			return noisyReAudit(rules, label, record, alloc);
+		};
+
+		const report = selectForAgent(db, agent, runner, { retentionRounds: 0 });
+
+		expect(
+			report.decisions.find((d) => d.kind === "re-audit")?.topUpRounds,
+		).toBe(1);
+		expect(labels).toContain(`audit-${id}-topup`);
+		expect(labels).not.toContain(`audit-${id}-topup2`);
+	});
+
+	it("never extends a candidate: admission confidence is not for sale", () => {
+		const id = insertRule(db, {
+			agent,
+			body: "A borderline candidate with no banked margin at all.",
+			contextCost: 25,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		const labels: string[] = [];
+		const runner: SuiteRunner = (rules, label) => {
+			labels.push(label);
+			return rules.some((r) => r.id === id)
+				? [summary("t1", [4000, 16_000]), summary("t2", [4000, 16_000])]
+				: [summary("t1", [9000, 9000]), summary("t2", [9000, 9000])];
+		};
+
+		const report = selectForAgent(db, agent, runner);
+
+		expect(report.decisions[0]?.topUpRounds).toBe(1);
+		expect(labels).not.toContain(`candidate-${id}-topup2`);
 	});
 });
 
