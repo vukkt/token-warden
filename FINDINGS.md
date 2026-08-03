@@ -899,3 +899,47 @@ Reproduce (no tokens, deterministic):
 npx tsx validation/empirical-calibration.ts --agent sql --mode eviction \
   --trials 3000 --runs 2 --cycles 12
 ```
+
+### The other three agents: blocked, and why the workaround does not count (2026-08-03)
+
+Running `--mode eviction` for `backend`, `frontend` and `testing` at the
+documented 2 runs/side returns `insufficient replicate history` for all three.
+The diagnosis is exact: eligibility needs >= 2x runs-per-side replicates of one
+task at ONE ruleset version, and each of the three has exactly **2 runs per
+task** at `rulesetV0` where 4 are required. `sql` qualifies only because its
+pools run 4-5 deep.
+
+They DO qualify at `--runs 1`, and that run was made. Its numbers are not
+reported as results, for three reasons that are worth recording because each one
+would have been easy to miss:
+
+- **`frontend` is degenerate.** It returns 0.0% false eviction on every row, at
+  0.00 top-ups per audit — which reads as a flawless gate and is nothing of the
+  kind. Its two recorded runs per task differ by 22 and 20 tokens on ~38,000
+  (0.1%), so the pool carries almost no variance, nothing is ever uncertain, and
+  nothing is ever evicted. Two draws landing together is unremarkable at n=2 even
+  in a noisy distribution. **A zero here is a statement about the pool, not about
+  the gate.**
+- **A 2-element pool cannot represent a tail.** Resampling with replacement from
+  two observations means every simulated run is one of exactly two numbers. The
+  derailment outliers that drive real evictions are precisely what such a pool
+  has no way to contain.
+- **The retention round silently upgrades the ESTIMATOR at runs=1, which
+  confounds the comparison.** With one run per side no within-task variance is
+  estimable, so `assessDelta` falls back to the between-task spread. A one-sided
+  top-up leaves it there; a two-sided RETENTION round gives the with-side its
+  second run and flips the basis to within-task mid-decision. So the improvement
+  measured at runs=1 mixes "more evidence" with "a better SE estimator", and
+  overstates the policy. At 2 runs/side — the `sql` table above — both arms are
+  within-task throughout, which is why that comparison is clean.
+
+For the record, the runs=1 rows on the two non-degenerate agents move in the same
+direction as `sql` (backend 5%: 33.9% -> 8.9%; testing 5%: 9.5% -> 0.2%). That is
+weak corroboration of the sign and nothing more; the magnitudes are inflated by
+the estimator flip above.
+
+**Cost to unblock properly:** 2 more replicates per task at the current ruleset
+version, 3 tasks per agent — 468k tokens for `backend`, 274k for `frontend`,
+549k for `testing`, ~1.29M total at their recorded per-run means. All three
+currently have no active rules, so `rulesetV0` is still current and the existing
+runs would pool with the new ones rather than being stranded at an old version.
