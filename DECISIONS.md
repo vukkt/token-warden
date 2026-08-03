@@ -557,6 +557,62 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## v0.43.0 — the retention budget, and two designs the harness rejected
+
+- **A harness that imports the real functions can still measure the wrong
+  path.** The v0.42.0 eviction harness called `assessDelta`,
+  `verdictWithReason` and `twoStrikeRetention` — the shipped policy, not a copy,
+  which is exactly what the v0.42.0 entry below was careful about — and still
+  described a pipeline that does not exist, because it decided each re-audit on
+  its FIRST look while `measureWithTopUp` has always spent a top-up pass on a
+  verdict within noise. Importing the real units is not the same as reproducing
+  the real call sequence. The published table was corrected (79.8/60.8/25.0 ->
+  78.2/53.8/16.3) and the old one left in FINDINGS under a superseded banner,
+  because a retracted number is more useful than a quietly replaced one.
+
+- **Two designs were measured and discarded before the third shipped, and both
+  were the obvious ones.** Extra re-audit runs on the MEASURED side — the shape
+  ROADMAP itself proposed — cannot work in principle: the delta's error sums
+  both sides, so pouring runs into one drives its term toward zero and leaves
+  the total pinned at whatever the frozen side contributes (78.2% -> 79.1%, for
+  2.2 extra passes per audit). And NEYMAN placement for those rounds, the house
+  style everywhere else in this repo, is actively harmful: at 2 runs/task the
+  variance estimate carries one degree of freedom, so a whole round goes to
+  whichever task happened to draw widest. Uniform placement of the same tokens
+  moves a 5% rule from 49.6% to 29.3%. **A tuning that is correct on the
+  admission side does not transfer to the retention side**, and the only reason
+  this is known rather than assumed is that the harness is zero-token.
+
+- **The budget is a function of the noise, never a discount on the bar.** It
+  compares the noise band at the gate's own confidence multiple against the
+  rule's banked margin over its own threshold. A decisively measured rule buys
+  nothing — the 20% row is flat, by construction — and a rule with no banked
+  margin, a regression, or no estimable SE buys nothing either. The keep/evict
+  inequality, the confidence multiple and two-strike retention are untouched, so
+  a rule that has genuinely stopped earning still leaves; it leaves on more
+  evidence.
+
+- **Candidates get no retention rounds at all.** Admission is the Type I
+  direction, where the gate is deliberately strict, and paying more to admit a
+  rule we cannot yet show earns is the error this project exists to avoid.
+  Keeping the first top-up byte-identical also means the only behaviour a
+  candidate can experience is the one already calibrated in v0.35.0.
+
+- **The cap exists because the cost is real.** Two extra rounds, ~1.5 additional
+  suite passes per re-audit at the effect sizes where it helps. Past that the
+  marginal SE cut per round has fallen to ~13% and the tokens buy more by moving
+  to the next rule. `--retention-rounds 0` is a real control arm, not a
+  courtesy flag.
+
+- **`withDb` went into `db.ts`, not `cli.ts`.** The v0.41.0 note had filed it
+  under the CLI boundary, but it is a ledger-lifetime concern, and putting it
+  beside `openDb` meant no call site gained an import to adopt it — the
+  difference between a mechanical change and a churning one. `collect` keeps
+  `openHookDb`: a shortened `busy_timeout` so a contended write stays retriable
+  inside the Stop hook's budget is different knowledge from "open the ledger",
+  and the four fail-open hooks keep their own boundary for the same reason they
+  always have.
+
 ## v0.42.0 — the other error tail, and retrieval as a second context source
 
 - **The harness imports the real retention policy instead of copying it.**
