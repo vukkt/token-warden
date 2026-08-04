@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.43.1 — 2026-08-05
+
+Verification and documentation only. No behaviour change: the gate, the
+estimators and the retention budget are byte-identical to v0.43.0.
+
+### The golden-check vacuity audit is finished, and now enforced
+
+A `success_check` that passes on the PRISTINE fixture — before any agent has
+touched it — is a dead sensor: it cannot detect a regression, and because a
+quota-dead run on it records `completed = true`, it is invisible to the
+environment-failure discriminator as well. v0.40.0 found two by hand
+(`sql-01`, `backend-03`) and ROADMAP left the remaining checks open.
+
+All 21 bundled checks have now been EXECUTED against an untouched fixture,
+replicating `bench.ts`'s real invocation (same copy filter, `node_modules`
+symlink, `bash -c`, allowlisted environment). **The suite is clean** — the only
+checks that pass untouched are the two already known. A second, stricter pass
+confirmed no check hides a vacuous *behavioural* clause behind a trailing
+`npx vitest run`, a shape that cannot distinguish "the agent did the thing
+asked" from "the agent did not break the existing tests".
+
+**The suspicion recorded in ROADMAP about `sql-05` was wrong.** It claimed that
+guard "also passes pristine". Executed, its grep exits 1: it requires an index
+on `created_at`, and the pristine schema indexes only `products(name)`. The
+suspicion had been formed by READING the grep — the exact mistake the audit it
+annotated exists to warn about. Corrected.
+
+`test/golden-checks.test.ts` enforces this on every CI run in ~0.5s, without
+spawning a test runner: every bundled task must carry a non-test clause that
+FAILS on the pristine fixture. Because a check is an `&&` chain, one failing
+clause proves the whole check fails pristine, so the fast form is a sound proof
+rather than an approximation. `sql-01` and `backend-03` are a named allowlist
+whose vacuous state is PINNED — repairing one in place fails the test and forces
+the add-don't-edit conversation, since editing them invalidates the frozen
+`run1_tokens` baselines they still carry. The guard was verified by injecting a
+vacuous check and confirming it failed before being committed.
+
+### README
+
+Brought to the tagged version: 1,235 tests across 53 files, 48 releases, 15.1k
+source / 19.5k test lines. Its false-eviction headline moves 79.8% -> 78.2% (the
+v0.43.0 correction) and now states plainly that the first figure was retracted
+rather than quietly edited. Adds the two retention-budget designs that measured
+to nothing, since that section is about the project's standard rather than its
+metrics.
+
 ## v0.43.0 — 2026-08-03
 
 The variance-proportional RE-AUDIT budget: the retention-side analogue of the
