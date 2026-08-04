@@ -164,9 +164,21 @@ what remains is running the experiments and recording their results:
   to detect a regression *and* invisible to the environment-failure discriminator
   (a quota-dead run on it records `completed = true`). `sql-01` is left
   byte-identical so its frozen `run1_tokens` and every published comparison stay
-  valid — the same add-don't-edit remedy used for the noisy-task splits. Open:
-  audit the remaining 19 checks for the same vacuity (`sql-05`'s guard also
-  passes pristine and leans entirely on its trailing `npx vitest run`).
+  valid — the same add-don't-edit remedy used for the noisy-task splits.
+  **The remaining checks are now audited (v0.43.0) and they are clean.** All 21
+  bundled checks were EXECUTED against a pristine fixture; the only two that pass
+  untouched are the two already known, `sql-01` and `backend-03`. The suspicion
+  this entry recorded about `sql-05` was WRONG: it demands an index on
+  `created_at` and the pristine schema indexes only `products(name)`, so it fails
+  pristine and discriminates properly. That suspicion had been formed by READING
+  the grep, which is the exact mistake the original audit exists to warn about. A
+  second, stricter pass confirmed no other check hides a vacuous *behavioural
+  clause* behind a trailing `npx vitest run`.
+  `test/golden-checks.test.ts` now enforces this on every CI run (~0.5s, no test
+  runner spawned): every bundled task must have a non-test clause that FAILS on
+  the pristine fixture, with `sql-01`/`backend-03` as a named allowlist so their
+  precedent cannot shelter a new one. Verified to fail against an injected
+  vacuous check before it was committed.
 - **Distribution-weighted / production-sampled suites.** Shipped in v0.37.0:
   a golden task carries `weight: N` and the verdict estimators weight the mean,
   SE, and top-up accordingly, with an effective-DoF confidence correction so

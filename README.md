@@ -12,10 +12,10 @@ that it saves more tokens than it costs to carry. Rules that fail are evicted. R
 already passed are re-tested and evicted when they stop paying.
 
 ```text
-  version    0.42.0            tests       1172 across 52 files
-  released   47 versions       coverage    97.0% lines, CI-enforced floor
-  built      2026-06 to now    source      43 modules, 14.6k lines
-  license    MIT               test code   18.8k lines
+  version    0.43.0            tests       1235 across 53 files
+  released   48 versions       coverage    97.0% lines, CI-enforced floor
+  built      2026-06 to now    source      43 modules, 15.1k lines
+  license    MIT               test code   19.5k lines
 ```
 
 ---
@@ -199,8 +199,19 @@ Three decisions that show the standard better than the metrics do:
   model predicted; the larger number is the one in the docs. The false-NEGATIVE rate went
   unmeasured until v0.42.0, and the roadmap forbade building anything to fix it until it
   was measured. It is now: a rule that genuinely saves 2% of a run is falsely evicted
-  **79.8%** of the time over twelve re-audits. The unflattering tail turned out to be an
-  order of magnitude larger than the flattering one, and it reordered the roadmap.
+  **78.2%** of the time over twelve re-audits. The unflattering tail turned out to be an
+  order of magnitude larger than the flattering one, and it reordered the roadmap. That
+  first figure was published as 79.8% and then corrected downward in v0.43.0, because the
+  harness had been deciding each simulated re-audit on its first look while the selector
+  has always bought a second — a retraction, not a quiet edit.
+- **It measured two of its own designs to zero and threw them away.** The v0.43.0 retention
+  budget went through three shapes. Spending extra re-audit runs the way the roadmap itself
+  proposed moved the false-eviction rate 78.2% to 79.1% — nothing, and it would have billed
+  2.2 extra benchmark passes per re-audit to do it — because a one-sided budget cannot cut
+  an error that sums both sides. Placing those runs by Neyman
+  allocation, the house style everywhere else in the codebase, was actively worse than
+  spreading them evenly. Only the third shape shipped: a 10% rule now survives its re-audits
+  three times more often (16.3% falsely evicted to **5.4%**).
 - **It rejected one of its own features.** A tail-robust estimator looked like an
   improvement until calibration showed it *raised* the false-positive rate. It ships as an
   advisory flag and is kept out of the gate.
@@ -215,14 +226,16 @@ Three decisions that show the standard better than the metrics do:
 | | |
 |---|---|
 | First commit | 2026-06-11 |
-| Releases | 47 tagged versions across ~7 weeks |
-| Current | v0.42.0 |
+| Releases | 48 tagged versions across ~8 weeks |
+| Current | v0.43.0 |
 | Cadence | Ships behind a green pipeline; every release note names what is unproven |
 
 Recent arc: variance-aware verdicts and Neyman allocation, empirical self-calibration, a
 four-layer environment-failure abort validated against three real quota deaths,
-distribution-weighted suites, bring-your-own-agent, then a repository-wide hardening pass
-and a shared-module extraction.
+distribution-weighted suites, bring-your-own-agent, a repository-wide hardening pass, a
+shared-module extraction, retrieval admitted as a second measurable context source, and a
+retention budget that cut the false-eviction rate after two of its own designs measured to
+nothing.
 
 ---
 

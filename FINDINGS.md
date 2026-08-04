@@ -943,3 +943,44 @@ version, 3 tasks per agent — 468k tokens for `backend`, 274k for `frontend`,
 549k for `testing`, ~1.29M total at their recorded per-run means. All three
 currently have no active rules, so `rulesetV0` is still current and the existing
 runs would pool with the new ones rather than being stranded at an old version.
+
+## Golden-check vacuity audit: 21 checks executed, 2 vacuous, 1 suspicion wrong (2026-08-05)
+
+A `success_check` that passes on the PRISTINE fixture — before any agent has
+touched it — is a dead sensor. It cannot detect a regression, and because a
+quota-dead run on such a task records `completed = true`, it is also invisible to
+the environment-failure discriminator. v0.40.0 found two by hand and ROADMAP left
+the rest open. All 21 bundled checks have now been EXECUTED against an untouched
+fixture copy, replicating `bench.ts`'s real invocation (same copy filter, same
+`node_modules` symlink, same `bash -c` under the same allowlisted environment).
+
+**Result: the suite is clean.** The only checks that pass untouched are the two
+already known, `sql-01` and `backend-03`. The other 19 all fail pristine, which is
+the behaviour they need to be able to detect anything.
+
+A second, stricter pass asked a sharper question: a check is an `&&` chain ending
+in `npx vitest run`, so a check can be non-vacuous overall while its BEHAVIOURAL
+clauses all pass untouched — in which case it cannot tell "the agent did the thing
+asked" from "the agent did not break the existing tests". Only `backend-03` has
+that shape, and it is already retired by `backend-04`.
+
+**The recorded suspicion about `sql-05` was wrong.** ROADMAP asserted its guard
+"also passes pristine and leans entirely on its trailing `npx vitest run`."
+Executed, its grep exits 1: it requires an index on `created_at`, and the pristine
+schema indexes only `products(name)`. The suspicion had been formed by READING the
+grep — the exact mistake the original audit exists to warn against, committed in
+the note recording that audit. Corrected in ROADMAP.
+
+**Now enforced, not re-audited by hand.** `test/golden-checks.test.ts` asserts on
+every CI run that each bundled task has a non-test clause failing on the pristine
+fixture. Since a check is an `&&` chain, one failing clause proves the whole check
+fails pristine, so the fast form (greps only, no test runner spawned, ~0.5s total)
+is a sound proof of non-vacuity rather than a cheap approximation of one.
+`sql-01` and `backend-03` are a named allowlist whose known state is PINNED — if
+someone repairs one in place the test fails, forcing the add-don't-edit
+conversation, because editing them invalidates the frozen `run1_tokens` baselines
+they still carry. The guard was verified by injecting a vacuous check
+(`grep -q 'products' db/schema.sql`, which passes untouched) and confirming it
+failed before the guard was committed.
+
+Zero tokens: no model is involved at any point in this audit.
