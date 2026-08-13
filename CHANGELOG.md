@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### `/warden-dogfood` — the production window is now observable
+
+ROADMAP section 1 (the production dogfood window) had shown no progress since
+June 2026, and the reason was not effort. Every real-work session in the ledger
+is recorded under `main` or an ad-hoc subagent type, and `collect.ts` gates the
+distiller spawn on `knownAgents()` membership, so all nine of them are INERT:
+billed and stored, but unable to produce a candidate rule. Nothing in the
+product said so — `/warden-status` even prints a `main` row in its summary
+table — so a window that never started looked exactly like one that was running.
+Collection had additionally recorded nothing for 61 days, which no command
+reported either.
+
+`npx tsx src/dogfood.ts` (`/warden-dogfood`) answers, read-only and free:
+collection liveness (LIVE / IDLE / STOPPED / NEVER-RECORDED, from the freshness
+of the newest real-work row — there is no hook heartbeat and `collect.log` is
+append-on-exception); real-work sessions per agent with date ranges; which
+agents can trigger distillation and which are INERT; how many more completed
+sessions each known agent needs before the p75 trigger arms, and the token
+threshold once it has; whether `TOKEN_WARDEN_NO_COLLECT` / `TOKEN_WARDEN_NO_DISTILL`
+are switched on and whether the hook dependency marker exists; and exactly ONE
+next action.
+
+The readiness figures come from the distiller's own `MIN_PRIOR_RUNS`,
+`ROLLING_WINDOW` and `p75` rather than a second copy, and the printed threshold
+is re-checked against the live `shouldDistill` predicate before it is shown — a
+mismatch prints a `WARNING:` instead of a number the gate does not agree with.
+
+**`main` is deliberately not admitted to distillation.** A `main` rule has no
+golden suite to be measured on and no agent-memory file to be installed into
+(the bundled agents get `~/.claude/agent-memory/<agent>/MEMORY.md` because they
+declare `memory: user`; the main thread's equivalent is `CLAUDE.md`, which this
+project never writes). The supported path for a real workload is BYOA. See
+DECISIONS.md.
+
 ## v0.43.1 — 2026-08-05
 
 Verification and documentation only. No behaviour change: the gate, the

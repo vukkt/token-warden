@@ -28,6 +28,24 @@ survived the gate.
   production side observationally). Success metric: fixture survival predicts
   a real-work cost drop at the same ruleset version.
 
+  **The window has never started, and that is now visible.** The ledger's nine
+  real-work sessions are all `main` (8) or `Explore` (1), from 2026-06-11/12.
+  Distillation is gated on `knownAgents()` membership in `collect.ts`, so every
+  one of them is INERT: recorded, billed, attributed — and unable to produce a
+  candidate, whatever it costs. Verified by executing the real Stop hook over
+  two transcripts differing only in `agentName`, with a fake `npx` capturing the
+  spawn: `sql` spawned the distiller, `main` did not, while `shouldDistill`
+  returns true for `main` on the same rows (the p75 trigger was never the
+  blocker). Collection has additionally recorded nothing for 61 days.
+  `/warden-dogfood` (new) reports collection liveness, per-agent real-work
+  counts, which agents are inert, how many sessions remain before the p75
+  trigger arms, and one next action. Admitting `main` to distillation was
+  considered and REJECTED — no golden suite to measure a `main` rule and no
+  agent-memory file to install it into, so the only place it could land is the
+  user's `CLAUDE.md`, which this project never writes (see DECISIONS.md). The
+  supported route for a real workload is BYOA: register it as an agent with a
+  golden suite (`/warden-sample-tasks` drafts the tasks).
+
 ## 2. Measured experiments (token-spending, run when a budget exists)
 
 From the falsification list in the audit; each is bounded and has a success
