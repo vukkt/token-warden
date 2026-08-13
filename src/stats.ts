@@ -108,6 +108,52 @@ export function confidenceZ(): number {
 }
 
 /**
+ * How much of the gate's own confidence margin an evicted candidate's point
+ * estimate must have reached before the eviction is classed UNDERPOWERED
+ * rather than measured-negative. Promotion needs
+ * `delta - bar >= z·SE`; this classification needs `delta - bar >= f·z·SE`,
+ * so f = 1 would be the gate itself and f = 0 would be "anything on the
+ * positive side of the bar".
+ *
+ * Default 0.5 — the measurement got at least HALF the way to the evidence the
+ * gate demands, on the right side of the bar. It is a tuned number, not a
+ * taste: on the recorded `sql` pool (3,000 trials/cell, FINDINGS.md) f = 0 or
+ * 0.25 admits so much of the null distribution that the second look adds
+ * 0.93-2.63 points of false positives, while f = 0.5 adds 0.10 and still
+ * recovers +2.9 points of power at a 10% true saving and +9.1 at 20%.
+ *
+ * Read per call, not frozen at module load: the calibration harness sweeps it.
+ */
+export function recoveryMarginFraction(): number {
+	const raw = Number(process.env.WARDEN_RECOVERY_MARGIN ?? 0.5);
+	// Outside [0, 1) it is not a fraction of the margin. Reject rather than
+	// clamp, so a typo yields the calibrated default instead of a policy nobody
+	// measured — the same discipline as confidenceZ().
+	return Number.isFinite(raw) && raw >= 0 && raw < 1 ? raw : 0.5;
+}
+
+/**
+ * The multiple of the ordinary promotion margin a RECOVERED candidate must
+ * clear. A rule that gets a second look has had two chances at the gate, and
+ * two looks at level α admit more null rules than one — total false-positive
+ * rate is `p + P(recovery zone | H0)·p2`, which no choice of second-look
+ * threshold can drive back to `p`. The remedy is to make the second look
+ * strictly harder: at 1.5 the recovered candidate must clear the bar by
+ * 1.5·z·SE (3 SE at the default z), which on the recorded `sql` pool holds the
+ * added false positives to +0.10 points on a 12.0% base while the recovery
+ * still buys +2.9 points of power at a 10% true saving (3,000 trials).
+ *
+ * 1 (no extra strictness) was measured and REJECTED: five times the false
+ * positives for two-and-a-half times the power. See FINDINGS.md.
+ */
+export function recoveryStrictness(): number {
+	const raw = Number(process.env.WARDEN_RECOVERY_STRICTNESS ?? 1.5);
+	// Below 1 would make a re-tried rule EASIER to bank than a first-time one,
+	// which inverts the whole point; reject and fall back to the default.
+	return Number.isFinite(raw) && raw >= 1 ? raw : 1.5;
+}
+
+/**
  * Effective per-session rent of carrying a rule, in tokens. Beyond the raw
  * context cost paid every session, a rule incurs a one-time cache re-prefill
  * each time the ruleset changes — the memory block misses the cache and is

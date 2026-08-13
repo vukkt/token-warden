@@ -42,6 +42,7 @@ import {
 	bumpRulesetVersion,
 	decideRule,
 	getActiveRules,
+	getRuleById,
 	getRulesetVersion,
 	listCandidates,
 	oldestDecidedActiveRule,
@@ -49,6 +50,7 @@ import {
 	type RunConfig,
 	recordReceipt,
 	setRuleProbation,
+	setRuleUnderpowered,
 	type WardenDb,
 	withDb,
 } from "./db.js";
@@ -66,6 +68,8 @@ import {
 	mean,
 	median,
 	pooledVariance,
+	recoveryMarginFraction,
+	recoveryStrictness,
 	sampleVariance,
 	sessionsPerWeek,
 	sum,
@@ -138,6 +142,93 @@ export function verdictWithReason(
 				status,
 				reason: `sub-threshold: savings ${delta} < 2× cache-aware rent (${bar})`,
 			};
+}
+
+/** Everything the eviction CLASS depends on. Passed explicitly so the policy is
+ * a pure function of the verdict and its measurement, and the calibration
+ * harness can run the shipped policy rather than a copy of it. */
+export interface EvictionClassInput {
+	/** The FINAL status, after top-up and after two-strike retention. */
+	status: RuleStatus;
+	kind: DecisionKind;
+	contextCost: number;
+	/** The assessment the verdict was taken on (post top-up). */
+	assessment: DeltaAssessment;
+}
+
+/**
+ * Was this eviction decided by the WIDTH of the measurement rather than by its
+ * point estimate?
+ *
+ * The gate promotes when `delta - bar >= z·SE`. Two different failures land on
+ * the same `status = 'evicted'`: the estimate itself was at or below the bar
+ * (the rule does not earn), or the estimate cleared the bar and the error bar
+ * was too wide to say so (we could not tell). Only the second is recoverable,
+ * because only the second leaves the hypothesis untested. FINDINGS.md puts the
+ * Type II tail an order of magnitude above the Type I tail, so this distinction
+ * is where the losses are.
+ *
+ * The threshold is `recoveryMarginFraction()` of the gate's own margin: the
+ * measurement must have reached at least that fraction of the evidence
+ * promotion demands, ON THE RIGHT SIDE of the bar. A bare "the point estimate
+ * was positive" would sweep in half the null distribution, which is exactly how
+ * a lazy version of this feature would reintroduce false positives.
+ *
+ * SAFETY INVARIANTS, each enforced here and tested:
+ * - A REGRESSION is never recoverable. A rule that made a golden task fail is
+ *   evicted immediately and permanently; no width argument applies to it.
+ * - An ENVIRONMENT FAILURE is never recoverable — and never reaches this
+ *   function anyway, because the selector aborts before deciding.
+ * - A RE-AUDIT eviction is never recoverable. Structurally it cannot be: a
+ *   re-audit keeps when uncertain, so it only evicts on a point estimate BELOW
+ *   the bar, which fails the test below. The check is written explicitly all
+ *   the same, because that is a property of today's retention policy rather
+ *   than of arithmetic, and a future change to it must not silently open this
+ *   door. Such a rule was banked once and has now measured sub-threshold twice
+ *   in a row; that is evidence, not silence.
+ * - A rule still ACTIVE is not classified at all.
+ */
+export function evictedUnderpowered(input: EvictionClassInput): boolean {
+	const { status, kind, contextCost, assessment } = input;
+	if (status !== "evicted") return false;
+	if (kind !== "candidate") return false;
+	if (assessment.regression || assessment.environmentFailure) return false;
+	const { delta, standardError, confidenceMultiple } = assessment;
+	if (delta === null || standardError === null) return false;
+	// verdict() already encodes "delta > 0 AND delta >= 2x cache-aware rent".
+	if (verdict({ measuredDelta: delta, contextCost }) !== "active") return false;
+	const bar = 2 * effectiveRent(contextCost);
+	return (
+		delta - bar >= recoveryMarginFraction() * confidenceMultiple * standardError
+	);
+}
+
+/**
+ * Per-task, per-side run depth a comparison was decided at: the thinnest task
+ * on the thinner side. The binding number, not the average — a suite whose
+ * noisiest task ran twice is a two-run measurement of that task however many
+ * runs the others got.
+ *
+ * Recorded on an underpowered eviction so a later recovery attempt can be
+ * required to bring MORE evidence. Re-running a rule into identical noise
+ * reproduces the same verdict and spends a full suite pass to do it.
+ */
+export function evidenceDepth(
+	reference: TaskSummary[],
+	measured: TaskSummary[],
+): number {
+	const measuredById = new Map(measured.map((s) => [s.taskId, s]));
+	let depth: number | null = null;
+	for (const base of reference) {
+		const other = measuredById.get(base.taskId);
+		if (!other) continue;
+		const a = base.results.filter((r) => r.completed).length;
+		const b = other.results.filter((r) => r.completed).length;
+		if (a === 0 || b === 0) continue; // not comparable; not evidence
+		const thinner = Math.min(a, b);
+		depth = depth === null ? thinner : Math.min(depth, thinner);
+	}
+	return depth ?? 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -883,6 +974,19 @@ export interface EnvironmentAbort {
 	total: number;
 }
 
+/** A recovery attempt that was NOT measured this invocation because the run
+ * budget would not have improved on the measurement that failed to resolve it.
+ * It stays queued; nothing is decided and no tokens are spent. */
+export interface HeldCandidate {
+	rule: RuleRow;
+	/** The underpowered eviction this candidate re-tries. */
+	recovers: number;
+	/** Runs per side this invocation would have spent. */
+	runs: number;
+	/** Runs per side it needs before it is worth measuring. */
+	requiredRuns: number;
+}
+
 export interface SelectionReport {
 	agent: string;
 	decisions: Decision[];
@@ -893,6 +997,9 @@ export interface SelectionReport {
 	 * receipt, no probation strike — and remains queued for the next
 	 * invocation. Decisions made before the abort stand. */
 	aborted: EnvironmentAbort | null;
+	/** Recovery attempts left queued for want of a deeper run budget. Empty on
+	 * every ordinary invocation. */
+	held: HeldCandidate[];
 }
 
 export interface SelectOptions {
@@ -914,6 +1021,11 @@ export interface SelectOptions {
 	 * under and a hash of the golden suite it was measured against. */
 	measuredModel?: string | null;
 	fixtureHash?: string | null;
+	/** Runs per side this invocation will spend, as requested (the CLI's
+	 * `--runs`). Only a recovery attempt reads it, to refuse a re-measurement
+	 * that brings no more evidence than the one it is re-trying. Absent means
+	 * "unknown", and an unknown budget cannot hold anything back. */
+	runsPerSide?: number;
 }
 
 interface SideAggregate {
@@ -977,6 +1089,9 @@ interface MeasurementPlan {
 	measuredSide: MeasuredSide;
 	evictWhenUncertain: boolean;
 	reasonPrefix: string;
+	/** Multiple of the ordinary promotion margin this decision must clear; 1 for
+	 * everything except a second look at an underpowered eviction. */
+	confidenceScale: number;
 }
 
 /** The invocation-wide context every decision writes into. */
@@ -1247,6 +1362,13 @@ interface DecisionRecord {
 	status: RuleStatus;
 	reason: string;
 	probationWrite: boolean | null;
+	/** True when this eviction was decided by the width of the measurement
+	 * rather than by its point estimate — the class the distiller's dedupe
+	 * reads. Never true for an active verdict, a regression or a re-audit. */
+	underpowered: boolean;
+	/** Per-side run depth this verdict was decided at; a later recovery attempt
+	 * must beat it. */
+	evidenceRuns: number;
 }
 
 /** The verdict is unchanged by this; the receipt is an additive snapshot.
@@ -1317,6 +1439,16 @@ function persistDecision(
 			if (record.probationWrite !== null) {
 				setRuleProbation(run.db, plan.rule.id, record.probationWrite);
 			}
+			// Part of the same one fact about the rule as its status and receipt:
+			// written unconditionally so a verdict can also CLEAR a stale class
+			// (a rule re-decided later must not keep a recoverability it no longer
+			// earns).
+			setRuleUnderpowered(
+				run.db,
+				plan.rule.id,
+				record.underpowered,
+				record.evidenceRuns,
+			);
 			decideRule(
 				run.db,
 				plan.rule.id,
@@ -1350,9 +1482,22 @@ function runDecision(run: SelectionRun, plan: MeasurementPlan): Decision {
 			uncertain,
 			toppedUp,
 			evictWhenUncertain: plan.evictWhenUncertain,
+			confidenceScale: plan.confidenceScale,
+			standardError: assessment.standardError,
+			confidenceMultiple: assessment.confidenceMultiple,
 		}),
 	);
+	// Classified from the FINAL status and the FINAL (topped-up) assessment, so
+	// a rule the top-up rescued is never recorded as underpowered.
+	const underpowered = evictedUnderpowered({
+		status,
+		kind: plan.kind,
+		contextCost: plan.rule.context_cost,
+		assessment,
+	});
 	persistDecision(run, plan, {
+		underpowered,
+		evidenceRuns: evidenceDepth(reference, measured),
 		assessment,
 		measured,
 		// The reference as compared, including any retention-round runs merged
@@ -1429,6 +1574,7 @@ function promotionPlan(
 		measuredSide: "with-rule",
 		evictWhenUncertain: true,
 		reasonPrefix: "",
+		confidenceScale: 1,
 	};
 }
 
@@ -1464,6 +1610,7 @@ function swapPlan(
 		measuredSide: "with-rule",
 		evictWhenUncertain: true,
 		reasonPrefix: `swap for rule ${replaced.id}: `,
+		confidenceScale: 1,
 	};
 }
 
@@ -1479,9 +1626,32 @@ function planForCandidate(
 			: activeSet.find((rule) => rule.id === candidate.replaces);
 	// A `replaces` pointing at a rule that is no longer active has nothing to
 	// swap against: fall back to the ordinary on-top measurement.
-	return replaced === undefined
-		? promotionPlan(run, candidate, activeSet, baseline)
-		: swapPlan(run, candidate, replaced, activeSet);
+	const plan =
+		replaced === undefined
+			? promotionPlan(run, candidate, activeSet, baseline)
+			: swapPlan(run, candidate, replaced, activeSet);
+	// A second look at an underpowered eviction is measured exactly like any
+	// other candidate — from scratch, on this invocation's runs, with its own
+	// baseline. Only the promotion threshold differs, and only upward. Nothing
+	// about the old measurement is carried into the new verdict.
+	return recoveredParent(run.db, candidate) === null
+		? plan
+		: {
+				...plan,
+				reasonPrefix: `${plan.reasonPrefix}recovery of rule ${candidate.recovers}: `,
+				confidenceScale: recoveryStrictness(),
+			};
+}
+
+/** The underpowered eviction a candidate is a second look at, or null when it
+ * is an ordinary candidate (or points at a rule that was never classed
+ * recoverable — a lineage pointer alone must not buy the stricter path or
+ * skip it). */
+function recoveredParent(db: WardenDb, candidate: RuleRow): RuleRow | null {
+	if (candidate.recovers === null) return null;
+	const parent = getRuleById(db, candidate.recovers);
+	if (!parent || parent.underpowered !== 1) return null;
+	return parent;
 }
 
 /** Re-audit of an active rule. Its current worth is cost-without minus
@@ -1523,6 +1693,7 @@ function reAuditPlan(
 		measuredSide: "without-rule",
 		evictWhenUncertain: false,
 		reasonPrefix: "re-audit: ",
+		confidenceScale: 1,
 	};
 }
 
@@ -1540,9 +1711,26 @@ export function selectForAgent(
 	// not immediately re-audited.
 	const auditTarget = oldestDecidedActiveRule(db, agent);
 	const decisions: Decision[] = [];
+	const held: HeldCandidate[] = [];
 	let aborted: EnvironmentAbort | null = null;
+	// A recovery attempt is only worth tokens if this invocation brings MORE
+	// evidence than the one that could not resolve the rule. Checked BEFORE any
+	// pass, so an invocation that cannot clear the bar spends nothing on it.
+	const measurable = candidates.filter((candidate) => {
+		const parent = recoveredParent(db, candidate);
+		if (parent === null || parent.recovery_runs === null) return true;
+		const depth = options.runsPerSide;
+		if (depth === undefined || depth > parent.recovery_runs) return true;
+		held.push({
+			rule: candidate,
+			recovers: parent.id,
+			requiredRuns: parent.recovery_runs + 1,
+			runs: depth,
+		});
+		return false;
+	});
 
-	if (candidates.length > 0 || auditTarget !== undefined) {
+	if (measurable.length > 0 || auditTarget !== undefined) {
 		const activeSet = getActiveRules(db, agent);
 		const run: SelectionRun = {
 			db,
@@ -1557,7 +1745,7 @@ export function selectForAgent(
 			run.measureSuite(activeSet, "active-set", true),
 		);
 
-		for (const candidate of candidates) {
+		for (const candidate of measurable) {
 			const result = tryDecide(
 				run,
 				planForCandidate(run, candidate, activeSet, baseline),
@@ -1594,6 +1782,7 @@ export function selectForAgent(
 		activeBodies: finalActive.map((rule) => rule.body),
 		rulesetVersion,
 		aborted,
+		held,
 	};
 }
 
@@ -1605,6 +1794,15 @@ interface FinalVerdictInput {
 	toppedUp: boolean;
 	/** Candidate promotion: an uncertain verdict evicts. Re-audit: it keeps. */
 	evictWhenUncertain: boolean;
+	/** Multiple of the ordinary promotion margin this decision must clear. 1 for
+	 * every first-time measurement; `recoveryStrictness()` for a candidate that
+	 * is a SECOND look at a rule evicted underpowered. Two looks at one rule
+	 * admit more null rules than one look, and a stricter second threshold is
+	 * the only lever that pays that back. */
+	confidenceScale: number;
+	/** The measurement behind the verdict, for the scaled test above. */
+	standardError: number | null;
+	confidenceMultiple: number;
 }
 
 /**
@@ -1628,6 +1826,24 @@ function finalizeVerdict(input: FinalVerdictInput): ReasonedVerdict {
 			status: "evicted",
 			reason: `uncertain${tu}: measured savings (${delta}) within one standard error of the 2× rent threshold — not confidently earning`,
 		};
+	}
+	// A recovered candidate has now had two independent looks at the same gate.
+	// It clears a proportionally harder bar so the extra look does not simply
+	// buy extra chances at a false positive.
+	if (base.status === "active" && input.confidenceScale > 1) {
+		const { standardError, confidenceMultiple, contextCost } = input;
+		const required = input.confidenceScale * confidenceMultiple;
+		const bar = 2 * effectiveRent(contextCost);
+		if (
+			standardError === null ||
+			delta === null ||
+			delta - bar < required * standardError
+		) {
+			return {
+				status: "evicted",
+				reason: `recovery attempt: measured savings (${delta}) did not clear the 2× rent threshold by the ${input.confidenceScale}× margin a re-tried rule must show (${Math.ceil(required * (standardError ?? 0))} tokens over the bar)`,
+			};
+		}
 	}
 	if (!toppedUp && !uncertain) return base;
 	const notes: string[] = [];
@@ -1828,6 +2044,20 @@ function reportDecisions(
 	}
 }
 
+/** Recovery attempts this invocation refused to measure, and what it would
+ * take. Printed before the decisions: a held candidate cost nothing, and the
+ * user's next move is a run-count flag, not a re-run of the same command. */
+function reportHeld(held: HeldCandidate[]): void {
+	for (const item of held) {
+		console.log(
+			`  [held] rule ${item.rule.id} (recovery of rule ${item.recovers}) NOT measured: ` +
+				`rule ${item.recovers} was evicted underpowered at ${item.requiredRuns - 1} runs/side, ` +
+				`so a re-measurement needs at least ${item.requiredRuns} (this invocation: ${item.runs}). ` +
+				`Re-run with --runs ${item.requiredRuns} or higher; it stays queued until then.`,
+		);
+	}
+}
+
 function reportAbort(abort: EnvironmentAbort): void {
 	console.log(
 		`ABORTED: environment failure during ${abort.label} ` +
@@ -1866,9 +2096,11 @@ export function main(args: SelectArgs): void {
 				retentionRounds: args.retentionRounds,
 				measuredModel: loadAgentDefinition(args.agent).model,
 				fixtureHash: goldenSuiteHash(args.agent),
+				runsPerSide: args.runs,
 			},
 		);
 
+		reportHeld(report.held);
 		if (report.decisions.length === 0 && report.aborted === null) {
 			console.log("No candidates and no active rules to audit; nothing to do.");
 			return;
