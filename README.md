@@ -133,30 +133,41 @@ with known answers:
   answer recall vs retrieval budget
 
   budget      bm25   section      full
-     200       44%       44%      100%
-     400       89%      100%      100%
-     600      100%      100%      100%
+     200       22%       22%      100%
+     400       67%       67%      100%
+     600       89%       78%      100%
+     800       89%       89%      100%
+   1,200      100%      100%      100%
    2,400      100%      100%      100%
 ```
 
 | Architecture | Cost/question | Answer recall | Doc recall | Verdict |
 |---|---|---|---|---|
 | Mega-prompt (whole corpus) | 4,474 tok | 100% | 100% | Never misses. Pays for everything, every question, forever. |
-| Lexical retrieval (`bm25`) | 597 tok | 100% | 87.5% | **7.5x cheaper**, same answers |
-| Section retrieval | 398 tok | 100% | 87.5% | **11.2x cheaper**, same answers |
+| Lexical retrieval (`bm25`) | 1,198 tok | 100% | 100% | **3.7x cheaper**, same answers |
+| Section retrieval | 1,198 tok | 100% | 100% | **3.7x cheaper**, same answers |
 
-The knee is real — recall collapses to 44% at 200 tokens — and everything to the right of
+The knee is real — recall collapses to 22% at 200 tokens — and everything to the right of
 it is context that changed no answer. **A corpus nobody filtered and a rule nobody measured
 are the same mistake at different scales**, which is why this lives here rather than in a
 separate tool.
 
-The `doc recall` column is the honest asterisk on the other two: on one multi-document
-question retrieval finds the *figure* without retrieving *every* source document the answer
-depends on. That is a right answer for a slightly wrong reason, and it is reported as its
-own column rather than folded into the headline.
+> **Correction, 2026-08-13.** This section previously reported the knee at 400 tokens and
+> **11.2x**, with `section` retrieval beating `bm25`. That was wrong, and the fault was in
+> the scorer rather than the retriever. `valueAppearsIn` — which decides whether a
+> strategy put the answer in the context — generated its trailing-zero variants with
+> `toFixed()` under a magnitude guard, so it also accepted every rendering a value *rounds*
+> to. It scored the 3.25x covenant as retrieved because the context said `3.0x`, the 3.75x
+> maximum because the context said `4.1 million shares`, and a 14.5% margin because a
+> transcript said `roughly 15 to 18` distribution centres. The gate's own decision log says
+> in as many words that value matching "enumerates renderings; it does not use a tolerance";
+> a half-unit-in-the-last-place window had been sitting inside it since v0.42.0. Fixed, with
+> the three real cases pinned as regression tests and the knee pinned in CI. The corrected
+> ratio is 3.7x, the corrected `section`-vs-`bm25` ordering is a tie, and no number in this
+> section had a test holding it in place before now.
 
 > A 5-document corpus is small enough that the mega-prompt is a legitimate architecture.
-> Retrieval savings scale with corpus size while retrieval cost does not, so 11.2x is a
+> Retrieval savings scale with corpus size while retrieval cost does not, so 3.7x is a
 > floor, not a headline. The tool prints that caveat with the number.
 
 Three things the pipeline does that are worth naming:
@@ -164,18 +175,33 @@ Three things the pipeline does that are worth naming:
 - **Every extracted fact must cite its source and quote the span containing its value**,
   and that check runs mechanically, without a model. Schema validation cannot catch a
   fabricated figure — a made-up number is a valid `number`. Claims that fail are rejected
-  and counted, turning hallucination from an invisible failure into a reported column.
+  and counted, turning hallucination from an invisible failure into a reported column. The
+  column has so far read zero on every real burn: unit tests prove the gate fires on
+  fabricated input, so this is "no fabrication detected", not a demonstration that the gate
+  earns its place.
 - **Two of the twelve golden questions have no answer in the corpus**, and one has a
   guidance range sitting exactly where the actual would be. They are scored inversely:
   correct means the pipeline declined. A pipeline that cannot say "not in these documents"
   will always find something.
 - **Retrieval is lexical, deliberately** — financial answers turn on exact periods, and an
-  embedding places "Q3 2023 revenue" and "Q3 2024 revenue" on top of each other. The cost
-  is paraphrase blindness, and one golden question is in the suite *because* it fails
-  there. It is the bar a semantic retriever would have to clear.
+  embedding places "Q3 2023 revenue" and "Q3 2024 revenue" on top of each other. The
+  admitted cost is paraphrase blindness, and `fin-07` is in the suite as the case that
+  should expose it: the corpus says "undrawn capacity", the question says "borrowing
+  capacity". It is the bar a semantic retriever would have to clear — but honesty about it
+  cuts the other way too. **`fin-07` does not actually fail.** Both lexical arms retrieve
+  and answer it at every budget at or above the knee. The predicted weakness is real in
+  principle and does not bind on this corpus, so the suite does not currently contain a
+  case a semantic retriever would win.
 
-Not yet measured: end-to-end answer accuracy against a live model. Recall bounds accuracy
-from above; it does not substitute for it. That distinction is kept explicit.
+Measured once, end to end, against a live model (2026-07-28): four burns, of which the
+first three found defects in the instrument rather than results — a dead environment
+reporting an identical 33.3% for all four arms, a "multi-hop" arm that stopped on hop 1
+every time, and a schema whose `period` bound rejected the very answer shape the
+cross-document questions need. The fourth burn ran: 11 of 12 completed, 11 of 11 correct on
+the `agent` arm, hops `{1: 10, 2: 2}`. What that does **not** establish is any accuracy
+ranking between the four architectures — it was a single-arm subset run, and the one paired
+table that exists reverses its own ordering depending on whether failed runs are excluded.
+Recall bounds accuracy from above; it does not substitute for it. See FINDINGS.md.
 
 ---
 
@@ -251,6 +277,11 @@ Stated plainly, because the project's only real claim is that it does not overst
   noise at any affordable run count.
 - The shipped agents are already well optimized, so the largest measured savings come from a
   deliberately naive positive control built to prove the engine detects a real effect.
+- **The retrieval numbers rest on a 5-document, 4,474-token corpus** — a toy. The ratio is
+  labelled a floor because retrieval savings scale with corpus size while retrieval cost
+  does not, but a floor measured on a toy is still a toy measurement. It is also the
+  youngest and least-validated code in the repo: its headline was wrong once (see the
+  correction above), and its end-to-end path has been run on exactly one day.
 
 ---
 

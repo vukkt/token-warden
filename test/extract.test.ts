@@ -57,6 +57,46 @@ describe("valueAppearsIn", () => {
 		expect(valueAppearsIn(512.8, "cash of 512.7")).toBe(false);
 	});
 
+	it("rejects a ROUNDED rendering of the value", () => {
+		// Regression, 2026-08-13. The trailing-zero variants were generated with
+		// `toFixed(dp)` guarded only by magnitude, which also admitted every
+		// rendering the value ROUNDS to — a half-ulp tolerance window inside a
+		// verifier whose entire contract is that it has none.
+		expect(valueAppearsIn(2.6, "the ratio was 3")).toBe(false);
+		expect(valueAppearsIn(2.6, "leverage of 3.0x")).toBe(false);
+		expect(valueAppearsIn(3.25, "covenant of 3.3 to 1.00")).toBe(false);
+		expect(valueAppearsIn(1204.5, "total of 1205")).toBe(false);
+		// Padding is still lossless and still matches; only rounding is refused.
+		expect(valueAppearsIn(1.2, "reported 1.20 billion")).toBe(true);
+	});
+
+	it("rejects the three false positives the shipped finance suite hit", () => {
+		// Each of these was scored as "the answer was retrieved" on the bundled
+		// benchmark, and each moved a published recall figure. The matched text is
+		// verbatim from benchmarks/finance/corpus.
+		// fin-06 wants the 3.25x covenant; matched "3" inside "3.0x".
+		expect(
+			valueAppearsIn(
+				3.25,
+				"net total debt to Adjusted EBITDA was 2.6x at December 31, 2024, compared with 3.0x at December 31, 2023.",
+			),
+		).toBe(false);
+		// fin-11 wants the 3.75x maximum; matched "4" inside "4.1 million shares".
+		expect(
+			valueAppearsIn(
+				3.75,
+				"During fiscal 2024 the Company repurchased 4.1 million shares of common stock",
+			),
+		).toBe(false);
+		// fin-04 wants a 14.5% margin; matched "15" inside a count of facilities.
+		expect(
+			valueAppearsIn(
+				14.5,
+				"our current plan calls for roughly 15 to 18 in fiscal 2025",
+			),
+		).toBe(false);
+	});
+
 	it("does not match a figure embedded inside a longer number", () => {
 		expect(valueAppearsIn(20.4, "the ratio was 120.45")).toBe(false);
 	});

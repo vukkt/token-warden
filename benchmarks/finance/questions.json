@@ -48,7 +48,7 @@
 			"question": "The 10-K narrative and the segment table both give Cold Chain operating margin for fiscal 2024. Do they agree?",
 			"expect": { "value": null, "unit": "", "period": "fiscal 2024" },
 			"expectConflict": true,
-			"why": "They do not: the table says 14.5% and the Q3 call says 14.9% for the quarter, while 201.4/1388.9 computes to 14.5% for the year. A pipeline should surface both figures with their periods rather than silently picking one. Scored on whether BOTH sources are cited."
+			"why": "They do not: the table says 14.5% and the Q3 call says 14.9% for the quarter, while 201.4/1388.9 computes to 14.5% for the year. A pipeline should surface both figures with their periods rather than silently picking one. NOT CURRENTLY SCORED AS SUCH (noted 2026-08-13): expectConflict is parsed by the suite schema and read by no scorer. On retrieval this row is scored on nothing at all, and end to end scoreAnswer only requires that SOME grounded fact came back — a single unrelated revenue figure marks it correct. Implementing both-sources-cited scoring is open work; until then treat this row as measuring nothing."
 		},
 		{
 			"id": "fin-06",

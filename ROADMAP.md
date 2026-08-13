@@ -207,27 +207,52 @@ what remains is running the experiments and recording their results:
 - **Hybrid retrieval, admitted by measurement.** The retrieval added in v0.42.0
   is lexical (BM25), which is deterministic, zero-token and exact on the periods
   and identifiers financial questions turn on — and blind to paraphrase. The
-  shipped suite contains `fin-07` specifically because it fails there: the corpus
+  shipped suite contains `fin-07` for that reason: the corpus
   says "undrawn capacity under its Revolving Credit Facility" and the question
-  asks about "borrowing capacity". A semantic or hybrid retriever is the obvious
+  asks about "borrowing capacity". **It does not actually fail** — both lexical
+  arms answer it at every budget at or above the knee, on the zero-token scorer
+  and in the paired burn alike. The suite as it stands therefore contains no case
+  a semantic retriever would win, so the first work item here is a question set
+  that EXHIBITS the weakness rather than merely naming it; otherwise the bar a
+  hybrid retriever must clear is a bar BM25 already clears.
+  A semantic or hybrid retriever is the obvious
   next step, and the discipline for admitting it is already written: it must beat
   BM25 on the same suite by more than the suite's own noise, or the vector index
   has not earned its infrastructure. Do NOT add an embedding dependency before
   that comparison exists — it would put a priced, versioned, non-reproducible
   service underneath a measurement whose whole value is reproducibility.
-- **A bigger corpus before quoting a bigger ratio.** `--sweep` currently reports
-  `section` matching mega-prompt recall at 11.2x lower cost, on 5 documents and
-  4,474 tokens. That ratio is a floor and is labelled as one in the output, but a
-  floor measured on a toy corpus is still a toy measurement. The retrieval saving
-  scales with corpus size while retrieval cost does not, so the number to publish
-  is the one from a corpus large enough that the mega-prompt is not a serious
-  option. Blocked on nothing but a corpus.
-- **End-to-end accuracy has not been run.** `--yes` is implemented and tested
-  through a spawn seam, but has never been executed against a real model, so the
-  project has zero-token RECALL numbers and no ACCURACY numbers. Recall bounds
-  accuracy from above; it does not substitute for it. Until that burn happens,
-  no claim about answer quality — or about what the groundedness gate catches in
-  practice — is supported.
+- **A bigger corpus before quoting a bigger ratio.** `--sweep` reports both
+  lexical strategies matching mega-prompt recall at **3.7x** lower cost, on 5
+  documents and 4,474 tokens. That ratio is a floor and is labelled as one in the
+  output, but a floor measured on a toy corpus is still a toy measurement. The
+  retrieval saving scales with corpus size while retrieval cost does not, so the
+  number to publish is the one from a corpus large enough that the mega-prompt is
+  not a serious option. Blocked on nothing but a corpus.
+  **The previously published 11.2x was wrong** (corrected 2026-08-13). The fault
+  was in the scorer, not the retriever: `valueAppearsIn` built its trailing-zero
+  variants with `toFixed()` under a magnitude guard, which also admitted every
+  rendering a value ROUNDS to — a half-ulp tolerance inside the one function
+  DECISIONS.md explicitly says has none. It scored `3.25` as retrieved from
+  `3.0x`, `3.75` from `4.1 million shares`, and `14.5` from `roughly 15 to 18`.
+  The knee moves 400 -> 1,200 tokens/question, and the `section`-beats-`bm25`
+  ordering was the same artifact — they tie. Regression tests now pin the three
+  real false positives AND the knee itself, which nothing did before.
+- **End-to-end accuracy has been run ONCE, and its ranking is still open.**
+  Corrected 2026-08-13: this entry previously said `--yes` had never been
+  executed against a real model. It has — four burns on 2026-07-28, recorded in
+  FINDINGS.md, three of which measured the instrument (a dead environment
+  reporting an identical 33.3% across four arms; a multi-hop arm that stopped on
+  hop 1 every time; a `period` bound that rejected the answer shape the
+  cross-document questions require). Burn 4 completed 11 of 12 with 11 of 11
+  correct on the `agent` arm. What remains unmeasured is the thing the entry was
+  really about: **no accuracy ranking between the four arms exists.** Burn 4 was
+  a single-arm subset, and the one paired table reverses its own ordering
+  depending on whether failed runs are excluded. What it would take: one paired
+  four-arm `--yes` run over all 12 questions in one healthy session (48 model
+  calls plus the agent arm's planning hops, roughly 60 calls, each a single-turn
+  `claude -p` over <= ~2k tokens of context). Recall bounds accuracy from above;
+  it does not substitute for it, and the groundedness gate has still rejected
+  nothing on real output.
 - **Better candidate quality.** Beyond the false-economy guard, the
   verdict-grounded eviction feedback (v0.32.0), and best-of-K sampling
   (v0.34.0), further distiller prompt and model tuning so proposals clear

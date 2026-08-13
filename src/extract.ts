@@ -147,6 +147,23 @@ export function normalizeForMatch(text: string): string {
  *
  * Accounting parentheses are honored for negatives only — `(500)` matches -500,
  * never +500 — so the sign convention cannot be laundered by the check itself.
+ *
+ * ## The rounding hole, closed 2026-08-13
+ *
+ * The trailing-zero variants were generated with `toFixed(dp)` under the single
+ * guard `n >= 10 ** -dp`, which admits every rendering the value ROUNDS to as
+ * well as every rendering it pads to. That is a tolerance window of half a unit
+ * in the last place — exactly the thing the paragraph above says this function
+ * refuses to have — and it was doing real damage:
+ *
+ * - `valueAppearsIn(3.25, ...)` matched `3.0x` (via `"3"`)
+ * - `valueAppearsIn(3.75, ...)` matched `4.1 million shares` (via `"4"`)
+ * - `valueAppearsIn(14.5, ...)` matched `roughly 15 to 18` (via `"15"`)
+ *
+ * All three are from the shipped `benchmarks/finance` suite, and all three were
+ * being counted as "the answer was retrieved". A rendering is now kept only when
+ * it round-trips to the exact value, so `1.2` still matches `1.20` (padding is
+ * lossless) and no longer matches `1` (rounding is not).
  */
 export function valueAppearsIn(value: number, text: string): boolean {
 	const hay = text.replace(/,/g, "");
@@ -156,9 +173,11 @@ export function valueAppearsIn(value: number, text: string): boolean {
 		if (!Number.isFinite(n)) continue;
 		renderings.add(String(n));
 		// Trailing-zero variants: a document writing "1.20" is the same figure
-		// as a model reporting 1.2.
+		// as a model reporting 1.2. Kept only when the rendering reads back as the
+		// same number, so padding is admitted and rounding is not.
 		for (const dp of [0, 1, 2, 3]) {
-			if (n >= 10 ** -dp || n === 0) renderings.add(n.toFixed(dp));
+			const padded = n.toFixed(dp);
+			if (Number(padded) === n) renderings.add(padded);
 		}
 	}
 	for (const r of renderings) {
