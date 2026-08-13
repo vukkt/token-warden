@@ -1077,8 +1077,11 @@ and `test/ragbench.test.ts` pins the corrected knee, the 22% floor and the
   is scored on nothing; end to end, `scoreAnswer` marks it correct if ANY
   grounded fact came back — verified by handing it a single accepted fact about
   consolidated revenue, a metric the question does not ask about, which scored
-  `correct: true`. Documented in place rather than silently tightened, since
-  changing it would move an accuracy figure no re-run exists to re-establish.
+  `correct: true`. Named in `scoreAnswer` and in ROADMAP rather than silently
+  tightened, since changing it would move an accuracy figure no re-run exists to
+  re-establish. `benchmarks/finance/` is left BYTE-IDENTICAL — benchmark data in
+  this repo is frozen and amended by addition, and the recorded burns of
+  2026-07-28 ran against exactly these twelve questions.
 - **`fin-07` does not fail.** The paraphrase question is described in README and
   ROADMAP as the case lexical retrieval fails and the bar a semantic retriever
   must clear. Both lexical arms answer it at every budget at or above the knee,

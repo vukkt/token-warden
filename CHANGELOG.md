@@ -47,9 +47,11 @@ ordering; `test/extract.test.ts` pins the three real false positives.
   retrieval rather than an unstated gap.
 - **`expectConflict` is inert.** `fin-05` claims to be "scored on whether BOTH
   sources are cited"; nothing reads the flag, and end to end any single grounded
-  fact marks the row correct. Documented in the suite, in `scoreAnswer` and in
-  ROADMAP rather than tightened silently, since changing it would move an accuracy
-  figure no re-run exists to re-establish.
+  fact marks the row correct. Named in `scoreAnswer` and in ROADMAP rather than
+  tightened silently, since changing it would move an accuracy figure no re-run
+  exists to re-establish. `benchmarks/finance/` is byte-identical: benchmark data
+  is frozen and amended by addition, and the 2026-07-28 burns ran against exactly
+  these twelve questions.
 - The retrieval limitation is now listed under README *Limitations* with the
   corpus size (5 documents, 4,474 tokens) attached.
 

@@ -253,6 +253,18 @@ what remains is running the experiments and recording their results:
   `claude -p` over <= ~2k tokens of context). Recall bounds accuracy from above;
   it does not substitute for it, and the groundedness gate has still rejected
   nothing on real output.
+- **The conflict question scores nothing.** `fin-05` is the suite's only
+  `expectConflict` row, and its entry says it is "scored on whether BOTH sources
+  are cited". Nothing reads the flag. On retrieval the row is scored on nothing
+  at all; end to end, `scoreAnswer` marks it correct whenever ANY grounded fact
+  comes back — proven by handing it one accepted fact about consolidated revenue,
+  a metric the question does not ask about, which scored correct. So one of the
+  twelve rows is currently measuring the model's willingness to produce output.
+  Fixing it means scoring on the SET of documents cited, which is a real change
+  to an accuracy denominator and therefore belongs with the paired burn below,
+  not before it. `benchmarks/finance/` stays byte-identical until then — it is
+  frozen data, amended by addition, and the 2026-07-28 burns ran against exactly
+  these twelve questions.
 - **Better candidate quality.** Beyond the false-economy guard, the
   verdict-grounded eviction feedback (v0.32.0), and best-of-K sampling
   (v0.34.0), further distiller prompt and model tuning so proposals clear
