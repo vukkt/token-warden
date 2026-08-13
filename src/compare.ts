@@ -14,6 +14,7 @@
  * dollars.
  */
 import {
+	ENV_FAILURE_TOKEN_FLOOR,
 	isEnvironmentFailure,
 	metaCost,
 	type RunResult,
@@ -104,15 +105,26 @@ export interface Comparison {
 
 const processingOf = (r: RunDatum): number => r.processingTokens;
 
-/** The environment-failure discriminator applied to comparison data. Runs it
- * on the PROCESSING-token measure — exactly what `processingSummary` feeds
+/**
+ * The environment-failure discriminator applied to comparison data. Runs it on
+ * the PROCESSING-token measure — exactly what `processingSummary` feeds
  * `assessDelta` — so a task's per-task classification always agrees with the
- * `Comparison.environmentFailure` flag derived from the same runs. */
+ * `Comparison.environmentFailure` flag derived from the same runs.
+ *
+ * `completed` is forced false below the floor, and that is not belt-and-braces.
+ * This module reads RECORDED rows, and rows written before 2026-08-13 can carry
+ * `completed = 1` at ~0 tokens: `runOnce` used to take the success check at its
+ * word, so on a task whose check passes on the PRISTINE fixture (`sql-01`,
+ * `backend-03`) every quota-dead run was banked as a free success. The live
+ * ledger holds 19 of them on `sql-01` (FINDINGS.md, 2026-08-13). A run that
+ * spent nothing measured nothing, whatever the check reported, and reading one
+ * as a real observation is how a dead window turns into a confident verdict.
+ */
 function isEnvFailureRun(r: RunDatum): boolean {
 	return isEnvironmentFailure({
 		sessionId: "",
 		tokens: r.processingTokens,
-		completed: r.completed,
+		completed: r.completed && r.processingTokens >= ENV_FAILURE_TOKEN_FLOOR,
 	});
 }
 
@@ -205,8 +217,11 @@ export function compareConfigs(
 			pct: pctChange(candProc, baseProc),
 			baselineDurationMean: completedDurationMean(base.runs),
 			candidateDurationMean: completedDurationMean(cand.runs),
-			// `every` over a non-empty run list already implies no completed run
-			// (isEnvironmentFailure requires !completed).
+			// A run list that is entirely environment failures carries no
+			// evidence about the candidate, whatever the success checks said:
+			// `isEnvFailureRun` forces `completed` false below the token floor,
+			// so a vacuous check reporting SUCCESS on a quota-dead recorded row
+			// no longer hides the death from this flag.
 			candidateEnvironmentFailure:
 				cand.runs.length > 0 && cand.runs.every(isEnvFailureRun),
 		});

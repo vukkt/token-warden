@@ -334,7 +334,13 @@ describe("environment-failure detection", () => {
 		// At the floor the run burned real tokens: rule signal, not environment.
 		expect(isEnvironmentFailure(run(1000, false))).toBe(false);
 		expect(isEnvironmentFailure(run(40_000, false))).toBe(false);
-		// A completed run is never an environment failure, whatever its cost.
+		// A completed run is never an environment failure HERE, whatever its
+		// cost — synthetic summaries in the calibration harnesses work at token
+		// scales of hundreds, and a bare magnitude test would abort their
+		// passes. The quota-death-recorded-as-success case is closed upstream
+		// instead: `runOnce` refuses to record a sub-floor run as completed (see
+		// "records a passing check on a zero-token run as NOT completed"), and
+		// `compare.ts` re-derives the flag for rows recorded before that fix.
 		expect(isEnvironmentFailure(run(0, true))).toBe(false);
 	});
 
@@ -966,6 +972,40 @@ describe("runOnce (spawn boundary injected)", () => {
 		// The temp fixture copy is gone on the happy path.
 		expect(h.disposed).toEqual(h.created);
 		expect(existsSync(h.created[0] as string)).toBe(false);
+	});
+
+	it("records a passing check on a zero-token run as NOT completed", () => {
+		// The `sql-01` / `backend-03` shape: a success check that passes on the
+		// pristine fixture reports status 0 for a run that never reached a
+		// model. Recorded as a success it becomes a zero-cost measurement no
+		// environment-failure guard can see. 19 such rows are in the live
+		// ledger (FINDINGS.md, 2026-08-13).
+		const empty = JSON.stringify({
+			type: "assistant",
+			uuid: "a1",
+			message: {
+				id: "m1",
+				content: [{ type: "text", text: "" }],
+				usage: {
+					input_tokens: 0,
+					output_tokens: 0,
+					cache_creation_input_tokens: 0,
+					cache_read_input_tokens: 0,
+				},
+			},
+		});
+		const h = harness([claudeOk(), checkResult(0)], {
+			readTranscript: () => empty,
+		});
+		const result = runOnce(db, task, definition, [], options(), h.deps);
+		expect(result).toMatchObject({ tokens: 0, completed: false });
+		expect(isEnvironmentFailure(result)).toBe(true);
+		const row = db
+			.prepare<unknown[], { completed: number }>(
+				"SELECT completed FROM runs WHERE task_hash = ?",
+			)
+			.get("sql-01");
+		expect(row?.completed).toBe(0);
 	});
 
 	it("builds a hermetic, non-shell claude invocation with a timeout", () => {
