@@ -21,6 +21,7 @@ import {
 	recentQuestionsFrom,
 	recentRealWorkTotals,
 	setRuleProbation,
+	setRuleUnderpowered,
 	upsertRun,
 	type WardenDb,
 	withDb,
@@ -156,16 +157,51 @@ describe("openDb / migrations", () => {
 
 	it("resumes migrating a database left at an intermediate version", () => {
 		// A crash between migrations leaves an older stamp with the newer DDL
-		// already rolled back. Rewinding the stamp reproduces that: the tail
-		// migration re-runs (it is index-only and idempotent) and the stamp is
-		// restored. If a future tail migration is NOT idempotent this test must
-		// be given a hand-built fixture instead of a rewind.
+		// already rolled back. The tail migration is now an ADD COLUMN, which is
+		// NOT idempotent, so the fixture is hand-built exactly as the previous
+		// version of this test warned it would have to be: undo the tail
+		// migration's DDL, then rewind the stamp to match.
+		db.exec(
+			`ALTER TABLE rules DROP COLUMN underpowered;
+			 ALTER TABLE rules DROP COLUMN recovery_runs;
+			 ALTER TABLE rules DROP COLUMN recovers;`,
+		);
 		db.pragma(`user_version = ${MIGRATION_COUNT - 1}`);
 		db.close();
 		db = openDb(join(dir, "warden.db"));
 		expect(db.pragma("user_version", { simple: true })).toBe(MIGRATION_COUNT);
+		const columns = db
+			.prepare<[], { name: string }>(
+				"SELECT name FROM pragma_table_info('rules')",
+			)
+			.all()
+			.map((row) => row.name);
+		expect(columns).toEqual(
+			expect.arrayContaining(["underpowered", "recovery_runs", "recovers"]),
+		);
 		upsertRun(db, makeRun());
 		expect(getRunBySession(db, "s1")).toBeDefined();
+	});
+
+	it("defaults the eviction-class columns on an existing ledger", () => {
+		// The migration must never reclassify history: a rule that predates it
+		// reads as a plain eviction, not as a recoverable one.
+		db.exec(
+			`ALTER TABLE rules DROP COLUMN underpowered;
+			 ALTER TABLE rules DROP COLUMN recovery_runs;
+			 ALTER TABLE rules DROP COLUMN recovers;`,
+		);
+		db.prepare(
+			`INSERT INTO rules (id, agent, body, status, measured_delta, context_cost, created_at)
+			 VALUES (7, 'sql', 'An old rule body from before the migration.', 'evicted', 12, 10, 't')`,
+		).run();
+		db.pragma(`user_version = ${MIGRATION_COUNT - 1}`);
+		db.close();
+		db = openDb(join(dir, "warden.db"));
+		const row = getRuleById(db, 7);
+		expect(row?.underpowered).toBe(0);
+		expect(row?.recovery_runs).toBeNull();
+		expect(row?.recovers).toBeNull();
 	});
 
 	it("warns but does not touch a database newer than this build", () => {
@@ -384,6 +420,53 @@ describe("rule queue ordering", () => {
 		expect(getRuleById(db, id)?.probation).toBe(1);
 		setRuleProbation(db, id, false);
 		expect(getRuleById(db, id)?.probation).toBe(0);
+	});
+
+	it("setRuleUnderpowered round-trips, defaults to 0, and clears its depth", () => {
+		const id = seedRule("Rule body number one here.", "t");
+		expect(getRuleById(db, id)?.underpowered).toBe(0);
+		expect(getRuleById(db, id)?.recovery_runs).toBeNull();
+		setRuleUnderpowered(db, id, true, 3);
+		expect(getRuleById(db, id)?.underpowered).toBe(1);
+		expect(getRuleById(db, id)?.recovery_runs).toBe(3);
+		// Clearing the class must clear the depth with it: a run depth that
+		// outlived its classification would let a later recovery be judged
+		// against a threshold nothing set.
+		setRuleUnderpowered(db, id, false, 9);
+		expect(getRuleById(db, id)?.underpowered).toBe(0);
+		expect(getRuleById(db, id)?.recovery_runs).toBeNull();
+	});
+
+	it("insertRule records the recovery lineage pointer", () => {
+		const parent = seedRule("Rule body number one here.", "t");
+		const child = insertRule(db, {
+			agent: "sql",
+			body: "Rule body number one here, restated.",
+			contextCost: 9,
+			sourceRun: null,
+			createdAt: "t",
+			recovers: parent,
+		});
+		expect(getRuleById(db, child)?.recovers).toBe(parent);
+		expect(getRuleById(db, parent)?.recovers).toBeNull();
+		// A recovery attempt is a CANDIDATE: it is measured from scratch, never
+		// re-banked on the numbers that got its parent evicted.
+		expect(getRuleById(db, child)?.status).toBe("candidate");
+		expect(getRuleById(db, child)?.measured_delta).toBeNull();
+	});
+
+	it("recentEvictedRules omits underpowered evictions from distiller feedback", () => {
+		const negative = seedRule("Rule body number one here.", "t");
+		const underpowered = seedRule("Rule body number two here.", "t");
+		decideRule(db, negative, "evicted", -5, "non-positive delta (-5)", "d1");
+		decideRule(db, underpowered, "evicted", 9000, "uncertain", "d2");
+		setRuleUnderpowered(db, underpowered, true, 2);
+		const bodies = recentEvictedRules(db, "sql", 8).map((r) => r.body);
+		expect(bodies).toContain("Rule body number one here.");
+		// Telling the proposer this one "was rejected, aim at a bigger waste
+		// source" is the wrong lesson AND contradicts the dedupe, which lets the
+		// body through so it can be re-measured.
+		expect(bodies).not.toContain("Rule body number two here.");
 	});
 
 	it("recentEvictedRules returns newest-decided first, capped, evicted-only", () => {
