@@ -41,6 +41,25 @@ export function isEntrypoint(importMetaUrl: string): boolean {
  * on the void path could truncate buffered stdout on a piped command, which is
  * exactly how a report loses its last lines.
  */
+/**
+ * A numeric flag VALUE, with the blank-string hole closed.
+ *
+ * `Number("")` and `Number(" ")` are both `0`, so a flag written the ordinary
+ * shell way — `--top-up "$BUDGET"` with `BUDGET` unset — silently parses as
+ * zero and passes any `>= 0` validation. That is not a typo the user can see:
+ * it quietly selects a different measurement policy and the run reports numbers
+ * produced under it. This repo has already shipped the same hole once, in
+ * `pricing.ts`, where `export TOKEN_WARDEN_PRICE_INPUT=` priced the whole
+ * workload at zero (v0.40.0).
+ *
+ * Blank and missing values become `NaN` so the caller's existing
+ * `Number.isInteger` / `Number.isFinite` check rejects them with its own
+ * message. Every other input is `Number()` exactly as before.
+ */
+export function numericFlag(raw: string | undefined): number {
+	return raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
+}
+
 export function runCli(importMetaUrl: string, run: () => unknown): void {
 	if (!isEntrypoint(importMetaUrl)) return;
 	try {

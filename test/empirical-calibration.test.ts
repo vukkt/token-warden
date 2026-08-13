@@ -280,6 +280,26 @@ describe("parseEmpiricalArgs", () => {
 		expect(() => parseEmpiricalArgs(["--agent", "nope"])).toThrow(/--agent/);
 		expect(() => parseEmpiricalArgs(["--mode", "sideways"])).toThrow(/--mode/);
 	});
+
+	// REGRESSION: the flags whose validators accept 0 (`--retention-rounds`,
+	// `--seed`) used to read a BLANK value as 0, because `Number("") === 0`.
+	// A blank `--seed` silently reseeds every published figure; a blank
+	// `--retention-rounds` silently runs the control arm and labels it as the
+	// policy arm.
+	it("rejects a BLANK numeric flag value instead of reading it as zero", () => {
+		for (const blank of ["", " ", "\n"]) {
+			expect(() => parseEmpiricalArgs(["--retention-rounds", blank])).toThrow(
+				/--retention-rounds/,
+			);
+			expect(() => parseEmpiricalArgs(["--seed", blank])).toThrow(/--seed/);
+			expect(() => parseEmpiricalArgs(["--cycles", blank])).toThrow(/--cycles/);
+			expect(() => parseEmpiricalArgs(["--rent", blank])).toThrow(/--rent/);
+		}
+		expect(parseEmpiricalArgs(["--seed", "0"]).seed).toBe(0);
+		expect(
+			parseEmpiricalArgs(["--retention-rounds", "0"]).retentionRounds,
+		).toBe(0);
+	});
 });
 
 describe("falseEvictionTrial", () => {

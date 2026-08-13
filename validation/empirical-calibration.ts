@@ -43,6 +43,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { summarizeTask, type TaskSummary } from "../src/bench.js";
+import { numericFlag } from "../src/cli.js";
 import {
 	type GoldenReplicateRun,
 	goldenReplicateRuns,
@@ -481,7 +482,7 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 			if (!path) throw new Error("--db requires a path");
 			args.dbPath = path;
 		} else if (flag === "--retention-rounds") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n) || n < 0 || n > MAX_RETENTION_ROUNDS) {
 				throw new Error(
 					`--retention-rounds must be an integer in 0..${MAX_RETENTION_ROUNDS}`,
@@ -489,7 +490,7 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 			}
 			args.retentionRounds = n;
 		} else if (flag === "--cycles") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n) || n < 1) {
 				throw new Error("--cycles must be a positive integer");
 			}
@@ -508,26 +509,26 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 			}
 			args.mode = mode;
 		} else if (flag === "--trials") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n) || n < 1) {
 				throw new Error("--trials must be a positive integer");
 			}
 			args.trials = n;
 		} else if (flag === "--runs") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n) || n < 1) {
 				throw new Error("--runs must be a positive integer");
 			}
 			args.permRuns = n;
 			args.bootRuns = n;
 		} else if (flag === "--rent") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isFinite(n) || n <= 0) {
 				throw new Error("--rent must be a positive number");
 			}
 			args.rent = n;
 		} else if (flag === "--seed") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n)) throw new Error("--seed must be an integer");
 			args.seed = n;
 		} else {

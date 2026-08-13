@@ -36,7 +36,7 @@ import {
 	summarizeTask,
 	type TaskSummary,
 } from "./bench.js";
-import { runCli } from "./cli.js";
+import { numericFlag, runCli } from "./cli.js";
 import {
 	agentTokenMix,
 	bumpRulesetVersion,
@@ -1669,18 +1669,18 @@ export function parseSelectArgs(argv: string[]): SelectArgs {
 				i++;
 				break;
 			case "--runs":
-				args.runs = Number(argv[i + 1]);
+				args.runs = numericFlag(argv[i + 1]);
 				i++;
 				break;
 			case "--top-up":
-				args.topUp = Number(argv[i + 1]);
+				args.topUp = numericFlag(argv[i + 1]);
 				i++;
 				break;
 			case "--uniform-top-up":
 				args.uniformTopUp = true;
 				break;
 			case "--retention-rounds":
-				args.retentionRounds = Number(argv[i + 1]);
+				args.retentionRounds = numericFlag(argv[i + 1]);
 				i++;
 				break;
 			default:
