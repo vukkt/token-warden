@@ -1086,6 +1086,70 @@ describe("selectForAgent retention budget (end-to-end)", () => {
 		expect(report.decisions[0]?.topUpRounds).toBe(1);
 		expect(labels).not.toContain(`candidate-${id}-topup2`);
 	});
+
+	// REGRESSION: `topUpBudget` is a COUNT. It was validated as an integer,
+	// stored, and printed back to the operator as "top-up budget N", but the
+	// loop only ever tested it for `<= 0` — so `--top-up 50` bought exactly one
+	// round, the same as `--top-up 1`, while the run reported a budget of 50.
+	// Executed before the fix: budgets 1, 2, 5 and 50 all produced
+	// topUpRounds=1 and a single `-topup` pass.
+	it("spends topUpBudget ordinary rounds, not one round for any budget > 0", () => {
+		const seen = new Map<number, { rounds: number; passes: number }>();
+		for (const topUpBudget of [1, 2, 3]) {
+			const id = insertRule(db, {
+				agent,
+				body: `A permanently uncertain candidate, budget ${topUpBudget}.`,
+				contextCost: 25,
+				sourceRun: null,
+				createdAt: "t",
+			});
+			const labels: string[] = [];
+			const runner: SuiteRunner = (rules, label) => {
+				labels.push(label);
+				return rules.some((r) => r.id === id)
+					? [summary("t1", [4000, 16_000]), summary("t2", [4000, 16_000])]
+					: [summary("t1", [9000, 9000]), summary("t2", [9000, 9000])];
+			};
+			const report = selectForAgent(db, agent, runner, { topUpBudget });
+			seen.set(topUpBudget, {
+				rounds:
+					report.decisions.find((d) => d.rule.id === id)?.topUpRounds ?? 0,
+				passes: labels.filter((l) => l.startsWith(`candidate-${id}-topup`))
+					.length,
+			});
+		}
+		// The default is unchanged, which is what keeps the calibrated gate
+		// byte-identical for everyone who does not pass the flag.
+		expect(seen.get(1)).toEqual({ rounds: 1, passes: 1 });
+		expect(seen.get(2)).toEqual({ rounds: 2, passes: 2 });
+		expect(seen.get(3)).toEqual({ rounds: 3, passes: 3 });
+	});
+
+	// A candidate gets ORDINARY rounds only: one-sided and Neyman-placed. The
+	// both-sides uniform shape is retention-only, and buying it for an
+	// admission would be paying for the false-POSITIVE direction.
+	it("a raised top-up budget buys a candidate ordinary rounds, never retention ones", () => {
+		const id = insertRule(db, {
+			agent,
+			body: "A borderline candidate measured under a raised top-up budget.",
+			contextCost: 25,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		const labels: string[] = [];
+		const runner: SuiteRunner = (rules, label) => {
+			labels.push(label);
+			return rules.some((r) => r.id === id)
+				? [summary("t1", [4000, 16_000]), summary("t2", [4000, 16_000])]
+				: [summary("t1", [9000, 9000]), summary("t2", [9000, 9000])];
+		};
+
+		selectForAgent(db, agent, runner, { topUpBudget: 3 });
+
+		// No reference-side pass exists for a candidate at any budget: the
+		// invocation-wide baseline must stay fixed for every other decision.
+		expect(labels.filter((l) => l.includes("-ref"))).toEqual([]);
+	});
 });
 
 describe("selectForAgent distribution weighting (end-to-end to the gate)", () => {
