@@ -35,7 +35,7 @@
 		"@types/better-sqlite3": "^7.6.13",
 		"@types/node": "^26.1.0",
 		"@vitest/coverage-v8": "^4.1.10",
-		"knip": "^6.23.0",
+		"knip": "^6.32.1",
 		"tsx": "^4.20.6",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.8"
