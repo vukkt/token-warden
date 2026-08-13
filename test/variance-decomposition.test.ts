@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb, upsertRun, type WardenDb } from "../src/db.js";
 import {
 	type AnalysisRun,
+	armDelta,
 	bootstrapShares,
 	burnPlan,
 	candidateSubsets,
@@ -241,6 +242,59 @@ describe("burnPlan", () => {
 	});
 });
 
+describe("armDelta", () => {
+	it("differences pass 2 against pass 1 and propagates within-task error", () => {
+		// t1: arm means 10,000 -> 14,000 (+4,000); t2: 20,000 -> 22,000 (+2,000).
+		// Mean delta 3,000. Each arm has variance 2e6 over 2 runs, so per task
+		// the two arms contribute 2e6/2 + 2e6/2 = 2e6, summed 4e6, /K^2=4 -> 1e6.
+		const groups = [
+			pass("t1", [9_000, 11_000], 1),
+			pass("t2", [19_000, 21_000], 1),
+			pass("t1", [13_000, 15_000], 2),
+			pass("t2", [21_000, 23_000], 2),
+		];
+		const arm = armDelta(groups, "total");
+		expect(arm?.delta).toBeCloseTo(3_000, 6);
+		expect(arm?.standardError).toBeCloseTo(1_000, 6);
+		expect(arm?.perTask).toEqual([
+			{ taskId: "t1", delta: 4_000 },
+			{ taskId: "t2", delta: 2_000 },
+		]);
+	});
+
+	it("skips tasks that lack a second arm, and is null under two tasks", () => {
+		const groups = [
+			pass("t1", [9_000, 11_000], 1),
+			pass("t2", [19_000, 21_000], 1),
+			pass("t1", [13_000, 15_000], 2),
+		];
+		expect(armDelta(groups, "total")).toBeNull();
+		expect(armDelta([], "total")).toBeNull();
+	});
+
+	it("reports a metric on which the effect vanishes", () => {
+		// The arms differ only in cache-read: a large total-token delta that is
+		// exactly zero in processing tokens. This is the shape that decides
+		// whether a quieter metric would have helped.
+		const arm = (taskId: string, cr: number, p: number) => ({
+			...pass(taskId, []),
+			pass: p,
+			taskId,
+			runs: [0, 1].map((i) =>
+				run({ id: i, taskId, cacheRead: cr + 1_000 * i }),
+			),
+		});
+		const groups = [
+			arm("t1", 10_000, 1),
+			arm("t2", 10_000, 1),
+			arm("t1", 90_000, 2),
+			arm("t2", 90_000, 2),
+		];
+		expect(armDelta(groups, "total")?.delta).toBeCloseTo(80_000, 6);
+		expect(armDelta(groups, "processing")?.delta).toBeCloseTo(0, 6);
+	});
+});
+
 describe("subsetAtBudget", () => {
 	it("shrinks the delta with the suite, not just the standard error", () => {
 		// An expensive noisy task and a cheap quiet one. Dropping the expensive
@@ -378,6 +432,18 @@ describe("parseVarianceArgs", () => {
 		expect(() => parseVarianceArgs(["--trials", "0"])).toThrow(/positive/);
 		expect(() => parseVarianceArgs(["--rent", "junk"])).toThrow(/positive/);
 	});
+
+	it("accepts ruleset version 0, the unruled baseline, but not a negative", () => {
+		expect(parseVarianceArgs(["--ruleset", "0"]).ruleset).toBe(0);
+		expect(parseVarianceArgs(["--ruleset", "4"]).ruleset).toBe(4);
+		expect(parseVarianceArgs([]).ruleset).toBeNull();
+		expect(() => parseVarianceArgs(["--ruleset", "-1"])).toThrow(
+			/non-negative/,
+		);
+		expect(() => parseVarianceArgs(["--ruleset", "1.5"])).toThrow(
+			/non-negative/,
+		);
+	});
 });
 
 describe("loadRuns and the report", () => {
@@ -434,12 +500,16 @@ describe("loadRuns and the report", () => {
 		expect(loaded.runs.map((r) => r.taskId)).toEqual(["sql-01", "sql-01"]);
 	});
 
-	it("filters by config and never writes to the database", () => {
+	it("filters by config, agent and ruleset version", () => {
 		record("sql-01", "a", 40_000, 6);
 		record("sql-01", "b", 60_000, 9);
 		expect(loadRuns(dbPath, "sql", "candidate").runs).toHaveLength(2);
 		expect(loadRuns(dbPath, "sql", "active").runs).toHaveLength(0);
 		expect(loadRuns(dbPath, "backend", null).runs).toHaveLength(0);
+		expect(loadRuns(dbPath, "sql", null, 4).runs).toHaveLength(2);
+		expect(loadRuns(dbPath, "sql", null, 9).runs).toHaveLength(0);
+		// Version 0 must be a real filter, not a falsy no-op.
+		expect(loadRuns(dbPath, "sql", null, 0).runs).toHaveLength(0);
 	});
 
 	it("renders every section on a real pool", () => {
