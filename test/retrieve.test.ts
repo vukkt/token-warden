@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { type Chunk, chunkDocument, parseDocument } from "../src/corpus.js";
+import {
+	type Chunk,
+	chunkDocument,
+	estimateTokens,
+	parseDocument,
+} from "../src/corpus.js";
 import {
 	bm25,
 	buildIndex,
-	isStrategy,
 	renderContext,
+	retrieve,
 	retrieveBm25,
 	retrieveFull,
 	retrieveSection,
@@ -122,6 +127,32 @@ describe("retrieveSection", () => {
 	});
 });
 
+describe("Retrieval.tokens undercounts the assembled prompt", () => {
+	// Added 2026-08-14. `tokens` sums chunk BODIES; the pipeline sends
+	// renderContext(), which adds a per-chunk `[chunkId] — path` label that
+	// retrieve.ts itself calls load-bearing (a citation must quote it). The gap
+	// is therefore real context that no reported cost prices, and underBudget
+	// packs against the same unpriced metric. Pinned rather than fixed -- see the
+	// comment on Retrieval.tokens for why the fix moves published numbers.
+	const chunks = chunksOf(
+		"# Item 7\n\n## Liquidity\n\ncash 512.7\n\n## Fuel\n\ndiesel 14.6",
+	);
+	const index = buildIndex(chunks);
+
+	it("reports fewer tokens than the context it actually sends", () => {
+		// Both a whole-corpus arm and a budgeted one, so this cannot be read as an
+		// artifact of `full`. The budget-violation consequence is pinned against
+		// the real suite in test/ragbench.test.ts.
+		for (const r of [
+			retrieveFull({ root: "", documents: [], chunks }),
+			retrieveBm25(index, "cash diesel", 10_000),
+		]) {
+			expect(r.chunks.length).toBeGreaterThan(0);
+			expect(estimateTokens(renderContext(r))).toBeGreaterThan(r.tokens);
+		}
+	});
+});
+
 describe("renderContext", () => {
 	it("labels every block with the id a citation must quote", () => {
 		const chunks = chunksOf("# Liquidity\n\ncash 512.7");
@@ -139,11 +170,23 @@ describe("renderContext", () => {
 	});
 });
 
-describe("isStrategy", () => {
-	it("accepts the three measured architectures and nothing else", () => {
-		expect(isStrategy("full")).toBe(true);
-		expect(isStrategy("bm25")).toBe(true);
-		expect(isStrategy("section")).toBe(true);
-		expect(isStrategy("embeddings")).toBe(false);
+describe("retrieve", () => {
+	const chunks = chunksOf("# S\n\nalpha 512.7");
+	const index = buildIndex(chunks);
+	const corpus = { root: "", documents: [], chunks };
+
+	it("dispatches each measured architecture to its own retriever", () => {
+		for (const s of ["full", "bm25", "section"] as const) {
+			expect(retrieve(s, corpus, index, "alpha", 1000).strategy).toBe(s);
+		}
+	});
+
+	it("THROWS on an unvalidated strategy rather than answering as bm25", () => {
+		// The dispatcher used to end in a bare `return retrieveBm25(...)`, so an
+		// unknown name was silently answered by bm25 and labelled with whatever it
+		// asked for -- a wrong number wearing the right label.
+		expect(() =>
+			retrieve("embeddings" as never, corpus, index, "alpha", 1000),
+		).toThrow(/unknown retrieval strategy: embeddings/);
 	});
 });

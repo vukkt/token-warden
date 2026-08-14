@@ -147,15 +147,48 @@ export function bm25(index: LexicalIndex, query: string): ScoredChunk[] {
 export const STRATEGIES = ["full", "bm25", "section"] as const;
 export type Strategy = (typeof STRATEGIES)[number];
 
-export function isStrategy(s: string): s is Strategy {
-	return (STRATEGIES as readonly string[]).includes(s);
-}
-
 /** What a strategy returned, and what carrying it costs. */
 export interface Retrieval {
 	strategy: Strategy;
 	chunks: Chunk[];
-	/** Sum of retrieved chunk tokens — the context rent of this answer. */
+	/**
+	 * Sum of retrieved chunk BODIES. Not the cost of the assembled prompt.
+	 *
+	 * ## Known undercount, measured 2026-08-14 — NOT yet corrected
+	 *
+	 * What the pipeline actually sends is `renderContext(retrieval)`, which
+	 * prefixes every chunk with `[chunkId] — section > path` and joins on a blank
+	 * line. `renderContext` calls that label load-bearing and it is: it is the
+	 * handle a citation must quote, and `extract.ts` rejects any fact whose
+	 * citation does not resolve. So it cannot be dropped to close the gap — it is
+	 * real context that this field does not price.
+	 *
+	 * Measured on the shipped `benchmarks/finance` suite:
+	 *
+	 * | budget | arm     | reported | actually sent | undercount |
+	 * |--------|---------|----------|---------------|------------|
+	 * | 1,200  | full    | 53,688   | 67,776        | 20.8%      |
+	 * | 1,200  | bm25    | 14,373   | 17,494        | 17.8%      |
+	 * | 1,200  | section | 14,373   | 17,448        | 17.6%      |
+	 *
+	 * Two consequences, both real:
+	 *
+	 * 1. Every reported cost — `meanTokens`, `tokensPerAnswer`, the mega-prompt
+	 *    ratio — understates the true spend by roughly a fifth.
+	 * 2. `underBudget` packs against this same unpriced metric, so the assembled
+	 *    context EXCEEDS the stated budget on 12 of 12 questions in every arm at
+	 *    every swept budget. The budget is not a bound; it is a bound on the
+	 *    chunk bodies only.
+	 *
+	 * Left uncorrected DELIBERATELY, because the fix is not a local one. Packing
+	 * against the rendered cost moves the published knee 1,200 -> 1,600, the
+	 * headline 3.7x -> 3.5x and the 200-token floor 22% -> 11%; it also makes
+	 * recall NON-MONOTONE in budget (78% at 400 falling to 67% at 600), which
+	 * breaks the invariant `sweepBudgets` is tested for. That is a correction with
+	 * its own re-pinned numbers and its own CHANGELOG entry, not a cleanup. See
+	 * the report accompanying this pass; `test/retrieve.test.ts` and
+	 * `test/ragbench.test.ts` now pin the gap so it cannot go quiet again.
+	 */
 	tokens: number;
 	/** Chunks the strategy considered and dropped for budget. Reported because
 	 * a strategy that is constantly truncating is under-budgeted, and that is
@@ -233,20 +266,22 @@ export function retrieveSection(
 	query: string,
 	budgetTokens: number,
 ): Retrieval {
-	const scored = bm25(index, query);
+	// One expression answers both "have I already expanded this section" and "is
+	// this chunk a sibling". The two MUST agree, and previously agreed only by
+	// inspection: the dedupe key was a joined string while the sibling test
+	// compared docId and joined path as separate operands. NUL-joined because it
+	// occurs in neither a path nor a heading, so distinct sections cannot collide.
+	const sectionKey = (c: Chunk): string =>
+		`${c.docId}\u0000${c.sectionPath.join("\u0000")}`;
 	const seen = new Set<string>();
 	const expanded: ScoredChunk[] = [];
-	for (const hit of scored) {
-		const key = `${hit.chunk.docId}\u0000${hit.chunk.sectionPath.join("\u0000")}`;
+	for (const hit of bm25(index, query)) {
+		const key = sectionKey(hit.chunk);
 		if (seen.has(key)) continue;
 		seen.add(key);
 		// Siblings keep document order so a reassembled section reads correctly.
 		const siblings = index.chunks
-			.filter(
-				(c) =>
-					c.docId === hit.chunk.docId &&
-					c.sectionPath.join("\u0000") === hit.chunk.sectionPath.join("\u0000"),
-			)
+			.filter((c) => sectionKey(c) === key)
 			.sort((a, b) => a.charStart - b.charStart);
 		for (const sibling of siblings)
 			expanded.push({ chunk: sibling, score: hit.score });
@@ -254,7 +289,16 @@ export function retrieveSection(
 	return underBudget(expanded, budgetTokens, "section");
 }
 
-/** Dispatch by strategy name. */
+/**
+ * Dispatch by strategy name.
+ *
+ * Throws on an unknown name rather than falling through to a default arm. The
+ * earlier form ended in a bare `return retrieveBm25(...)`, so a strategy string
+ * that had not been validated — from a flag, a config file, a persisted row —
+ * was silently ANSWERED BY BM25 AND LABELLED with whatever it asked for. That is
+ * the repo's recurring failure shape: not a crash, a wrong number wearing the
+ * right label.
+ */
 export function retrieve(
 	strategy: Strategy,
 	corpus: Corpus,
@@ -263,9 +307,10 @@ export function retrieve(
 	budgetTokens: number,
 ): Retrieval {
 	if (strategy === "full") return retrieveFull(corpus);
+	if (strategy === "bm25") return retrieveBm25(index, query, budgetTokens);
 	if (strategy === "section")
 		return retrieveSection(index, query, budgetTokens);
-	return retrieveBm25(index, query, budgetTokens);
+	throw new Error(`unknown retrieval strategy: ${String(strategy)}`);
 }
 
 /**

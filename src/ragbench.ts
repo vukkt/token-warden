@@ -40,7 +40,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { benchChildEnv } from "./bench.js";
 import { runCli } from "./cli.js";
 import { type Corpus, corpusTokens, ingestCorpus } from "./corpus.js";
 import {
@@ -57,7 +56,6 @@ import {
 	interrogate,
 	type SpawnLike,
 } from "./interrogate.js";
-import { distillModel } from "./model-call.js";
 import {
 	buildIndex,
 	type LexicalIndex,
@@ -150,8 +148,6 @@ export function scoreRetrieval(
 	budgetTokens: number,
 ): QuestionResult {
 	const r = retrieve(strategy, corpus, index, question.question, budgetTokens);
-	const context = renderContext(r);
-	const docs = new Set(r.chunks.map((c) => c.docId));
 
 	if (question.expectEmpty) {
 		return {
@@ -166,13 +162,14 @@ export function scoreRetrieval(
 
 	const expected = question.expect.value;
 	const answerBearing =
-		expected === null ? null : valueAppearsIn(expected, context);
+		expected === null ? null : valueAppearsIn(expected, renderContext(r));
 	const required =
 		question.requiresDocs.length > 0
 			? question.requiresDocs
 			: question.mustCiteDoc !== null
 				? [question.mustCiteDoc]
 				: [];
+	const docs = new Set(r.chunks.map((c) => c.docId));
 	const citedDocPresent =
 		required.length === 0 ? null : required.every((d) => docs.has(d));
 
@@ -350,20 +347,27 @@ export function parseArgs(argv: string[]): RagbenchArgs {
 			}
 			args.budget = n;
 		} else if (flag === "--json") args.json = true;
-		else if (flag !== undefined && flag.startsWith("--")) {
+		else if (flag?.startsWith("--")) {
 			throw new Error(`unknown flag: ${flag}`);
 		}
 	}
 	return args;
 }
 
-/** Run the zero-token retrieval comparison across every strategy. */
-export function runRetrievalBench(
-	dir: string,
+/**
+ * Score every strategy on every question at one budget.
+ *
+ * The nesting is the PAIRING: every arm answers the identical question set at
+ * the identical budget, so a difference between arms can only be the retrieval.
+ * Kept in one place because both the single-budget table and the sweep depend on
+ * it, and two copies of a pairing rule is one copy that can drift out of it.
+ */
+function scoreAll(
+	corpus: Corpus,
+	index: LexicalIndex,
+	questions: Question[],
 	budgetTokens: number,
-): { corpus: Corpus; results: QuestionResult[]; reports: StrategyReport[] } {
-	const { corpus, questions } = loadSuite(dir);
-	const index = buildIndex(corpus.chunks);
+): QuestionResult[] {
 	const results: QuestionResult[] = [];
 	for (const strategy of STRATEGIES) {
 		for (const question of questions) {
@@ -372,6 +376,21 @@ export function runRetrievalBench(
 			);
 		}
 	}
+	return results;
+}
+
+/** Run the zero-token retrieval comparison across every strategy. */
+export function runRetrievalBench(
+	dir: string,
+	budgetTokens: number,
+): { corpus: Corpus; results: QuestionResult[]; reports: StrategyReport[] } {
+	const { corpus, questions } = loadSuite(dir);
+	const results = scoreAll(
+		corpus,
+		buildIndex(corpus.chunks),
+		questions,
+		budgetTokens,
+	);
 	return { corpus, results, reports: summarize(results) };
 }
 
@@ -405,13 +424,9 @@ export function sweepBudgets(dir: string, budgets: number[]): SweepRow[] {
 	const index = buildIndex(corpus.chunks);
 	const rows: SweepRow[] = [];
 	for (const budget of budgets) {
-		const results: QuestionResult[] = [];
-		for (const strategy of STRATEGIES) {
-			for (const question of questions) {
-				results.push(scoreRetrieval(strategy, corpus, index, question, budget));
-			}
-		}
-		for (const report of summarize(results)) {
+		for (const report of summarize(
+			scoreAll(corpus, index, questions, budget),
+		)) {
 			rows.push({
 				budget,
 				strategy: report.strategy,

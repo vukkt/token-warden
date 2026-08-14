@@ -351,7 +351,7 @@ const SKIP_DIRS = new Set([".git", "node_modules", ".token-warden"]);
  * Sorted because chunk ordinals become chunk ids, ids appear in citations, and
  * citations appear in recorded results — a directory-order-dependent id would
  * make two ingests of the same corpus disagree. */
-function walk(dir: string, root: string, out: string[]): void {
+function walk(dir: string, out: string[]): void {
 	let entries: string[];
 	try {
 		entries = readdirSync(dir).sort();
@@ -367,7 +367,7 @@ function walk(dir: string, root: string, out: string[]): void {
 		} catch {
 			continue;
 		}
-		if (st.isDirectory()) walk(full, root, out);
+		if (st.isDirectory()) walk(full, out);
 		else if (SUPPORTED.has(extname(entry).slice(1).toLowerCase()))
 			out.push(full);
 	}
@@ -381,7 +381,7 @@ function walk(dir: string, root: string, out: string[]): void {
  */
 export function ingestCorpus(root: string): Corpus {
 	const files: string[] = [];
-	walk(root, root, files);
+	walk(root, files);
 	const documents: CorpusDocument[] = [];
 	const chunks: Chunk[] = [];
 	for (const file of files) {

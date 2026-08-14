@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { type Chunk, chunkDocument, parseDocument } from "../src/corpus.js";
 import {
 	buildExtractionPrompt,
-	extractFromStdout,
 	type Fact,
 	normalizeForMatch,
 	parseFacts,
@@ -203,6 +202,8 @@ describe("parseFacts", () => {
 	it("drops a fact with no citation rather than accepting it", () => {
 		// An uncitable fact cannot be verified, and an unverified fact is exactly
 		// what this module refuses to emit. It is dropped per-fact and counted.
+		// This is also the floor the `period` tolerance below must never lower:
+		// the schema was loosened for period, NOT for the citation.
 		const { chunkId: _omit, ...noCitation } = fact();
 		const r = parseFacts(JSON.stringify({ facts: [noCitation] }));
 		expect(r.ok && r.facts).toHaveLength(0);
@@ -215,28 +216,6 @@ describe("parseFacts", () => {
 		);
 		expect(r.ok && r.facts).toHaveLength(0);
 		expect(r.ok && r.malformed).toBe(1);
-	});
-});
-
-describe("extractFromStdout", () => {
-	it("runs the envelope and fact boundaries in one call", () => {
-		const stdout = JSON.stringify({
-			result: JSON.stringify({ facts: [fact()] }),
-		});
-		const r = extractFromStdout(stdout, chunks);
-		expect(r.ok && r.report.accepted).toHaveLength(1);
-	});
-
-	it("fails closed when the CLI reported an error", () => {
-		const r = extractFromStdout(
-			JSON.stringify({ is_error: true, result: "quota" }),
-			chunks,
-		);
-		expect(r.ok).toBe(false);
-	});
-
-	it("fails closed on empty stdout", () => {
-		expect(extractFromStdout("", chunks).ok).toBe(false);
 	});
 });
 
@@ -309,13 +288,6 @@ describe("schema tolerance learned from the first burn", () => {
 		expect(report.malformed).toBe(3);
 		expect(report.rejected).toHaveLength(0);
 		expect(report.groundedness).toBe(1);
-	});
-
-	it("still refuses a fact with no citation", () => {
-		const { chunkId: _omit, ...noCitation } = fact();
-		const r = parseFacts(JSON.stringify({ facts: [noCitation] }));
-		expect(r.ok && r.facts).toHaveLength(0);
-		expect(r.ok && r.malformed).toBe(1);
 	});
 
 	it("rejects a reply that is not a facts envelope at all", () => {
