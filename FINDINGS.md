@@ -984,3 +984,144 @@ they still carry. The guard was verified by injecting a vacuous check
 failed before the guard was committed.
 
 Zero tokens: no model is involved at any point in this audit.
+
+## Recovering the rules the gate could not resolve (2026-08-14)
+
+FINDINGS has said since v0.42.0 that the Type II tail is an order of magnitude
+worse than the Type I tail, and ROADMAP has carried the consequence as an open
+gap: nothing retries an evicted rule, and the distiller's trigram dedupe cannot
+tell "measured negative" from "measured positive but too noisy to bank", so a
+good-but-unlucky rule is excluded for life. This closes that gap, and the useful
+part of the record is that the obvious version of the feature is the expensive
+one and the part that actually works is the part that looks like a detail.
+
+### First: the gap is real, and slightly narrower than it was written down
+
+Verified by EXECUTION, not by reading the dedupe. Two candidates were driven
+through the REAL `selectForAgent` against a throwaway database with a stub suite
+runner: one measuring -7 tokens/run at SE 65 (a measured negative), one
+measuring **+10,222 tokens/run — about 300x its own 34-token bar — at SE 6,839**
+(a large effect the suite cannot resolve). Both were evicted. The rules rows
+that result differ in `measured_delta` and in free text, and in nothing else:
+
+    {"id":1,"status":"evicted","measured_delta":-7,
+     "decided_reason":"non-positive delta (-7) ..."}
+    {"id":2,"status":"evicted","measured_delta":10222,
+     "decided_reason":"uncertain after top-up: ... not confidently earning"}
+
+Running the deduper's own predicate (`listRulesByAgent` + trigram > 0.85) over a
+near-identical re-proposal of each returned SUPPRESSED for both, identically.
+
+One correction to how the gap was recorded: the numbers are not missing from the
+ledger. `rule_receipts` already stores the delta AND the standard error of every
+decision, including 6,839 for the rule above. What was missing was any
+CLASSIFICATION of them, on the rules row, where the dedupe looks.
+
+### The criterion, and why not the lazy one
+
+An eviction is UNDERPOWERED when the point estimate cleared the 2x-rent bar and
+reached at least **half** the confidence margin promotion demands:
+`delta - bar >= 0.5 · z · SE`, against promotion's `delta - bar >= z · SE`.
+
+The lazy criterion — "the point estimate was positive" — fails for a reason the
+harness makes concrete: under the null, half of all measurements land on the
+positive side of a bar that is ~54 tokens against a standard error in the
+thousands, so it would reclassify half the null distribution as promising. At
+f = 0.25 the second look adds 0.93 points of false positives; at f = 0.5 it adds
+0.10 (3,000 trials/cell).
+
+Regression, environment failure and re-audit evictions are excluded, each
+explicitly. A re-audit eviction cannot qualify arithmetically either — a
+re-audit keeps when uncertain, so it only ever evicts on a point estimate BELOW
+the bar — but the check is written anyway, because that is a property of today's
+retention policy and not of arithmetic.
+
+### The measurement
+
+`validation/empirical-calibration.ts --mode recovery`. One trial is one rule's
+whole life under each policy on the SAME draws: the control arm is the shipped
+pipeline (one look, and the dedupe makes the eviction final), the policy arm is
+that same first look plus — only when the shipped `evictedUnderpowered` classes
+it recoverable — one independent, deeper second look judged at 1.5x the
+ordinary margin. The policy arm can only ADD keeps, so the difference column is
+the feature and never the RNG. Zero tokens; the `sql` replicate pool
+(3 tasks, 13 recorded runs), first look 2 runs/side, second 4, rent 25.
+
+**20,000 trials per row:**
+
+| True saving | control | with recovery | difference | zone | converted |
+|---|---|---|---|---|---|
+| 0 (A/A: false positives) | 10.7% [10.3, 11.2] | 10.8% [10.4, 11.3] | **+0.08pt** | 12.0% | 16/2391 |
+| 2% (945 tok) | 15.0% | 15.2% | +0.21pt | 14.6% | 42/2930 |
+| 5% (2,362 tok) | 21.4% | 21.9% | +0.50pt | 17.6% | 100/3518 |
+| 10% (4,724 tok) | 34.1% | 36.5% | **+2.46pt** | 25.2% | 492/5045 |
+| 20% (9,448 tok) | 69.4% | 78.7% | **+9.30pt** | 19.8% | 1861/3953 |
+
+Stable across seeds at 20,000 trials each (60,000 trials total): the added false
+positives are +0.08 / +0.10 / +0.09 points (seeds 42, 7, 99) and the 20% row
+gains +9.30 / +9.06 / +9.63. At 3,000 trials the same configuration read +0.03 /
++2.33 / +10.60 — the same picture, which is why the 20,000-trial run was made
+before any of it was believed.
+
+**The honest statement is not "it does not raise the false-positive rate".** It
+does, by construction and unavoidably: total = `p + P(zone | H0) · p2`, and no
+second-look threshold drives that back to `p` short of making the second look
+impossible to pass. The claim is about magnitude. **+0.08 points on a 10.7% base
+is a 0.75% relative increase**, bought at +9.30 points (a 13.4% relative
+increase) on the 20% row: a marginal ratio of 116 rules recovered per false rule
+admitted, against the gate's own operating ratio of 6.5 : 1. For scale, the
+robust-SE estimator was VETOED from this gate for taking the false-positive rate
+from ~3% to ~7% — more than doubling it — and confidence-sequence retention was
+rejected outright.
+
+### What actually does the work: the depth requirement, not the strictness
+
+The shipped policy refuses to spend a pass on a recovery attempt unless the
+invocation brings MORE runs per side than the measurement that failed to resolve
+the rule. That began as an economic rule (re-running into identical noise
+reproduces the verdict and pays a full suite pass for it). Measured, it turns
+out to be the main statistical defence as well. Same policy, same strictness,
+only the second look's depth differing, 20,000 trials:
+
+| second look | added FP | added power @20% | ratio |
+|---|---|---|---|
+| equal depth (2 runs/side) — REFUSED | +0.48pt | +6.43pt | 13 : 1 |
+| deeper (4 runs/side) — SHIPPED | **+0.08pt** | **+9.30pt** | **116 : 1** |
+
+Six times fewer false positives AND more power. The mechanism: type-I error of a
+z-test is scale-invariant in the noise, so a quieter suite cannot buy back
+false positives — but at 2 runs/side the variance estimate carries one degree of
+freedom, and it is the occasional spuriously-small SE that produces both the
+inflated empirical false-positive rate and the recoveries that should not have
+converted. Deepening the second look removes that mechanism from the recovery
+path specifically. The same "one degree of freedom is the enemy" reading
+explains why Neyman placement lost on the retention side in v0.43.0.
+
+### The rejected variant, recorded
+
+`s = 1` (a second look at the ordinary bar, still deeper) was measured and not
+shipped: +0.50pt of false positives for +11.87pt at 10%. More power, five times
+the false-positive cost. It is the tempting arm and it is written down here so
+it is not re-litigated as an obvious improvement.
+
+### What this is NOT
+
+- **Nothing is re-admitted on old numbers.** A recovery is a fresh CANDIDATE
+  row, measured from scratch against this invocation's own baseline. The link to
+  the eviction it re-tries is provenance and a lineage cap, never a shortcut.
+- **A rule that made things worse can never come back.** A regression sets no
+  class, so the dedupe keeps suppressing it forever. Tested at both layers.
+- **Exactly two measurements per lineage.** A candidate carrying `recovers` can
+  never itself become a recovery root, so the multiplicity above is bounded at
+  the two looks that were calibrated. There is no third.
+- **The pool is still 13 runs across 3 tasks**, and the second look at 4
+  runs/side is bootstrap-resampled from pools 4-5 deep. Wilson intervals cover
+  Monte-Carlo error only. This measures the POLICY faithfully; it does not
+  promote the pool into a bigger one.
+
+Reproduce (no tokens, needs a database with `sql` golden replicates):
+
+```bash
+npx tsx validation/empirical-calibration.ts --agent sql --mode recovery \
+  --trials 20000 --runs 2 --recovery-runs 4
+```
