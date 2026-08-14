@@ -151,7 +151,44 @@ export type Strategy = (typeof STRATEGIES)[number];
 export interface Retrieval {
 	strategy: Strategy;
 	chunks: Chunk[];
-	/** Sum of retrieved chunk tokens — the context rent of this answer. */
+	/**
+	 * Sum of retrieved chunk BODIES. Not the cost of the assembled prompt.
+	 *
+	 * ## Known undercount, measured 2026-08-14 — NOT yet corrected
+	 *
+	 * What the pipeline actually sends is `renderContext(retrieval)`, which
+	 * prefixes every chunk with `[chunkId] — section > path` and joins on a blank
+	 * line. `renderContext` calls that label load-bearing and it is: it is the
+	 * handle a citation must quote, and `extract.ts` rejects any fact whose
+	 * citation does not resolve. So it cannot be dropped to close the gap — it is
+	 * real context that this field does not price.
+	 *
+	 * Measured on the shipped `benchmarks/finance` suite:
+	 *
+	 * | budget | arm     | reported | actually sent | undercount |
+	 * |--------|---------|----------|---------------|------------|
+	 * | 1,200  | full    | 53,688   | 67,776        | 20.8%      |
+	 * | 1,200  | bm25    | 14,373   | 17,494        | 17.8%      |
+	 * | 1,200  | section | 14,373   | 17,448        | 17.6%      |
+	 *
+	 * Two consequences, both real:
+	 *
+	 * 1. Every reported cost — `meanTokens`, `tokensPerAnswer`, the mega-prompt
+	 *    ratio — understates the true spend by roughly a fifth.
+	 * 2. `underBudget` packs against this same unpriced metric, so the assembled
+	 *    context EXCEEDS the stated budget on 12 of 12 questions in every arm at
+	 *    every swept budget. The budget is not a bound; it is a bound on the
+	 *    chunk bodies only.
+	 *
+	 * Left uncorrected DELIBERATELY, because the fix is not a local one. Packing
+	 * against the rendered cost moves the published knee 1,200 -> 1,600, the
+	 * headline 3.7x -> 3.5x and the 200-token floor 22% -> 11%; it also makes
+	 * recall NON-MONOTONE in budget (78% at 400 falling to 67% at 600), which
+	 * breaks the invariant `sweepBudgets` is tested for. That is a correction with
+	 * its own re-pinned numbers and its own CHANGELOG entry, not a cleanup. See
+	 * the report accompanying this pass; `test/retrieve.test.ts` and
+	 * `test/ragbench.test.ts` now pin the gap so it cannot go quiet again.
+	 */
 	tokens: number;
 	/** Chunks the strategy considered and dropped for budget. Reported because
 	 * a strategy that is constantly truncating is under-budgeted, and that is

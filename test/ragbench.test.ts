@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { estimateTokens } from "../src/corpus.js";
 import type { SpawnLike } from "../src/interrogate.js";
 import {
 	ENV_FAILURE_STREAK,
@@ -17,7 +18,7 @@ import {
 	summarize,
 	sweepBudgets,
 } from "../src/ragbench.js";
-import { buildIndex } from "../src/retrieve.js";
+import { buildIndex, renderContext, retrieve } from "../src/retrieve.js";
 
 const SUITE = "benchmarks/finance";
 
@@ -123,6 +124,35 @@ describe("scoreRetrieval", () => {
 			expect(
 				scoreRetrieval("bm25", corpus, index, question(), budget).tokens,
 			).toBeLessThanOrEqual(budget);
+		}
+	});
+
+	it("PINS the reported-vs-sent token gap on the shipped suite", () => {
+		// Added 2026-08-14, and deliberately a pin rather than a fix. The tokens
+		// every arm reports are chunk bodies; the prompt is renderContext(), whose
+		// per-chunk citation label is load-bearing and unpriced. Measured 17.6-20.8%
+		// across arms, and the assembled context exceeds the stated budget on ALL
+		// 12 questions in every arm.
+		//
+		// The band is wide on purpose: this must fail if the gap CLOSES (someone
+		// fixed the accounting and owes the knee, the 3.7x headline and the 22%
+		// floor a re-pin) or if it BLOWS OUT, but not merely because a chunk moved.
+		const { questions } = loadSuite(SUITE);
+		for (const strategy of ["full", "bm25", "section"] as const) {
+			let reported = 0;
+			let sent = 0;
+			let overBudget = 0;
+			for (const q of questions) {
+				const r = retrieve(strategy, corpus, index, q.question, 1200);
+				reported += r.tokens;
+				sent += estimateTokens(renderContext(r));
+				if (estimateTokens(renderContext(r)) > 1200) overBudget++;
+			}
+			expect(sent).toBeGreaterThan(reported);
+			const undercount = (100 * (sent - reported)) / sent;
+			expect(undercount).toBeGreaterThan(15);
+			expect(undercount).toBeLessThan(25);
+			expect(overBudget).toBe(questions.length);
 		}
 	});
 });

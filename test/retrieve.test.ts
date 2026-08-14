@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { type Chunk, chunkDocument, parseDocument } from "../src/corpus.js";
+import {
+	type Chunk,
+	chunkDocument,
+	estimateTokens,
+	parseDocument,
+} from "../src/corpus.js";
 import {
 	bm25,
 	buildIndex,
@@ -119,6 +124,32 @@ describe("retrieveSection", () => {
 		const chunks = chunksOf("# S\n\nalpha alpha alpha");
 		const r = retrieveSection(buildIndex(chunks), "alpha", 100_000);
 		expect(new Set(r.chunks.map((c) => c.chunkId)).size).toBe(r.chunks.length);
+	});
+});
+
+describe("Retrieval.tokens undercounts the assembled prompt", () => {
+	// Added 2026-08-14. `tokens` sums chunk BODIES; the pipeline sends
+	// renderContext(), which adds a per-chunk `[chunkId] — path` label that
+	// retrieve.ts itself calls load-bearing (a citation must quote it). The gap
+	// is therefore real context that no reported cost prices, and underBudget
+	// packs against the same unpriced metric. Pinned rather than fixed -- see the
+	// comment on Retrieval.tokens for why the fix moves published numbers.
+	const chunks = chunksOf(
+		"# Item 7\n\n## Liquidity\n\ncash 512.7\n\n## Fuel\n\ndiesel 14.6",
+	);
+	const index = buildIndex(chunks);
+
+	it("reports fewer tokens than the context it actually sends", () => {
+		// Both a whole-corpus arm and a budgeted one, so this cannot be read as an
+		// artifact of `full`. The budget-violation consequence is pinned against
+		// the real suite in test/ragbench.test.ts.
+		for (const r of [
+			retrieveFull({ root: "", documents: [], chunks }),
+			retrieveBm25(index, "cash diesel", 10_000),
+		]) {
+			expect(r.chunks.length).toBeGreaterThan(0);
+			expect(estimateTokens(renderContext(r))).toBeGreaterThan(r.tokens);
+		}
 	});
 });
 
