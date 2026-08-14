@@ -202,6 +202,8 @@ describe("parseFacts", () => {
 	it("drops a fact with no citation rather than accepting it", () => {
 		// An uncitable fact cannot be verified, and an unverified fact is exactly
 		// what this module refuses to emit. It is dropped per-fact and counted.
+		// This is also the floor the `period` tolerance below must never lower:
+		// the schema was loosened for period, NOT for the citation.
 		const { chunkId: _omit, ...noCitation } = fact();
 		const r = parseFacts(JSON.stringify({ facts: [noCitation] }));
 		expect(r.ok && r.facts).toHaveLength(0);
@@ -286,13 +288,6 @@ describe("schema tolerance learned from the first burn", () => {
 		expect(report.malformed).toBe(3);
 		expect(report.rejected).toHaveLength(0);
 		expect(report.groundedness).toBe(1);
-	});
-
-	it("still refuses a fact with no citation", () => {
-		const { chunkId: _omit, ...noCitation } = fact();
-		const r = parseFacts(JSON.stringify({ facts: [noCitation] }));
-		expect(r.ok && r.facts).toHaveLength(0);
-		expect(r.ok && r.malformed).toBe(1);
 	});
 
 	it("rejects a reply that is not a facts envelope at all", () => {
