@@ -58,6 +58,35 @@ function makeRun(overrides: Partial<NewRun> = {}): NewRun {
 	};
 }
 
+function indexNames(): string[] {
+	return db
+		.prepare<[], { name: string }>(
+			"SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name",
+		)
+		.all()
+		.map((row) => row.name);
+}
+
+/**
+ * Rebuild the "crashed part-way through the newest migration" fixture: undo the
+ * tail migration's DDL, then rewind the stamp to match.
+ *
+ * A crash between migrations leaves an older stamp with the newer DDL already
+ * rolled back. The tail migration is an ADD COLUMN, which is NOT idempotent, so
+ * the fixture has to be hand-built rather than simulated by rewinding the stamp
+ * alone. Kept in one place because that makes it the single spot a NEW tail
+ * migration has to teach — two copies would let one of them keep testing a
+ * migration that is no longer the tail.
+ */
+function rewindTailMigration(db: WardenDb): void {
+	db.exec(
+		`ALTER TABLE rules DROP COLUMN underpowered;
+		 ALTER TABLE rules DROP COLUMN recovery_runs;
+		 ALTER TABLE rules DROP COLUMN recovers;`,
+	);
+	db.pragma(`user_version = ${MIGRATION_COUNT - 1}`);
+}
+
 describe("openDb / migrations", () => {
 	it("creates all tables and stamps user_version", () => {
 		expect(db.pragma("user_version", { simple: true })).toBe(MIGRATION_COUNT);
@@ -86,13 +115,7 @@ describe("openDb / migrations", () => {
 	});
 
 	it("creates the hot-path indexes for runs and rules lookups", () => {
-		const indexes = db
-			.prepare<[], { name: string }>(
-				"SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name",
-			)
-			.all()
-			.map((row) => row.name);
-		expect(indexes).toEqual(
+		expect(indexNames()).toEqual(
 			expect.arrayContaining(["idx_runs_agent_task", "idx_rules_agent_status"]),
 		);
 	});
@@ -108,13 +131,7 @@ describe("openDb / migrations", () => {
 	});
 
 	it("creates the latency-path indexes for real-work and measurement reads", () => {
-		const indexes = db
-			.prepare<[], { name: string }>(
-				"SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name",
-			)
-			.all()
-			.map((row) => row.name);
-		expect(indexes).toEqual(
+		expect(indexNames()).toEqual(
 			expect.arrayContaining([
 				"idx_runs_config_ts",
 				"idx_runs_realwork",
@@ -156,17 +173,7 @@ describe("openDb / migrations", () => {
 	});
 
 	it("resumes migrating a database left at an intermediate version", () => {
-		// A crash between migrations leaves an older stamp with the newer DDL
-		// already rolled back. The tail migration is now an ADD COLUMN, which is
-		// NOT idempotent, so the fixture is hand-built exactly as the previous
-		// version of this test warned it would have to be: undo the tail
-		// migration's DDL, then rewind the stamp to match.
-		db.exec(
-			`ALTER TABLE rules DROP COLUMN underpowered;
-			 ALTER TABLE rules DROP COLUMN recovery_runs;
-			 ALTER TABLE rules DROP COLUMN recovers;`,
-		);
-		db.pragma(`user_version = ${MIGRATION_COUNT - 1}`);
+		rewindTailMigration(db);
 		db.close();
 		db = openDb(join(dir, "warden.db"));
 		expect(db.pragma("user_version", { simple: true })).toBe(MIGRATION_COUNT);
@@ -186,16 +193,11 @@ describe("openDb / migrations", () => {
 	it("defaults the eviction-class columns on an existing ledger", () => {
 		// The migration must never reclassify history: a rule that predates it
 		// reads as a plain eviction, not as a recoverable one.
-		db.exec(
-			`ALTER TABLE rules DROP COLUMN underpowered;
-			 ALTER TABLE rules DROP COLUMN recovery_runs;
-			 ALTER TABLE rules DROP COLUMN recovers;`,
-		);
+		rewindTailMigration(db);
 		db.prepare(
 			`INSERT INTO rules (id, agent, body, status, measured_delta, context_cost, created_at)
 			 VALUES (7, 'sql', 'An old rule body from before the migration.', 'evicted', 12, 10, 't')`,
 		).run();
-		db.pragma(`user_version = ${MIGRATION_COUNT - 1}`);
 		db.close();
 		db = openDb(join(dir, "warden.db"));
 		const row = getRuleById(db, 7);
