@@ -50,3 +50,68 @@ describe("source hygiene", () => {
 		).toEqual([]);
 	});
 });
+
+/**
+ * Every command module must be an ENTRY in knip.json.
+ *
+ * knip is the guard that caught the v0.41.0 false shipping claim, where the
+ * SQLITE_BUSY machinery was written, tested, and never connected to a call
+ * site. It only works on what it can reach from an entry, and its vitest
+ * plugin makes every `test/*.test.ts` an entry too — so a module reachable
+ * ONLY from its own test still looks used. A command absent from `entry` is
+ * therefore not merely unchecked; it is checked in a way that reports clean.
+ *
+ * `src/ragbench.ts` shipped in v0.42.0 as `/warden-ragbench` and was never
+ * added, which put its whole subtree — corpus, retrieve, extract, interrogate,
+ * 2,271 lines — outside the guard. Adding it immediately surfaced two exports
+ * (`isStrategy`, `extractFromStdout`) that are written and tested and called
+ * from nowhere.
+ */
+describe("knip sees every command", () => {
+	/**
+	 * Entrypoints knip reaches through a PLUGIN rather than through `entry`,
+	 * named so the exception is a decision rather than an oversight. Adding a
+	 * redundant `entry` line for these makes knip emit a configuration hint,
+	 * which invites a future cleanup that would silently remove the real one.
+	 */
+	const REACHED_BY_PLUGIN = new Map([
+		[
+			"src/status.ts",
+			"referenced by .github/workflows/ci.yml (knip CI plugin)",
+		],
+	]);
+
+	const knipEntries: string[] = JSON.parse(
+		readFileSync(join(repoRoot, "knip.json"), "utf8"),
+	).entry;
+
+	// A command module is one carrying the shared CLI entry shim. The four
+	// fail-open hooks (collect, notify, gate, distill) use their own shim and
+	// are listed in knip.json on their own account.
+	const commandModules = readdirSync(join(repoRoot, "src"))
+		.filter((f) => f.endsWith(".ts"))
+		.filter((f) =>
+			readFileSync(join(repoRoot, "src", f), "utf8").includes(
+				"runCli(import.meta.url",
+			),
+		)
+		.map((f) => `src/${f}`);
+
+	it("finds the command modules to check", () => {
+		expect(commandModules.length).toBeGreaterThan(15);
+		expect(commandModules).toContain("src/ragbench.ts");
+	});
+
+	it.each(commandModules)("%s is a knip entry", (module) => {
+		if (REACHED_BY_PLUGIN.has(module)) {
+			expect(REACHED_BY_PLUGIN.get(module)).toBeTruthy();
+			return;
+		}
+		expect(
+			knipEntries,
+			`${module} is a command but is not in knip.json "entry", so knip cannot ` +
+				"see dead code beneath it. Add it, or record it in REACHED_BY_PLUGIN " +
+				"with the reason.",
+		).toContain(module);
+	});
+});
