@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+### One bug fix, and one roadmap item closed by measuring its premise
+
+**`bench.ts`: a zero-token run is never a completed measurement.** `runOnce`
+took the success check at its word, so on a task whose check passes on the
+PRISTINE fixture (`sql-01`, `backend-03`) every quota-dead run was banked as a
+free success. The live ledger holds 19 such rows on `sql-01`, dragging that
+task's candidate-pool mean from 70,855 to 46,815 tokens. Worse, every
+environment-failure guard — `isEnvironmentFailure`, `passEnvironmentFailure`,
+the consecutive-streak abort — requires `completed = false`, so a quota death on
+a vacuous task was invisible to all of them; and on an active pass one such run
+would have frozen a 0-token `run1` denominator permanently. Fixed at the source;
+`compare.ts` re-derives the same flag for rows written before the fix.
+`isEnvironmentFailure` itself is deliberately unchanged (dropping its
+`!completed` half breaks the calibration harnesses, which work at token scales
+of hundreds by design). This connects the golden-check vacuity audit to the
+v0.38.0 abort guard, which had been treated as unrelated.
+
+**New: `validation/variance-decomposition.ts`** — zero tokens, ledger opened
+read-only. It recovers replicate pools the existing tooling could not see (an
+A/B burn records both arms under `config='candidate'` at the same ruleset
+version, so a group must also be a contiguous block of one task's runs), scores
+three metrics side by side, and plans burns through the shipped
+`src/power.ts` estimators rather than a second copy.
+
+**ROADMAP's "cut golden-suite variance further" is CLOSED as not achievable
+that way.** The premise was that specific tasks are noisy and narrower
+replacements would quiet the suite. Measured, it is false: the run's
+`tool_calls` count explains **94.6%** of the within-task spread, and its CV is
+flat at 22.4%-42.0% across tasks whose mean turn counts span 3.8 to 13.3 — the
+spread belongs to the agent, not to any task. At a fixed 6M-token budget,
+discarding four of seven tasks moves the gate's statistic from 0.97 to 1.78
+against the 2.84 it needs, because a dropped task takes its signal with its
+noise. The compression A/B's "re-open when variance comes down" clause is
+withdrawn: that route needs 49.2M tokens on the gate's metric, 16M on the
+narrowest possible suite, and a quieter metric makes detectability worse.
+
+Every published figure is pinned in `test/variance-published.test.ts` against a
+frozen extract of the runs it came from, so the document cannot drift out of
+agreement with the estimators.
+
 ## v0.43.1 — 2026-08-05
 
 Verification and documentation only. No behaviour change: the gate, the

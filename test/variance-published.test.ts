@@ -226,6 +226,23 @@ describe("published: the mechanism (FINDINGS table 3)", () => {
 		expect(Math.min(...cvs)).toBeGreaterThan(0.22);
 		expect(Math.max(...cvs)).toBeLessThan(0.43);
 	});
+
+	it("THE HEADLINE: the effect is smaller than one unit of what varies", () => {
+		// 0.77 of a tool call, against a per-run turn spread of 1.0 to 4.2 calls.
+		// This one sentence is why no redesign of the suite can rescue the
+		// experiment, so it is pinned rather than left to prose.
+		const perCall = turnCostFit(GROUPS, "total")?.slope as number;
+		const effect = burnPlan(GROUPS, "total", RENT, EFFECT, 5)
+			?.targetSaving as number;
+		expect(Number((effect / perCall).toFixed(2))).toBe(0.77);
+		const turnSds = taskNoise(GROUPS, "toolCalls").map((t) =>
+			Math.sqrt(t.variance),
+		);
+		expect(Number(Math.min(...turnSds).toFixed(1))).toBe(1.0);
+		expect(Number(Math.max(...turnSds).toFixed(1))).toBe(4.2);
+		// The effect is below even the QUIETEST task's run-to-run turn spread.
+		expect(effect / perCall).toBeLessThan(Math.min(...turnSds));
+	});
 });
 
 describe("published: the prize (FINDINGS table 4)", () => {

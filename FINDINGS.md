@@ -984,3 +984,220 @@ they still carry. The guard was verified by injecting a vacuous check
 failed before the guard was committed.
 
 Zero tokens: no model is involved at any point in this audit.
+
+## Where the variance actually lives, and why fixing the worst tasks will not help (2026-08-13)
+
+Every document above ends at the same wall. The compression A/B is closed as
+unconfirmable; a genuinely-positive 2% rule is falsely evicted 70% of the time;
+Neyman placement backfired on retention. All three are downstream of golden-suite
+variance, which ROADMAP has carried as an open item since v0.18.0 with one
+proposed remedy — split the noisy tasks — and no attribution of the number to a
+cause.
+
+`validation/variance-decomposition.ts` attributes it. Zero tokens, ledger opened
+READ-ONLY, no migrations. Every figure below is pinned in
+`test/variance-published.test.ts` against a frozen extract of the runs it came
+from (`test/fixtures/sql-compression-burn-1.json`), so it cannot drift out of
+agreement with this document unnoticed.
+
+**The pool.** Compression burn 1 (`sql`, 2026-07-08): 168 recorded runs, 53
+below the environment-failure floor, **115 usable** across 15
+single-configuration passes — the two clean 8-runs-per-side arms on all 7 tasks,
+plus the aborted third. This pool was invisible to every existing tool.
+`goldenReplicateRuns` keys replicate groups on (task, ruleset version, model)
+and restricts to `config='active'`, but an A/B burn records BOTH arms under
+`config='candidate'` at the SAME ruleset version — so that key pools the arms
+and reports the treatment effect as noise. The decomposition adds one rule:
+a group is also a CONTIGUOUS BLOCK of one task's runs, which is exactly how
+`runSuite` executes a pass.
+
+### 1. The decomposition
+
+Within-pass standard deviation and CV, on the three metrics:
+
+| task | n | total | CV | processing | CV | cost-equiv | CV |
+|---|---|---|---|---|---|---|---|
+| sql-01 | 19 | 35,013 | 42.2% | 2,401 | 26.6% | 7,020 | 29.9% |
+| sql-02 | 16 | 22,253 | 38.6% | 793 | **9.3%** | 4,188 | 20.7% |
+| sql-03 | 16 | **64,745** | **48.8%** | 1,902 | 18.1% | 11,084 | 33.6% |
+| sql-04 | 16 | 48,978 | 34.5% | 1,318 | 14.8% | 8,020 | 26.5% |
+| sql-05 | 16 | 59,469 | 33.6% | 1,562 | 16.7% | 10,134 | 29.0% |
+| sql-06 | 16 | 11,333 | **18.3%** | **308** | **4.5%** | 1,885 | 11.2% |
+| sql-07 | 16 | 15,790 | 32.5% | 850 | 12.9% | 3,259 | 22.0% |
+
+Share of the suite standard error (task i's contribution to Var is `s_i^2`),
+with percentile-bootstrap 95% intervals:
+
+| | sql-03 | sql-05 | sql-04 | sql-01 | sql-02 | sql-07 | sql-06 |
+|---|---|---|---|---|---|---|---|
+| total | 34.3% [14.5, 51.0] | 28.9% [11.4, 46.5] | 19.6% [4.6, 36.0] | 10.0% | 4.1% | 2.0% | 1.1% |
+| processing | 24.1% | 16.3% | 11.6% | **38.4%** [7.5, 60.5] | 4.2% | 4.8% | 0.6% |
+
+**The top three tasks carry 82.8% of the variance the gate consumes.** That
+part is solid. **Which task is worst is NOT resolved** — every interval overlaps
+its neighbour's, and on the full candidate pool (200 runs) the order changes to
+sql-04 / sql-05 / sql-03 (36.1% / 29.9% / 20.3%, top-3 86.3%). Any plan that
+names one task to fix is reading noise.
+
+*Uncertainty.* The point shares are a property of the pool and do not move with
+trial count at all (asserted). Only the intervals resample, and they are stable:
+identical shares and CI bounds within 1.5 points across 400, 3,000, 5,000 and
+20,000 resamples at three seeds. The intervals cover resampling error in these
+115 runs only — they say nothing about whether a different week draws a
+different pool.
+
+### 2. The mechanism, measured rather than inferred
+
+Within-task-centred regression of cost on `tool_calls`, n=115:
+
+| metric | one extra tool call costs | variance explained |
+|---|---|---|
+| total | **14,018 tokens** | **94.6%** |
+| processing | 428 tokens | 67.4% |
+| cost-equivalent | 2,446 tokens | 94.0% |
+
+**One integer explains 94.6% of the suite's within-task spread: how many tool
+calls the run took.** Not derailment as a distinct phenomenon, not bimodal
+solution paths, not over-broad tasks, not flaky checks. Cache-read is 85-95% of
+every task's recorded cost, and cache-read grows with the accumulated prefix, so
+one extra agentic turn re-reads the whole conversation. That is the 14,018.
+
+Two consequences follow directly, and they are the finding:
+
+- **The gate's metric prices an agentic turn at 5.7x its real cost.** 14,018
+  total tokens against 2,446 cost-equivalent, because `total` weights cache-read
+  at 1.0 when it bills at 0.1. The gate is not merely noisy; it is noisy about
+  the cheapest thing it measures. `compare.ts` already scores processing tokens
+  for exactly this reason.
+- **The noise belongs to the AGENT, not to any task.** Turn-count CV is
+  22.4%-42.0% across tasks whose mean turn counts span **3.8 to 13.3** — a 3.5x
+  range in size and no trend in CV. sql-03/04/05 dominate the standard error
+  because they are two to three times BIGGER, not because they are defective.
+  There is nothing in them to fix.
+
+### 3. The prize, quantified: NO
+
+Minimum detectable saving through the shipped planner (`src/power.ts`), rent 14,
+z=2, at 5 runs/side, for the compression effect FINDINGS records (+10,851 tok/run
+= 10.8% of a 100,389-token mean run):
+
+| metric | SE@5 | MDS80@5 | runs/side needed | burn cost |
+|---|---|---|---|---|
+| total (the gate) | 9,990 | **28,418** | **35** | **49.2M tokens** |
+| cost-equivalent | 1,740 | 4,974 | 18 | 25.3M tokens |
+| processing | 350 | 1,024 | 7 | 9.8M tokens |
+
+The recorded windows this environment delivers are ~81 runs then ~30 (burn 3),
+roughly 3-8M tokens. **The gate's own metric needs 49.2M — six to sixteen times
+the largest window ever observed.**
+
+Now the question ROADMAP actually asked. Removing the noisiest tasks, at a fixed
+6M-token budget (the generous end of a real window), scoring on the gate's
+metric, under a proportional effect:
+
+| suite | runs/side | delta | SE | delta/SE | 80% power? |
+|---|---|---|---|---|---|
+| whole suite (7) | 4 | 10,842 | 11,169 | 0.97 | no |
+| drop noisiest 1 | 5 | 10,261 | 9,448 | 1.08 | no |
+| drop noisiest 2 | 7 | 8,485 | 7,170 | 1.18 | no |
+| drop noisiest 3 | 11 | 6,775 | 4,884 | 1.38 | no |
+| quietest 3 only | 17 | 6,049 | 3,378 | 1.78 | no |
+
+80% power needs `delta/SE >= 2.84`. **Discarding four of seven frozen tasks —
+the most aggressive version of the remedy the roadmap proposed — moves the
+statistic from 0.97 to 1.78 and still does not reach it.** Reaching 2.84 on the
+quietest-3 suite takes **16M tokens and 282 runs**, which is *more* than the
+~13-16M burns that already died twice.
+
+The arithmetic behind the flat column is the whole point, and it is why
+comparing standard errors alone gives the wrong answer. Dropping an expensive
+task drops its NOISE, which looks like progress — but under a proportional
+effect it drops its SIGNAL in the same proportion. The delta column falls
+alongside the SE column. The only genuine gain is that cheaper tasks buy more
+runs for the same tokens, and that gain is `sqrt`.
+
+**One escape remains, and the data closes it too.** Differencing the burn's own
+two arms on each metric:
+
+| metric | delta | SE | delta/SE |
+|---|---|---|---|
+| total | 5,035 | 7,948 | **0.63** |
+| cost-equivalent | 777 | 1,388 | 0.56 |
+| processing | 72 | 284 | **0.26** |
+
+Switching the gate to processing tokens shrinks the error bar **28-fold** and
+makes detectability **worse**. The effect lives in cache-read — precisely the
+component that is both the noisiest and the cheapest. A quieter metric is only
+worth having if the signal survives it, and this one does not.
+
+*(Note the sign trap: the clean 8-per-side arms differ by 5,035 tokens, not the
++10,851 the receipt reported. That headline came from a quota-contaminated
+top-up merge. Burn 3's clean data later leaned NEGATIVE at -14,044. The point
+estimate has never been stable, which is the same finding from another angle.)*
+
+**Verdict: the compression A/B stays closed, and the reason is now specific.**
+It is not "the suite is noisy". It is that the effect is **0.77 of one tool
+call** (10,842 / 14,018), measured on an agent whose turn count varies by 1.0 to
+4.2 calls run to run, through a metric that multiplies every call by 14,000. The
+thing being measured is smaller than one unit of the thing that varies. No task
+rewrite, task split, task addition, or metric change reaches it. ROADMAP's
+"cut golden-suite variance further" item is answered: **the proposed remedy does
+not work, and there is no version of it that does.**
+
+### 4. A silent wrong number, found on the way
+
+The 53 excluded runs are not inert. Seven of them are recorded
+`completed = 1` at **zero tokens**, and every one is `sql-01` — the task whose
+`success_check` passes on the pristine fixture. A quota death produced no work,
+the vacuous check reported success, and `runOnce` took it at its word.
+
+The damage was real and in three places:
+
+- **The task mean.** sql-01's recorded mean in this burn is 60,582 tokens; with
+  the dead runs removed it is 82,901 — a **27% downward bias** on a task the gate
+  reads as a genuine measurement. Across both quota-killed burns the live ledger
+  carries **19** such rows, dragging sql-01's candidate-pool mean from 70,855 to
+  46,815.
+- **Every environment-failure guard.** `isEnvironmentFailure`,
+  `passEnvironmentFailure` and the consecutive-streak abort all require
+  `completed = false`. A quota death on a vacuous task was invisible to all of
+  them — so the v0.38.0 abort guard, validated live three times, had a blind spot
+  exactly where the vacuity audit had already found dead sensors.
+- **`recordBaseline`.** On an active pass one such run would have frozen a
+  0-token `run1` denominator permanently, and every later "% vs run1" divides by
+  it.
+
+Fixed at the source: `runOnce` now records a sub-floor run as not completed, so
+the guards see it and no mean absorbs it. `compare.ts` re-derives the same flag
+when reading rows written before the fix. `isEnvironmentFailure` itself is
+deliberately UNCHANGED — dropping its `!completed` half was tried and reverted,
+because the calibration harnesses and the selector's tests build synthetic
+summaries at token scales of hundreds, and a bare magnitude test reclassifies
+their runs as environment failures and aborts the pass.
+
+This connects the vacuity audit (2026-08-05) to the environment-failure guard
+(v0.38.0), which had been treated as unrelated. A vacuous check is not only a
+dead sensor; it is an active source of bias whenever the environment dies.
+
+### What is still impossible
+
+- **Confirming the compression rule, by any route available here.** Not with
+  more runs (35/side, 49.2M), not with a narrower suite (16M, 282 runs), not
+  with a quieter metric (detectability falls). It needs an environment with
+  windows several times larger, or an effect several times bigger.
+- **Saying which task is worst.** The intervals overlap and the ranking flips
+  between scopes. Only "the top three carry ~83-86%" survives.
+- **Any of this for `backend`, `frontend` or `testing`.** They have 2 runs per
+  task, so every bootstrap interval comes back [0%, 100%] — the tool reports
+  that honestly rather than printing a number. The turn-count claim rests on
+  `sql` alone.
+- **Reducing the agent's turn-count variability**, which is the only quantity
+  that would actually move the floor. Nothing in this repository controls it;
+  it is a property of the model and the harness, not of the benchmark.
+
+Reproduce (no tokens):
+
+```bash
+npx tsx validation/variance-decomposition.ts --agent sql \
+  --config candidate --ruleset 4 --trials 5000
+```
