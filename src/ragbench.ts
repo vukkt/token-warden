@@ -354,13 +354,20 @@ export function parseArgs(argv: string[]): RagbenchArgs {
 	return args;
 }
 
-/** Run the zero-token retrieval comparison across every strategy. */
-export function runRetrievalBench(
-	dir: string,
+/**
+ * Score every strategy on every question at one budget.
+ *
+ * The nesting is the PAIRING: every arm answers the identical question set at
+ * the identical budget, so a difference between arms can only be the retrieval.
+ * Kept in one place because both the single-budget table and the sweep depend on
+ * it, and two copies of a pairing rule is one copy that can drift out of it.
+ */
+function scoreAll(
+	corpus: Corpus,
+	index: LexicalIndex,
+	questions: Question[],
 	budgetTokens: number,
-): { corpus: Corpus; results: QuestionResult[]; reports: StrategyReport[] } {
-	const { corpus, questions } = loadSuite(dir);
-	const index = buildIndex(corpus.chunks);
+): QuestionResult[] {
 	const results: QuestionResult[] = [];
 	for (const strategy of STRATEGIES) {
 		for (const question of questions) {
@@ -369,6 +376,21 @@ export function runRetrievalBench(
 			);
 		}
 	}
+	return results;
+}
+
+/** Run the zero-token retrieval comparison across every strategy. */
+export function runRetrievalBench(
+	dir: string,
+	budgetTokens: number,
+): { corpus: Corpus; results: QuestionResult[]; reports: StrategyReport[] } {
+	const { corpus, questions } = loadSuite(dir);
+	const results = scoreAll(
+		corpus,
+		buildIndex(corpus.chunks),
+		questions,
+		budgetTokens,
+	);
 	return { corpus, results, reports: summarize(results) };
 }
 
@@ -402,13 +424,9 @@ export function sweepBudgets(dir: string, budgets: number[]): SweepRow[] {
 	const index = buildIndex(corpus.chunks);
 	const rows: SweepRow[] = [];
 	for (const budget of budgets) {
-		const results: QuestionResult[] = [];
-		for (const strategy of STRATEGIES) {
-			for (const question of questions) {
-				results.push(scoreRetrieval(strategy, corpus, index, question, budget));
-			}
-		}
-		for (const report of summarize(results)) {
+		for (const report of summarize(
+			scoreAll(corpus, index, questions, budget),
+		)) {
 			rows.push({
 				budget,
 				strategy: report.strategy,
