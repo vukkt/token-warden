@@ -44,6 +44,7 @@ import {
 import { compileMemoryMd } from "./memory.js";
 import { knownAgents, userAgentsDir, userBenchmarksDir } from "./registry.js";
 import { parseTranscript } from "./transcript.js";
+import type { ParsedRun } from "./types.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureDir = join(pluginRoot, "benchmarks", "fixture");
@@ -780,6 +781,55 @@ export const defaultRunOnceDeps: RunOnceDeps = {
 	now: () => new Date().toISOString(),
 };
 
+/**
+ * Persist one measured run and describe it back to the caller. Both paths that
+ * produce a measurement — the normal one and the timeout recovery below — go
+ * through here, so the row in `runs` and the `RunResult` the selector scores
+ * are built from the same parsed numbers and cannot drift apart.
+ */
+function recordRun(
+	db: WardenDb,
+	task: GoldenTask,
+	options: SuiteOptions,
+	measurement: {
+		sessionId: string;
+		parsed: ParsedRun;
+		/** The caller's completion verdict — success check AND token floor.
+		 * Never `parsed.completed`, which only describes how the transcript
+		 * ends. */
+		completed: boolean;
+		model: string;
+		ts: string;
+		durationMs: number | null;
+	},
+): RunResult {
+	const { sessionId, parsed, completed, model, ts, durationMs } = measurement;
+	upsertRun(db, {
+		agent: task.agent,
+		sessionId,
+		taskHash: task.id,
+		inputTokens: parsed.inputTokens,
+		outputTokens: parsed.outputTokens,
+		cacheCreation: parsed.cacheCreation,
+		cacheRead: parsed.cacheRead,
+		toolCalls: parsed.toolCalls,
+		fileRereads: parsed.fileRereads,
+		completed,
+		rulesetVersion: options.rulesetVersion,
+		ts,
+		config: options.config,
+		model,
+		durationMs,
+	});
+	return {
+		sessionId,
+		tokens: totalTokens(parsed),
+		completed,
+		toolCalls: parsed.toolCalls,
+		fileRereads: parsed.fileRereads,
+	};
+}
+
 export function runOnce(
 	db: WardenDb,
 	task: GoldenTask,
@@ -842,35 +892,19 @@ export function runOnce(
 				? deps.findTranscriptForWorkDir(workDir)
 				: null;
 			if (recovered) {
-				const parsed = parseTranscript(deps.readTranscript(recovered));
-				const timedOutTs = deps.now();
 				// completed is false unconditionally and the success check is NOT
 				// run: the agent was killed mid-task, and a half-mutated fixture
 				// could pass a check it did not earn. A false run never reaches
 				// recordBaseline either.
-				upsertRun(db, {
-					agent: task.agent,
-					sessionId: basename(recovered, ".jsonl"),
-					taskHash: task.id,
-					inputTokens: parsed.inputTokens,
-					outputTokens: parsed.outputTokens,
-					cacheCreation: parsed.cacheCreation,
-					cacheRead: parsed.cacheRead,
-					toolCalls: parsed.toolCalls,
-					fileRereads: parsed.fileRereads,
-					completed: false,
-					rulesetVersion: options.rulesetVersion,
-					ts: timedOutTs,
-					config: options.config,
-					model: options.model ?? definition.model,
-					durationMs: null,
-				});
 				return {
-					sessionId: basename(recovered, ".jsonl"),
-					tokens: totalTokens(parsed),
-					completed: false,
-					toolCalls: parsed.toolCalls,
-					fileRereads: parsed.fileRereads,
+					...recordRun(db, task, options, {
+						sessionId: basename(recovered, ".jsonl"),
+						parsed: parseTranscript(deps.readTranscript(recovered)),
+						completed: false,
+						model,
+						ts: deps.now(),
+						durationMs: null,
+					}),
 					timedOut: true,
 				};
 			}
@@ -954,21 +988,12 @@ export function runOnce(
 		// `run1` baseline below, permanently, had the pass recorded baselines.
 		const completed = checkPassed && tokens >= ENV_FAILURE_TOKEN_FLOOR;
 
-		upsertRun(db, {
-			agent: task.agent,
+		const result = recordRun(db, task, options, {
 			sessionId,
-			taskHash: task.id,
-			inputTokens: parsed.inputTokens,
-			outputTokens: parsed.outputTokens,
-			cacheCreation: parsed.cacheCreation,
-			cacheRead: parsed.cacheRead,
-			toolCalls: parsed.toolCalls,
-			fileRereads: parsed.fileRereads,
+			parsed,
 			completed,
-			rulesetVersion: options.rulesetVersion,
-			ts,
-			config: options.config,
 			model,
+			ts,
 			durationMs,
 		});
 
@@ -978,13 +1003,7 @@ export function runOnce(
 			recordBaseline(db, task.agent, task.id, tokens, ts);
 		}
 
-		return {
-			sessionId,
-			tokens,
-			completed,
-			toolCalls: parsed.toolCalls,
-			fileRereads: parsed.fileRereads,
-		};
+		return result;
 	} finally {
 		// Every exit path — return, throw, spawn timeout — drops the fixture
 		// copy. Interrupts unwind no finally at all; installWorkDirCleanup
