@@ -3,8 +3,8 @@ import { type Chunk, chunkDocument, parseDocument } from "../src/corpus.js";
 import {
 	bm25,
 	buildIndex,
-	isStrategy,
 	renderContext,
+	retrieve,
 	retrieveBm25,
 	retrieveFull,
 	retrieveSection,
@@ -139,11 +139,23 @@ describe("renderContext", () => {
 	});
 });
 
-describe("isStrategy", () => {
-	it("accepts the three measured architectures and nothing else", () => {
-		expect(isStrategy("full")).toBe(true);
-		expect(isStrategy("bm25")).toBe(true);
-		expect(isStrategy("section")).toBe(true);
-		expect(isStrategy("embeddings")).toBe(false);
+describe("retrieve", () => {
+	const chunks = chunksOf("# S\n\nalpha 512.7");
+	const index = buildIndex(chunks);
+	const corpus = { root: "", documents: [], chunks };
+
+	it("dispatches each measured architecture to its own retriever", () => {
+		for (const s of ["full", "bm25", "section"] as const) {
+			expect(retrieve(s, corpus, index, "alpha", 1000).strategy).toBe(s);
+		}
+	});
+
+	it("THROWS on an unvalidated strategy rather than answering as bm25", () => {
+		// The dispatcher used to end in a bare `return retrieveBm25(...)`, so an
+		// unknown name was silently answered by bm25 and labelled with whatever it
+		// asked for -- a wrong number wearing the right label.
+		expect(() =>
+			retrieve("embeddings" as never, corpus, index, "alpha", 1000),
+		).toThrow(/unknown retrieval strategy: embeddings/);
 	});
 });

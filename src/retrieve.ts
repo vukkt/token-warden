@@ -147,10 +147,6 @@ export function bm25(index: LexicalIndex, query: string): ScoredChunk[] {
 export const STRATEGIES = ["full", "bm25", "section"] as const;
 export type Strategy = (typeof STRATEGIES)[number];
 
-export function isStrategy(s: string): s is Strategy {
-	return (STRATEGIES as readonly string[]).includes(s);
-}
-
 /** What a strategy returned, and what carrying it costs. */
 export interface Retrieval {
 	strategy: Strategy;
@@ -254,7 +250,16 @@ export function retrieveSection(
 	return underBudget(expanded, budgetTokens, "section");
 }
 
-/** Dispatch by strategy name. */
+/**
+ * Dispatch by strategy name.
+ *
+ * Throws on an unknown name rather than falling through to a default arm. The
+ * earlier form ended in a bare `return retrieveBm25(...)`, so a strategy string
+ * that had not been validated — from a flag, a config file, a persisted row —
+ * was silently ANSWERED BY BM25 AND LABELLED with whatever it asked for. That is
+ * the repo's recurring failure shape: not a crash, a wrong number wearing the
+ * right label.
+ */
 export function retrieve(
 	strategy: Strategy,
 	corpus: Corpus,
@@ -263,9 +268,10 @@ export function retrieve(
 	budgetTokens: number,
 ): Retrieval {
 	if (strategy === "full") return retrieveFull(corpus);
+	if (strategy === "bm25") return retrieveBm25(index, query, budgetTokens);
 	if (strategy === "section")
 		return retrieveSection(index, query, budgetTokens);
-	return retrieveBm25(index, query, budgetTokens);
+	throw new Error(`unknown retrieval strategy: ${String(strategy)}`);
 }
 
 /**

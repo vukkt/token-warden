@@ -37,7 +37,7 @@
  */
 import { z } from "zod";
 import type { Chunk } from "./corpus.js";
-import { parseClaudeEnvelope, stripJsonFence } from "./model-call.js";
+import { stripJsonFence } from "./model-call.js";
 
 /**
  * One extracted financial fact.
@@ -276,23 +276,6 @@ export function parseFacts(
 		else malformed++;
 	}
 	return { ok: true, facts, malformed };
-}
-
-/** Parse a raw `claude -p --output-format json` stdout straight through to
- * verified facts — the envelope boundary and the fact boundary in one call, so
- * no caller is tempted to skip one of them. */
-export function extractFromStdout(
-	stdout: string | undefined,
-	chunks: Chunk[],
-): { ok: true; report: GroundingReport } | { ok: false; reason: string } {
-	const envelope = parseClaudeEnvelope(stdout);
-	if (!envelope.ok) return { ok: false, reason: envelope.reason };
-	const parsed = parseFacts(envelope.result);
-	if (!parsed.ok) return { ok: false, reason: parsed.reason };
-	return {
-		ok: true,
-		report: verifyGrounding(parsed.facts, chunks, parsed.malformed),
-	};
 }
 
 /**
