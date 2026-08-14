@@ -861,6 +861,14 @@ The first round is untouched — same side, same Neyman placement, same cost, sa
 `-topup` label — so an ordinary uncertain top-up, the only kind a candidate can
 ever get, behaves exactly as it did.
 
+> **RETRACTED, 2026-08-13 — the policy-arm column below is not the shipped
+> policy.** See "The banked delta was a constant in the harness and a moving
+> column in the ledger" at the end of this section. The control column stands;
+> the policy column and the passes/audit column were produced by a harness that
+> holds the rule's banked delta constant, while the selector reads
+> `rules.measured_delta`, which every verdict overwrites. They are left in place
+> unedited rather than quietly corrected, because the retraction is the finding.
+
 | True saving | control (v0.42.0 path) | with retention budget | top-up passes/audit |
 |---|---|---|---|
 | 2.0% (945 tok) | 78.2% [76.7, 79.6] | **70.3%** [68.6, 71.9] | 0.87 -> 2.37 |
@@ -890,6 +898,8 @@ band relative to the rule's banked margin, not a discount on the bar.
   values carry the winner's curse (admitted draws are biased high), which widens
   the apparent margin and so buys FEWER rounds. The assumption is optimistic
   about the policy in the direction of spending less, not more.
+  **This bullet is wrong in both its direction and its reasoning — see the
+  retraction below.**
 - **`sql` only, 2 runs/side.** The other three agents still lack the replicate
   depth to run this at all.
 
@@ -899,6 +909,61 @@ Reproduce (no tokens, deterministic):
 npx tsx validation/empirical-calibration.ts --agent sql --mode eviction \
   --trials 3000 --runs 2 --cycles 12
 ```
+
+### The banked delta was a constant in the harness and a moving column in the ledger (2026-08-13)
+
+The third time this feature's instrument was found measuring something other
+than its name, and the second time inside the same release.
+
+`retentionRounds` sizes the budget from the rule's banked margin over its bar,
+reading `plan.rule.measured_delta`. `decideRule` **overwrites** `measured_delta`
+with the delta of *every* decision — including a sub-threshold re-audit that
+only puts the rule on probation. So strike 1 banks its own low draw, and strike
+2 computes `margin = that draw - bar`, which is negative by construction. **The
+budget is zero on exactly the cycle that decides the eviction.**
+
+Executed against the shipped selector on a throwaway ledger — a rule admitted
+at 2,000 tok/run over a bar of 54, then re-audited twice on the same noisy
+draw:
+
+```
+AFTER ADMIT  measured_delta = 2000
+CYCLE 1: rounds=3 status=active   probation=1  banked_after=0
+CYCLE 2: rounds=1 status=evicted               banked_after=0
+```
+
+Three rounds bought on the cycle where two-strike retention was going to keep
+the rule anyway; one round on the cycle that evicted it.
+
+The harness passed `trueSaving` — a constant — as the banked delta for every
+cycle, so it granted the full budget on strike 2. On the deterministic pool and
+seeds pinned in `test/empirical-calibration.test.ts` (150 trials, 12 cycles,
+2 runs/side, true saving 1,000 tok):
+
+| model | false evictions | top-up rounds |
+|---|---|---|
+| control (0 retention rounds) | 12 / 150 | 1,172 |
+| constant banked delta (as published) | **2 / 150** | 1,995 |
+| ledger's banked delta (shipped behaviour) | **7 / 150** | 1,801 |
+
+The published shape claimed a 6.0x cut in false eviction where the shipped
+policy earns 1.7x, and spent 194 rounds the selector never spends. Both errors
+point the same way, which is why the "winner's curse" bullet above is backwards:
+the constant-banked assumption makes the harness spend **more** rounds than the
+ship, not fewer. The winner's curse is real but is second-order next to a column
+the ledger rewrites after every verdict.
+
+Fixed in the harness: the banked delta is seeded at admission and then follows
+`a.delta` each cycle, as `decideRule` would write it. The `sql` table above needs
+re-running against the real replicate pool before any policy-arm figure is quoted
+again.
+
+Left deliberately unfixed in the selector, and pinned instead by
+`test/variance.test.ts` ("PIN: strike 1 banks a sub-threshold delta, so strike 2
+buys no rounds"): whether the budget should read the LAST draw or the rule's
+established worth is a policy question, and this repo does not re-tune a gate
+parameter on an argument. It needs the corrected harness and the real pool. What
+must not happen again is the two drifting apart silently.
 
 ### The other three agents: blocked, and why the workaround does not count (2026-08-03)
 

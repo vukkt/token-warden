@@ -251,6 +251,36 @@ describe("parseSelectArgs", () => {
 			/unknown flag/,
 		);
 	});
+
+	// REGRESSION: `Number("")` and `Number(" ")` are both 0, so `--top-up
+	// "$BUDGET"` with BUDGET unset used to parse as zero and pass the `>= 0`
+	// check — silently disabling the variance top-up, and `--retention-rounds
+	// ""` silently disabling the retention budget. Both then report figures
+	// produced under a policy the operator did not choose. Same hole as the
+	// empty TOKEN_WARDEN_PRICE_INPUT override fixed in v0.40.0.
+	it("rejects a BLANK numeric flag value instead of reading it as zero", () => {
+		for (const blank of ["", " ", "\t", "\n"]) {
+			expect(() =>
+				parseSelectArgs(["--agent", "sql", "--top-up", blank]),
+			).toThrow(/--top-up/);
+			expect(() =>
+				parseSelectArgs(["--agent", "sql", "--retention-rounds", blank]),
+			).toThrow(/--retention-rounds/);
+			expect(() =>
+				parseSelectArgs(["--agent", "sql", "--runs", blank]),
+			).toThrow(/--runs/);
+		}
+		// A missing value (flag last on the line) is the same failure.
+		expect(() => parseSelectArgs(["--agent", "sql", "--top-up"])).toThrow(
+			/--top-up/,
+		);
+		// An explicit zero is still a legitimate control arm.
+		expect(parseSelectArgs(["--agent", "sql", "--top-up", "0"]).topUp).toBe(0);
+		expect(
+			parseSelectArgs(["--agent", "sql", "--retention-rounds", "0"])
+				.retentionRounds,
+		).toBe(0);
+	});
 });
 
 describe("selectForAgent", () => {

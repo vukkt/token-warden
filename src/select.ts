@@ -36,7 +36,7 @@ import {
 	summarizeTask,
 	type TaskSummary,
 } from "./bench.js";
-import { runCli } from "./cli.js";
+import { numericFlag, runCli } from "./cli.js";
 import {
 	agentTokenMix,
 	bumpRulesetVersion,
@@ -898,7 +898,11 @@ export interface SelectionReport {
 export interface SelectOptions {
 	/** Extra measurement passes allowed per decision when the verdict is
 	 * within one standard error of flipping. Bounded cost: each top-up is
-	 * one more suite invocation of the measured configuration. */
+	 * one more suite invocation of the measured configuration. Default 1; `0`
+	 * disables the top-up entirely. Values above 1 buy that many ordinary
+	 * (one-sided, Neyman-placed) rounds — before v0.44.0 they were validated,
+	 * stored and printed but read only as a boolean, so `--top-up 50` measured
+	 * exactly as much as `--top-up 1`. */
 	topUpBudget?: number;
 	/** Force the top-up to re-run the FULL suite uniformly instead of the
 	 * Neyman variance-proportional allocation. Same token budget, spent
@@ -1085,7 +1089,15 @@ function measureWithTopUp(
 	const perRound = measured.reduce((total, s) => total + s.results.length, 0);
 	// The retention budget is decided once, from the first (cheapest) look, so
 	// the cost of a decision is knowable before the rounds are spent.
-	const budget = 1 + extraRoundsFor(run, plan, assessment);
+	//
+	// `topUpBudget` is the ORDINARY round count (`--top-up N`, default 1), which
+	// until now was read only as a boolean: any N > 0 bought exactly one round,
+	// while the CLI validated it as an integer and printed "top-up budget N"
+	// back to the operator. The comment below already described the multi-round
+	// behaviour ("each round allocates against the variance that is still
+	// there") that the code did not implement. At the default N = 1 this
+	// expression is 1 + extra, byte-identical to v0.43.0.
+	const budget = run.topUpBudget + extraRoundsFor(run, plan, assessment);
 	let rounds = 0;
 	while (rounds < budget && assessment.uncertain) {
 		// Spend the round's runs by variance: Neyman allocation pours them into
@@ -1096,8 +1108,8 @@ function measureWithTopUp(
 		// variance that is still there.
 		// --uniform-top-up: spend the same budget as one full uniform suite pass
 		// instead, the control arm for benchmarking the allocation strategy.
-		// RETENTION rounds (every round after the first) differ from the ordinary
-		// top-up in both respects, and both differences are measured on the sql
+		// RETENTION rounds (every round after the ordinary ones) differ from the
+		// ordinary top-up in both respects, and both are measured on the sql
 		// pool at 2 runs/side over 12 re-audits (FINDINGS.md, 3,000 trials):
 		//
 		//  - BOTH SIDES. Topping up one side cannot cut the delta's error below
@@ -1110,10 +1122,11 @@ function measureWithTopUp(
 		//    tokens, spread evenly: a 5% rule's false eviction falls 49.6% ->
 		//    29.3%, a 10% rule's 11.9% -> 2.0%.
 		//
-		// The FIRST round is untouched — same side, same Neyman placement, same
-		// cost, same label — so nothing about an ordinary uncertain top-up (the
-		// only kind a candidate can get) changes.
-		const retention = rounds >= 1;
+		// The ORDINARY rounds are untouched — same side, same Neyman placement,
+		// same cost, same labels — so nothing about an ordinary uncertain top-up
+		// (the only kind a candidate can get) changes. At the default
+		// `topUpBudget` of 1 there is exactly one of them, as before.
+		const retention = rounds >= run.topUpBudget;
 		const allocation =
 			retention || run.uniformTopUp
 				? null
@@ -1669,18 +1682,18 @@ export function parseSelectArgs(argv: string[]): SelectArgs {
 				i++;
 				break;
 			case "--runs":
-				args.runs = Number(argv[i + 1]);
+				args.runs = numericFlag(argv[i + 1]);
 				i++;
 				break;
 			case "--top-up":
-				args.topUp = Number(argv[i + 1]);
+				args.topUp = numericFlag(argv[i + 1]);
 				i++;
 				break;
 			case "--uniform-top-up":
 				args.uniformTopUp = true;
 				break;
 			case "--retention-rounds":
-				args.retentionRounds = Number(argv[i + 1]);
+				args.retentionRounds = numericFlag(argv[i + 1]);
 				i++;
 				break;
 			default:

@@ -982,6 +982,91 @@ describe("retentionRounds (variance-proportional re-audit budget)", () => {
 			MAX_RETENTION_ROUNDS,
 		);
 	});
+
+	/**
+	 * The budget is `min(MAX, max(0, ceil(z·SE/margin) - 1))`, so every branch
+	 * of it lands on an integer boundary and every input can be degenerate. A
+	 * budget that silently became NaN, negative or fractional would not throw —
+	 * it would be handed to `Math.min` in `extraRoundsFor` and quietly resolve
+	 * to a plausible round count. These pin the boundaries themselves rather
+	 * than samples near them.
+	 */
+	describe("boundaries", () => {
+		/** `assessed` with the confidence multiple opened up too. */
+		function withZ(se: number | null, z: number): DeltaAssessment {
+			return { ...assessed(se), confidenceMultiple: z };
+		}
+
+		it("treats the bar as exclusive: margin 0 buys nothing, margin epsilon buys", () => {
+			expect(retentionRounds(bar, 25, assessed(5000))).toBe(0);
+			expect(retentionRounds(bar + 1e-9, 25, assessed(5000))).toBe(2);
+			expect(retentionRounds(bar - 1e-9, 25, assessed(5000))).toBe(0);
+		});
+
+		it("grades on ceil(threat) - 1 exactly at the integer thresholds", () => {
+			// margin = 10_000 - bar; pick the SE that puts threat on the integer.
+			const margin = 10_000 - bar;
+			const seFor = (threat: number): number => (threat * margin) / 2;
+			expect(retentionRounds(10_000, 25, assessed(seFor(1)))).toBe(0);
+			expect(retentionRounds(10_000, 25, assessed(seFor(2)))).toBe(1);
+			expect(retentionRounds(10_000, 25, assessed(seFor(3)))).toBe(2);
+			// Just past a threshold rounds up, which is the intended direction:
+			// a noise band that reaches even slightly further buys the round.
+			expect(retentionRounds(10_000, 25, assessed(seFor(1.0000001)))).toBe(1);
+		});
+
+		it("returns 0, never NaN or a negative, for a degenerate standard error", () => {
+			for (const se of [
+				0,
+				-5000,
+				Number.POSITIVE_INFINITY,
+				Number.NEGATIVE_INFINITY,
+				Number.NaN,
+			]) {
+				expect(retentionRounds(10_000, 25, assessed(se))).toBe(0);
+			}
+		});
+
+		it("returns 0, never NaN, for a degenerate banked delta", () => {
+			for (const banked of [
+				Number.NaN,
+				Number.POSITIVE_INFINITY,
+				Number.NEGATIVE_INFINITY,
+				-10_000,
+			]) {
+				expect(retentionRounds(banked, 25, assessed(5000))).toBe(0);
+			}
+		});
+
+		it("returns 0, never NaN, for a degenerate confidence multiple", () => {
+			for (const z of [Number.NaN, 0, -2, Number.POSITIVE_INFINITY]) {
+				expect(retentionRounds(10_000, 25, withZ(5000, z))).toBe(0);
+			}
+		});
+
+		it("is always an integer in 0..MAX over a wide random sweep", () => {
+			// A fractional or out-of-range budget would survive `Math.min` in
+			// `extraRoundsFor` and be spent as if it were a round count.
+			const rand = lcg(4242);
+			for (let trial = 0; trial < 2000; trial++) {
+				const banked = (rand() - 0.2) * 10 ** Math.floor(rand() * 7);
+				const se = (rand() - 0.1) * 10 ** Math.floor(rand() * 8);
+				const cost = Math.floor(rand() * 500);
+				const n = retentionRounds(banked, cost, assessed(se));
+				expect(Number.isInteger(n)).toBe(true);
+				expect(n).toBeGreaterThanOrEqual(0);
+				expect(n).toBeLessThanOrEqual(MAX_RETENTION_ROUNDS);
+			}
+		});
+
+		it("survives a zero context cost, where the bar itself is zero", () => {
+			// effectiveRent(0) is 0, so the margin is the whole banked delta and
+			// the division below it must not become 0/0.
+			expect(retentionRounds(0, 0, assessed(5000))).toBe(0);
+			expect(retentionRounds(10_000, 0, assessed(5000))).toBe(0);
+			expect(retentionRounds(10_000, 0, assessed(20_000))).toBe(2);
+		});
+	});
 });
 
 describe("selectForAgent retention budget (end-to-end)", () => {
@@ -1046,6 +1131,65 @@ describe("selectForAgent retention budget (end-to-end)", () => {
 		expect(labels).toContain(`audit-${id}-topup`);
 		expect(labels).toContain(`audit-${id}-topup2`);
 		expect(labels).toContain(`audit-${id}-topup3`);
+		// Retention rounds re-measure BOTH sides — the whole reason the
+		// one-sided design was discarded. A reference pass per retention round,
+		// and none for the ordinary one.
+		expect(labels).toContain(`audit-${id}-ref2`);
+		expect(labels).toContain(`audit-${id}-ref3`);
+		expect(labels).not.toContain(`audit-${id}-ref`);
+	});
+
+	/**
+	 * PIN on a shipped consequence that is easy to change by accident and
+	 * impossible to see from `retentionRounds` alone.
+	 *
+	 * `decideRule` overwrites `rules.measured_delta` with the delta of every
+	 * decision, including a sub-threshold re-audit that only puts the rule on
+	 * probation. `retentionRounds` sizes the budget from that same column, so
+	 * once strike 1 has banked a sub-threshold draw the margin is negative and
+	 * strike 2 — the cycle that actually evicts — buys nothing.
+	 *
+	 * This is deliberately a pin, not an assertion that the behaviour is right.
+	 * Whether the budget should read the LAST draw or the rule's established
+	 * worth is a policy question that needs the calibration harness and the real
+	 * replicate pool to settle. What must not happen is the behaviour changing
+	 * silently, or the harness modelling one while the selector does the other.
+	 */
+	it("PIN: strike 1 banks a sub-threshold delta, so strike 2 buys no rounds", () => {
+		const id = seedBankedRule();
+		expect(getRuleById(db, id)?.measured_delta).toBe(2000);
+
+		// Noisy enough to stay uncertain, centred so the point estimate lands at
+		// zero: sub-threshold, so each cycle is a strike.
+		const noisy: SuiteRunner = (rules) =>
+			rules.length === 0
+				? [summary("t1", [4000, 12_000]), summary("t2", [4000, 12_000])]
+				: [summary("t1", [8000, 8000]), summary("t2", [8000, 8000])];
+
+		const cycle = (): {
+			rounds: number;
+			status: string;
+			banked: number | null;
+		} => {
+			const report = selectForAgent(db, agent, noisy);
+			const d = report.decisions.find((x) => x.kind === "re-audit");
+			return {
+				rounds: d?.topUpRounds ?? 0,
+				status: d?.status ?? "",
+				banked: getRuleById(db, id)?.measured_delta ?? null,
+			};
+		};
+
+		// Strike 1: the full banked margin is still there, so the budget is spent.
+		const first = cycle();
+		expect(first.rounds).toBe(3);
+		expect(first.status).toBe("active"); // probation, not eviction
+		expect(first.banked).toBe(0); // and the strike overwrote the margin
+
+		// Strike 2 decides the eviction, and gets the ordinary round only.
+		const second = cycle();
+		expect(second.rounds).toBe(1);
+		expect(second.status).toBe("evicted");
 	});
 
 	it("retentionRounds: 0 restores the single-top-up control arm", () => {
@@ -1085,6 +1229,70 @@ describe("selectForAgent retention budget (end-to-end)", () => {
 
 		expect(report.decisions[0]?.topUpRounds).toBe(1);
 		expect(labels).not.toContain(`candidate-${id}-topup2`);
+	});
+
+	// REGRESSION: `topUpBudget` is a COUNT. It was validated as an integer,
+	// stored, and printed back to the operator as "top-up budget N", but the
+	// loop only ever tested it for `<= 0` — so `--top-up 50` bought exactly one
+	// round, the same as `--top-up 1`, while the run reported a budget of 50.
+	// Executed before the fix: budgets 1, 2, 5 and 50 all produced
+	// topUpRounds=1 and a single `-topup` pass.
+	it("spends topUpBudget ordinary rounds, not one round for any budget > 0", () => {
+		const seen = new Map<number, { rounds: number; passes: number }>();
+		for (const topUpBudget of [1, 2, 3]) {
+			const id = insertRule(db, {
+				agent,
+				body: `A permanently uncertain candidate, budget ${topUpBudget}.`,
+				contextCost: 25,
+				sourceRun: null,
+				createdAt: "t",
+			});
+			const labels: string[] = [];
+			const runner: SuiteRunner = (rules, label) => {
+				labels.push(label);
+				return rules.some((r) => r.id === id)
+					? [summary("t1", [4000, 16_000]), summary("t2", [4000, 16_000])]
+					: [summary("t1", [9000, 9000]), summary("t2", [9000, 9000])];
+			};
+			const report = selectForAgent(db, agent, runner, { topUpBudget });
+			seen.set(topUpBudget, {
+				rounds:
+					report.decisions.find((d) => d.rule.id === id)?.topUpRounds ?? 0,
+				passes: labels.filter((l) => l.startsWith(`candidate-${id}-topup`))
+					.length,
+			});
+		}
+		// The default is unchanged, which is what keeps the calibrated gate
+		// byte-identical for everyone who does not pass the flag.
+		expect(seen.get(1)).toEqual({ rounds: 1, passes: 1 });
+		expect(seen.get(2)).toEqual({ rounds: 2, passes: 2 });
+		expect(seen.get(3)).toEqual({ rounds: 3, passes: 3 });
+	});
+
+	// A candidate gets ORDINARY rounds only: one-sided and Neyman-placed. The
+	// both-sides uniform shape is retention-only, and buying it for an
+	// admission would be paying for the false-POSITIVE direction.
+	it("a raised top-up budget buys a candidate ordinary rounds, never retention ones", () => {
+		const id = insertRule(db, {
+			agent,
+			body: "A borderline candidate measured under a raised top-up budget.",
+			contextCost: 25,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		const labels: string[] = [];
+		const runner: SuiteRunner = (rules, label) => {
+			labels.push(label);
+			return rules.some((r) => r.id === id)
+				? [summary("t1", [4000, 16_000]), summary("t2", [4000, 16_000])]
+				: [summary("t1", [9000, 9000]), summary("t2", [9000, 9000])];
+		};
+
+		selectForAgent(db, agent, runner, { topUpBudget: 3 });
+
+		// No reference-side pass exists for a candidate at any budget: the
+		// invocation-wide baseline must stay fixed for every other decision.
+		expect(labels.filter((l) => l.includes("-ref"))).toEqual([]);
 	});
 });
 

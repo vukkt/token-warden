@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { summarizeTask, type TaskSummary } from "../src/bench.js";
 import type { GoldenReplicateRun } from "../src/db.js";
+import { retentionRounds } from "../src/select.js";
 import {
 	bootstrapTrial,
 	candidateKept,
@@ -280,6 +281,26 @@ describe("parseEmpiricalArgs", () => {
 		expect(() => parseEmpiricalArgs(["--agent", "nope"])).toThrow(/--agent/);
 		expect(() => parseEmpiricalArgs(["--mode", "sideways"])).toThrow(/--mode/);
 	});
+
+	// REGRESSION: the flags whose validators accept 0 (`--retention-rounds`,
+	// `--seed`) used to read a BLANK value as 0, because `Number("") === 0`.
+	// A blank `--seed` silently reseeds every published figure; a blank
+	// `--retention-rounds` silently runs the control arm and labels it as the
+	// policy arm.
+	it("rejects a BLANK numeric flag value instead of reading it as zero", () => {
+		for (const blank of ["", " ", "\n"]) {
+			expect(() => parseEmpiricalArgs(["--retention-rounds", blank])).toThrow(
+				/--retention-rounds/,
+			);
+			expect(() => parseEmpiricalArgs(["--seed", blank])).toThrow(/--seed/);
+			expect(() => parseEmpiricalArgs(["--cycles", blank])).toThrow(/--cycles/);
+			expect(() => parseEmpiricalArgs(["--rent", blank])).toThrow(/--rent/);
+		}
+		expect(parseEmpiricalArgs(["--seed", "0"]).seed).toBe(0);
+		expect(
+			parseEmpiricalArgs(["--retention-rounds", "0"]).retentionRounds,
+		).toBe(0);
+	});
 });
 
 describe("falseEvictionTrial", () => {
@@ -383,5 +404,60 @@ describe("falseEvictionTrial", () => {
 		expect(policy.rounds).toBeGreaterThan(control.rounds);
 		// The whole point: a genuinely earning rule survives more often.
 		expect(policy.evicted).toBeLessThanOrEqual(control.evicted);
+	});
+
+	// REGRESSION: the harness sized every cycle's budget from a CONSTANT
+	// `trueSaving`, but the selector sizes it from `rules.measured_delta`, which
+	// `decideRule` overwrites on every decision. A strike-1 verdict therefore
+	// banks its own sub-threshold draw and the strike-2 cycle gets a zero
+	// budget. Holding the banked value constant hands the budget its full
+	// margin on exactly the cycle that decides the eviction, so it spends more
+	// rounds than the ship does and reports a better false-eviction rate than
+	// the ship earns.
+	it("sizes each cycle's budget from the BANKED delta the ledger would hold", () => {
+		const arm = (maxRounds: number): { evicted: number; rounds: number } => {
+			let evicted = 0;
+			let rounds = 0;
+			for (let seed = 1; seed <= 150; seed++) {
+				const r = falseEvictionTrial(mulberry32(seed), spec(1000, maxRounds));
+				if (r.evictedAt !== null) evicted++;
+				rounds += r.topUpRounds;
+			}
+			return { evicted, rounds };
+		};
+
+		// Deterministic pool, deterministic seeds, so these are exact. Measured
+		// with the constant-banked model this file used to carry, and with the
+		// ledger's:
+		//
+		//                       false evictions    top-up rounds
+		//   control (0 rounds)       12 / 150          1,172
+		//   constant banked           2 / 150          1,995
+		//   ledger banked             7 / 150          1,801
+		//
+		// The constant model reported a 6.0x cut in false eviction where the ship
+		// earns 1.7x, and it spent 194 rounds the ship never spends. Both errors
+		// point the same way: it hands the budget its full margin on the strike-2
+		// cycle, which is precisely the cycle the ledger has already zeroed.
+		expect(arm(0)).toEqual({ evicted: 12, rounds: 1172 });
+		expect(arm(2)).toEqual({ evicted: 7, rounds: 1801 });
+
+		// The mechanism, isolated: a rule whose banked delta has collapsed to a
+		// sub-threshold value buys nothing however wide the noise. That is the
+		// strike-2 state, and it is the whole difference between the two models.
+		expect(
+			retentionRounds(0, 25, {
+				delta: 0,
+				regression: false,
+				standardError: 50_000,
+				standardErrorBasis: "within-task",
+				uncertain: true,
+				confidenceMultiple: 2,
+				robustDelta: null,
+				tailRisk: false,
+				completionDrop: false,
+				environmentFailure: false,
+			}),
+		).toBe(0);
 	});
 });

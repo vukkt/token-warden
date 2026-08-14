@@ -16,6 +16,11 @@ background and report progress:
 cd "${CLAUDE_SKILL_DIR}/.." && npx tsx src/select.ts --agent <agent> <extra flags as given>
 ```
 
+`--top-up N` (default 1) is how many ORDINARY measurement rounds a decision
+whose verdict lands within noise of the bar may buy. Each round is one more
+suite pass of the measured configuration, placed by variance. `0` disables the
+top-up entirely.
+
 `--uniform-top-up` replaces the Neyman variance-proportional top-up with one
 full uniform suite pass (same budget) — the control arm when benchmarking the
 allocation strategy itself.

@@ -43,6 +43,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { summarizeTask, type TaskSummary } from "../src/bench.js";
+import { numericFlag } from "../src/cli.js";
 import {
 	type GoldenReplicateRun,
 	goldenReplicateRuns,
@@ -223,6 +224,17 @@ export function candidateKept(
  * `maxRetentionRounds` is the knob under test: 0 reproduces the single-top-up
  * behaviour that shipped before v0.43.0, and is the control arm.
  *
+ * The BANKED delta is modelled as the ledger keeps it (added 2026-08-13), not
+ * as a constant. The first cut held it at `trueSaving` for every cycle, which
+ * hands the budget its full margin on the strike-2 cycle; the selector reads
+ * `rules.measured_delta`, which the strike-1 verdict has already overwritten
+ * with a sub-threshold draw. That is the SECOND time this harness measured a
+ * policy the code does not implement, and the FINDINGS.md figures produced
+ * before this correction overstate the budget's effect. The caveat recorded
+ * with them — that assuming the ledger banks the rule at its true worth is
+ * "optimistic in the direction of spending FEWER rounds" — is backwards: the
+ * assumption spends MORE rounds than the ship does, not fewer.
+ *
  * Returns the cycle index (1-based) at which the rule was wrongly evicted (null
  * if it survived all of them) alongside what the sequence COST in extra
  * measurement passes — a retention policy that buys survival is only worth
@@ -233,11 +245,11 @@ export interface EvictionTrialSpec {
 	groups: ReplicateGroup[];
 	runsPerSide: number;
 	rent: number;
-	/** The rule's genuine per-run saving. Also stands in for its BANKED delta:
-	 * the ledger is assumed to record the rule at its true worth. A real banked
-	 * value carries the winner's curse (admitted draws are biased high), which
-	 * would widen the margin and so buy FEWER retention rounds — this assumption
-	 * is therefore optimistic about the policy, and is stated in FINDINGS.md. */
+	/** The rule's genuine per-run saving, subtracted from the with-rule side of
+	 * every draw. It seeds the rule's BANKED delta at admission and nothing
+	 * more: after that the banked value follows the ledger (see
+	 * `falseEvictionTrial`), because `decideRule` overwrites `measured_delta`
+	 * on every decision. */
 	trueSaving: number;
 	cycles: number;
 	maxRetentionRounds: number;
@@ -260,6 +272,24 @@ export function falseEvictionTrial(
 	let probation = 0;
 	let topUpRounds = 0;
 	let reAudits = 0;
+	// The rule's BANKED delta — `rules.measured_delta`, which is what
+	// `retentionRounds` sizes the budget from. Admission seeds it at the rule's
+	// worth; after that it follows the ledger, because `decideRule` OVERWRITES
+	// `measured_delta` with the delta of EVERY decision, kept or evicted.
+	//
+	// Modelling it as a constant `trueSaving` (this harness's first cut)
+	// measures a policy the selector does not implement, for the second time in
+	// this feature. A sub-threshold re-audit that merely puts the rule on
+	// probation still writes its own low draw into the ledger, so the next
+	// cycle's margin is `that draw - bar`, which is negative by construction —
+	// the budget is ZERO on exactly the cycle that decides the eviction.
+	//
+	// Verified against the shipped selector on a throwaway ledger, two
+	// consecutive noisy re-audits of a rule banked at 2,000 tok/run, bar 54:
+	//
+	//   CYCLE 1: rounds=3  status=active    probation=1  banked_after=0
+	//   CYCLE 2: rounds=1  status=evicted                banked_after=0
+	let banked: number | null = trueSaving;
 	for (let cycle = 1; cycle <= cycles; cycle++) {
 		// A re-audit re-measures the active set with and without the rule. The
 		// rule genuinely saves `trueSaving`, so the WITHOUT side costs more.
@@ -286,8 +316,7 @@ export function falseEvictionTrial(
 		// placed by the real Neyman allocator.
 		const perRound = without.reduce((sum, s) => sum + s.results.length, 0);
 		const budget =
-			1 +
-			Math.min(spec.maxRetentionRounds, retentionRounds(trueSaving, rent, a));
+			1 + Math.min(spec.maxRetentionRounds, retentionRounds(banked, rent, a));
 		/** One round's runs for a side. `allocation` null = a uniform full pass,
 		 * which is what a retention round spends; the first round is placed by
 		 * the real Neyman allocator, as the selector does. */
@@ -336,6 +365,10 @@ export function falseEvictionTrial(
 		}
 		const base = verdictWithReason(a.delta, rent, a.regression);
 		const outcome = twoStrikeRetention(true, probation, a.regression, base);
+		// `decideRule` writes the measured delta on every decision, before the
+		// keep/evict branch — so a retained-on-probation rule banks its low draw
+		// and pays for it at the next cycle's budget.
+		banked = a.delta;
 		if (outcome.status === "evicted") {
 			return { evictedAt: cycle, reAudits, topUpRounds };
 		}
@@ -481,7 +514,7 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 			if (!path) throw new Error("--db requires a path");
 			args.dbPath = path;
 		} else if (flag === "--retention-rounds") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n) || n < 0 || n > MAX_RETENTION_ROUNDS) {
 				throw new Error(
 					`--retention-rounds must be an integer in 0..${MAX_RETENTION_ROUNDS}`,
@@ -489,7 +522,7 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 			}
 			args.retentionRounds = n;
 		} else if (flag === "--cycles") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n) || n < 1) {
 				throw new Error("--cycles must be a positive integer");
 			}
@@ -508,26 +541,26 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 			}
 			args.mode = mode;
 		} else if (flag === "--trials") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n) || n < 1) {
 				throw new Error("--trials must be a positive integer");
 			}
 			args.trials = n;
 		} else if (flag === "--runs") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n) || n < 1) {
 				throw new Error("--runs must be a positive integer");
 			}
 			args.permRuns = n;
 			args.bootRuns = n;
 		} else if (flag === "--rent") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isFinite(n) || n <= 0) {
 				throw new Error("--rent must be a positive number");
 			}
 			args.rent = n;
 		} else if (flag === "--seed") {
-			const n = Number(argv[++i]);
+			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n)) throw new Error("--seed must be an integer");
 			args.seed = n;
 		} else {
@@ -668,8 +701,24 @@ function reportAgent(
 			trueSaving: number,
 			maxRetentionRounds: number,
 		): { evicted: number; median: string; roundsPerAudit: number } => {
-			// Same seed per arm: both arms see the IDENTICAL draw sequence, so the
-			// difference between them is the policy and not the RNG.
+			// Same STARTING seed per arm. The two arms are NOT paired beyond that,
+			// and an earlier version of this comment claimed they were: one `rng`
+			// is threaded through all `trials` trials, and the policy arm draws
+			// more from it, because every retention round calls `resample`. The
+			// streams therefore diverge at the first trial where the arms spend
+			// different rounds, and every later trial sees a different sequence.
+			//
+			// Executed: on the pool pinned in test/empirical-calibration.test.ts
+			// the control arm consumes 1,172 rounds and the policy arm 1,801 from
+			// identically seeded streams, which is only possible if the draws
+			// differ. So the arm difference carries Monte-Carlo noise rather than
+			// being variance-reduced by pairing. At 3,000 trials that is small
+			// beside the effect sizes reported, but it is not the control the old
+			// comment promised. Reseeding per trial (`mulberry32(seed ^ i)`) would
+			// make it a genuinely paired comparison; that is a change to the
+			// sampling and is deliberately not bundled with the banked-delta
+			// correction, since the table needs re-running against the real pool
+			// either way.
 			const rng = mulberry32(agentSeed ^ (0xe00 + Math.round(trueSaving)));
 			let evicted = 0;
 			let rounds = 0;
