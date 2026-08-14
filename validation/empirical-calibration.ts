@@ -69,6 +69,7 @@ import {
 	recoveryMarginFraction,
 	recoveryStrictness,
 } from "../src/stats.js";
+import { mulberry32 } from "./rng.js";
 
 const DEFAULT_TRIALS = 2000;
 /** Permutation deals 2×runs distinct totals per trial, so pools of ≥4 qualify
@@ -86,20 +87,6 @@ const DEFAULT_SEED = 42;
  * first look by one, the least the shipped policy will accept. */
 const DEFAULT_RECOVERY_RUNS = 4;
 const INJECTED_FRACS = [0, 0.02, 0.05, 0.1, 0.2];
-
-/** Deterministic PRNG (mulberry32). Duplicated from validation/calibration.ts
- * on purpose: that file executes its report on import (unconditional
- * `process.exit(main())`), so nothing can be imported from it. */
-function mulberry32(seed: number): () => number {
-	let a = seed >>> 0;
-	return () => {
-		a |= 0;
-		a = (a + 0x6d2b79f5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 export interface ReplicateGroup {
 	taskId: string;
@@ -424,6 +411,21 @@ export function falseEvictionTrial(
  * construction); uncertain verdicts get the hybrid bootstrap top-up from the
  * held-out replicates (see header). Returns whether the null rule was KEPT —
  * a false positive.
+ *
+ * KNOWN DIVERGENCE, measured and left in place (2026-08-14). The top-up below
+ * spends `runsPerSide` on EVERY task; the selector spends the same budget
+ * through `allocateTopUpRuns` (Neyman), as `bootstrapLook` does. Same tokens,
+ * different placement, so this arm is not quite the shipped gate. Paired
+ * execution puts the cost at +1.77pt on the committed fixture and +0.07pt on
+ * the recorded sql pool — always upward, and growing with pool depth, so the
+ * published permutation false-positive rate is a FLOOR.
+ *
+ * NOT corrected here on purpose: it moves a figure FINDINGS.md quotes, and this
+ * repo does not move a calibration number without correcting the document in
+ * the same commit. The argument, the numbers and the CLI that re-derives them
+ * against a real ledger are in validation/topup-placement.ts; the fixture
+ * figures are pinned in test/empirical-calibration.test.ts so the gap cannot
+ * widen unnoticed while the decision is pending.
  */
 export function permutationTrial(
 	rng: () => number,

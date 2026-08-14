@@ -21,6 +21,7 @@
 import { summarizeTask, type TaskSummary } from "../src/bench.js";
 import { assessDelta, verdict } from "../src/select.js";
 import { effectiveRent } from "../src/stats.js";
+import { mulberry32 } from "./rng.js";
 
 const BASELINE = 60_000; // representative golden-session token cost
 const RENT = 25; // representative rule context rent (tokens)
@@ -49,18 +50,6 @@ const CS_LIFE_CAP = 500; // cap a simulated life at this many cycles ("> 500")
 // CS policy wins only if BOTH the dead-rule expected exit is at most this many
 // cycles AND the true-earner lifetime is at least two-strike's at every effect.
 const CS_DEAD_EXIT_MAX = 8;
-
-/** Deterministic PRNG (mulberry32) so the calibration is reproducible. */
-function mulberry32(seed: number): () => number {
-	let a = seed >>> 0;
-	return () => {
-		a |= 0;
-		a = (a + 0x6d2b79f5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 /** Standard normal via Box-Muller. */
 function normal(rng: () => number, mean: number, sd: number): number {
