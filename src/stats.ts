@@ -125,7 +125,14 @@ export function confidenceZ(): number {
  * Read per call, not frozen at module load: the calibration harness sweeps it.
  */
 export function recoveryMarginFraction(): number {
-	const raw = Number(process.env.WARDEN_RECOVERY_MARGIN ?? 0.5);
+	// Blank must mean ABSENT, not zero. Number("") is 0, which is inside this
+	// parameter's legal range, so the usual `Number(env ?? default)` idiom would
+	// turn `WARDEN_RECOVERY_MARGIN=` into the LOOSEST possible policy — every
+	// eviction on the positive side of the bar reclassified as recoverable.
+	// (`confidenceZ` is accidentally safe from this because 0 is out of ITS
+	// range; this parameter is not, and a test pins the difference.)
+	const set = process.env.WARDEN_RECOVERY_MARGIN?.trim();
+	const raw = set ? Number(set) : 0.5;
 	// Outside [0, 1) it is not a fraction of the margin. Reject rather than
 	// clamp, so a typo yields the calibrated default instead of a policy nobody
 	// measured — the same discipline as confidenceZ().
@@ -147,7 +154,8 @@ export function recoveryMarginFraction(): number {
  * positives for two-and-a-half times the power. See FINDINGS.md.
  */
 export function recoveryStrictness(): number {
-	const raw = Number(process.env.WARDEN_RECOVERY_STRICTNESS ?? 1.5);
+	const set = process.env.WARDEN_RECOVERY_STRICTNESS?.trim();
+	const raw = set ? Number(set) : 1.5;
 	// Below 1 would make a re-tried rule EASIER to bank than a first-time one,
 	// which inverts the whole point; reject and fall back to the default.
 	return Number.isFinite(raw) && raw >= 1 ? raw : 1.5;

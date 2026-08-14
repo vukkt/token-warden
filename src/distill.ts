@@ -27,6 +27,7 @@ import {
 	insertRule,
 	listRulesByAgent,
 	RUN_TOTAL_TOKENS_SQL,
+	type RuleRow,
 	type RunRow,
 	recentEvictedRules,
 	recentQuestionsFrom,
@@ -165,6 +166,83 @@ export function parseRulesJson(text: string): { body: string }[] | null {
 	}
 	const result = rulesSchema.safeParse(raw);
 	return result.success ? result.data : null;
+}
+
+/**
+ * What the deduper decided about one proposed body. `recover` is the case this
+ * type exists for: the proposal duplicates a rule that was evicted for want of
+ * POWER, so it has never actually been falsified and is queued again — as a
+ * fresh candidate, pointing back at the eviction it re-tries.
+ */
+export type DedupeOutcome =
+	| { kind: "allow" }
+	| { kind: "recover"; of: RuleRow }
+	| { kind: "suppress"; by: RuleRow; why: string };
+
+/** A rule whose eviction left the question open: the point estimate cleared the
+ * bar and only the width of the measurement stopped it. `recovers === null`
+ * caps the lineage at two measurements — a second look that fails again is a
+ * dead end, not the start of an unbounded series of attempts at the gate. */
+function isRecoverableEviction(rule: RuleRow): boolean {
+	return (
+		rule.status === "evicted" &&
+		rule.underpowered === 1 &&
+		rule.recovers === null
+	);
+}
+
+/**
+ * Whether a proposed body may be queued, and if so whether it is an ordinary
+ * candidate or a second look at an eviction that could not be resolved.
+ *
+ * Pure: no database, no filesystem, no clock. `existing` is every rule the
+ * agent has, exactly as the caller already had to load it. That keeps the
+ * policy drivable straight from the calibration harness, which is the only way
+ * to know what it does to the false-positive rate.
+ *
+ * The rule it encodes: a near-duplicate is suppressed unless EVERY rule it
+ * duplicates is a recoverable eviction, and none of those has already been
+ * re-tried. An active rule, a queued candidate, a measured negative, a
+ * regression and a re-audit eviction all still suppress exactly as before —
+ * only the "we could not tell" verdict stops being treated as "no".
+ */
+export function dedupeOutcome(
+	existing: RuleRow[],
+	body: string,
+): DedupeOutcome {
+	const matches = existing.filter(
+		(other) => trigramSimilarity(body, other.body) > SIMILARITY_THRESHOLD,
+	);
+	if (matches.length === 0) return { kind: "allow" };
+	// One blocking match is enough. In particular a body that duplicates BOTH a
+	// recoverable eviction and an active rule is suppressed: the agent already
+	// carries that advice, so re-measuring it would measure a rule against
+	// itself.
+	const blocking = matches.find((rule) => !isRecoverableEviction(rule));
+	if (blocking) {
+		return {
+			kind: "suppress",
+			by: blocking,
+			why:
+				blocking.status === "evicted"
+					? "already measured and rejected"
+					: `already ${blocking.status}`,
+		};
+	}
+	const spent = matches.find((rule) =>
+		existing.some((other) => other.recovers === rule.id),
+	);
+	if (spent) {
+		return {
+			kind: "suppress",
+			by: spent,
+			why: "its one recovery attempt has already been queued",
+		};
+	}
+	// Newest first: if several underpowered evictions match, re-try against the
+	// most recent verdict, whose recorded run depth is the one to beat.
+	const target = [...matches].sort((a, b) => b.id - a.id)[0] as RuleRow;
+	return { kind: "recover", of: target };
 }
 
 /** An evicted rule reduced to what the distiller needs to learn from it. */
@@ -410,15 +488,19 @@ export function distill(args: DistillArgs): void {
 				);
 				continue;
 			}
-			const nearDuplicate = existing.find(
-				(other) =>
-					trigramSimilarity(rule.body, other.body) > SIMILARITY_THRESHOLD,
-			);
-			if (nearDuplicate) {
+			const outcome = dedupeOutcome(existing, rule.body);
+			if (outcome.kind === "suppress") {
 				logLine(
-					`run ${run.id}: skipping near-duplicate of rule ${nearDuplicate.id}: "${rule.body}"`,
+					`run ${run.id}: skipping near-duplicate of rule ${outcome.by.id} (${outcome.why}): "${rule.body}"`,
 				);
 				continue;
+			}
+			if (outcome.kind === "recover") {
+				logLine(
+					`run ${run.id}: re-proposing as a RECOVERY of rule ${outcome.of.id}, ` +
+						`which was evicted underpowered at ${outcome.of.measured_delta} tokens/run ` +
+						`(${outcome.of.recovery_runs ?? "?"} runs/side): "${rule.body}"`,
+				);
 			}
 			const id = insertRule(db, {
 				agent: run.agent,
@@ -429,6 +511,7 @@ export function distill(args: DistillArgs): void {
 				// Provenance: keep a short excerpt of the session that produced the
 				// rule so its receipt can show what waste motivated it.
 				bornDigest: digest.slice(0, 1200),
+				recovers: outcome.kind === "recover" ? outcome.of.id : null,
 			});
 			inserted++;
 			logLine(
