@@ -701,8 +701,24 @@ function reportAgent(
 			trueSaving: number,
 			maxRetentionRounds: number,
 		): { evicted: number; median: string; roundsPerAudit: number } => {
-			// Same seed per arm: both arms see the IDENTICAL draw sequence, so the
-			// difference between them is the policy and not the RNG.
+			// Same STARTING seed per arm. The two arms are NOT paired beyond that,
+			// and an earlier version of this comment claimed they were: one `rng`
+			// is threaded through all `trials` trials, and the policy arm draws
+			// more from it, because every retention round calls `resample`. The
+			// streams therefore diverge at the first trial where the arms spend
+			// different rounds, and every later trial sees a different sequence.
+			//
+			// Executed: on the pool pinned in test/empirical-calibration.test.ts
+			// the control arm consumes 1,172 rounds and the policy arm 1,801 from
+			// identically seeded streams, which is only possible if the draws
+			// differ. So the arm difference carries Monte-Carlo noise rather than
+			// being variance-reduced by pairing. At 3,000 trials that is small
+			// beside the effect sizes reported, but it is not the control the old
+			// comment promised. Reseeding per trial (`mulberry32(seed ^ i)`) would
+			// make it a genuinely paired comparison; that is a change to the
+			// sampling and is deliberately not bundled with the banked-delta
+			// correction, since the table needs re-running against the real pool
+			// either way.
 			const rng = mulberry32(agentSeed ^ (0xe00 + Math.round(trueSaving)));
 			let evicted = 0;
 			let rounds = 0;
