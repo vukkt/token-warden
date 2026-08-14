@@ -26,8 +26,8 @@ import {
 	decideRule,
 	getRuleById,
 	insertRule,
-	openDb,
 	setRuleUnderpowered,
+	withDb,
 } from "../src/db.js";
 import { main, parseSelectArgs } from "../src/select.js";
 
@@ -84,18 +84,29 @@ describe("select main() orchestration", () => {
 		contextCost = 10,
 		agent = "sql",
 	): number {
-		const db = openDb();
-		try {
-			return insertRule(db, {
+		return withDb((db) =>
+			insertRule(db, {
 				agent,
 				body,
 				contextCost,
 				sourceRun: null,
 				createdAt: "t",
-			});
-		} finally {
-			db.close();
-		}
+			}),
+		);
+	}
+
+	/** `main()` at the fixed test defaults, so each case states only the flag it
+	 * varies. These are the test's defaults, not the CLI's: `parseSelectArgs`
+	 * defaults to runs=3, and the run count is one of the knobs under test. */
+	function runMain(overrides: Partial<Parameters<typeof main>[0]> = {}): void {
+		main({
+			agent: "sql",
+			runs: 2,
+			topUp: 1,
+			uniformTopUp: false,
+			retentionRounds: 2,
+			...overrides,
+		});
 	}
 
 	/**
@@ -141,14 +152,36 @@ describe("select main() orchestration", () => {
 		);
 	}
 
+	/** Wire runSuite so every pass whose label starts with `deadPrefix` is a
+	 * quota death — zero-token failed runs — while every other pass stays
+	 * healthy. The discriminator IS the token spend: a rule-broken run burns
+	 * real tokens, an environment death does not. */
+	function wireDeadPass(deadPrefix: string): void {
+		runSuiteMock.mockImplementation(
+			(
+				_db: unknown,
+				_agent: unknown,
+				tasks: Array<{ id: string }>,
+				options: { runs: number; label: string },
+			): TaskSummary[] => {
+				const dead = options.label.startsWith(deadPrefix);
+				return tasks.map((t) => ({
+					taskId: t.id,
+					results: Array.from({ length: options.runs }, (_, i) => ({
+						sessionId: `${options.label}-${t.id}-${i}`,
+						tokens: dead ? 0 : 1000,
+						completed: !dead,
+					})),
+					meanCompletedTokens: dead ? 0 : 1000,
+					highVariance: false,
+					weight: 1,
+				}));
+			},
+		);
+	}
+
 	it("does nothing when there are no candidates and nothing to audit", () => {
-		main({
-			agent: "sql",
-			runs: 2,
-			topUp: 1,
-			uniformTopUp: false,
-			retentionRounds: 2,
-		});
+		runMain();
 
 		expect(output()).toContain(
 			"No candidates and no active rules to audit; nothing to do.",
@@ -157,33 +190,27 @@ describe("select main() orchestration", () => {
 	});
 
 	it("holds a recovery attempt whose run budget brings no more evidence", () => {
-		const db = openDb();
-		const parent = insertRule(db, {
-			agent: "sql",
-			body: "Use Grep to locate symbols before reading any file.",
-			contextCost: 10,
-			sourceRun: null,
-			createdAt: "t",
+		const child = withDb((db) => {
+			const parent = insertRule(db, {
+				agent: "sql",
+				body: "Use Grep to locate symbols before reading any file.",
+				contextCost: 10,
+				sourceRun: null,
+				createdAt: "t",
+			});
+			decideRule(db, parent, "evicted", 9000, "uncertain after top-up", "t");
+			setRuleUnderpowered(db, parent, true, 3);
+			return insertRule(db, {
+				agent: "sql",
+				body: "Use Grep to locate symbols before reading any files.",
+				contextCost: 10,
+				sourceRun: null,
+				createdAt: "u",
+				recovers: parent,
+			});
 		});
-		decideRule(db, parent, "evicted", 9000, "uncertain after top-up", "t");
-		setRuleUnderpowered(db, parent, true, 3);
-		const child = insertRule(db, {
-			agent: "sql",
-			body: "Use Grep to locate symbols before reading any files.",
-			contextCost: 10,
-			sourceRun: null,
-			createdAt: "u",
-			recovers: parent,
-		});
-		db.close();
 
-		main({
-			agent: "sql",
-			runs: 3,
-			topUp: 1,
-			uniformTopUp: false,
-			retentionRounds: 2,
-		});
+		runMain({ runs: 3 });
 
 		// Held, and the message says exactly what would release it. Crucially it
 		// cost NOTHING: not one suite pass was spent discovering this.
@@ -200,13 +227,7 @@ describe("select main() orchestration", () => {
 		// the bar (2× rent of cost 10 ≈ 22) at full confidence.
 		wireRunSuite({ baseline: [1000, 1000], measured: [500, 500] });
 
-		main({
-			agent: "sql",
-			runs: 2,
-			topUp: 1,
-			uniformTopUp: false,
-			retentionRounds: 2,
-		});
+		runMain();
 
 		const out = output();
 		expect(out).toContain(`[candidate] rule ${id} → ACTIVE`);
@@ -219,12 +240,7 @@ describe("select main() orchestration", () => {
 		// The bundled suites carry no weights, so the decision line must not
 		// claim a weighted verdict.
 		expect(out).not.toContain(", WEIGHTED");
-		const db = openDb();
-		try {
-			expect(getRuleById(db, id)?.status).toBe("active");
-		} finally {
-			db.close();
-		}
+		expect(withDb((db) => getRuleById(db, id))?.status).toBe("active");
 	});
 
 	it("spends the top-up budget on an uncertain candidate, then evicts it", () => {
@@ -239,13 +255,7 @@ describe("select main() orchestration", () => {
 			topUp: [1030, 1010],
 		});
 
-		main({
-			agent: "sql",
-			runs: 2,
-			topUp: 1,
-			uniformTopUp: false,
-			retentionRounds: 2,
-		});
+		runMain();
 
 		const out = output();
 		// The top-up pass ran against allocated tasks (label suffix "-topup").
@@ -256,12 +266,7 @@ describe("select main() orchestration", () => {
 		expect(out).toContain(`[candidate] rule ${id} → EVICTED`);
 		expect(out).toContain("topped-up");
 		expect(out).toContain("LOW-CONFIDENCE");
-		const db = openDb();
-		try {
-			expect(getRuleById(db, id)?.status).toBe("evicted");
-		} finally {
-			db.close();
-		}
+		expect(withDb((db) => getRuleById(db, id))?.status).toBe("evicted");
 	});
 
 	it("--uniform-top-up re-runs the full suite instead of a per-task allocation", () => {
@@ -272,13 +277,7 @@ describe("select main() orchestration", () => {
 			topUp: [1030, 1010],
 		});
 
-		main({
-			agent: "sql",
-			runs: 2,
-			topUp: 1,
-			uniformTopUp: true,
-			retentionRounds: 2,
-		});
+		runMain({ uniformTopUp: true });
 
 		const topUpCalls = runSuiteMock.mock.calls.filter((c) =>
 			(c[3] as { label: string }).label.endsWith("-topup"),
@@ -325,13 +324,7 @@ describe("select main() orchestration", () => {
 		const id = insertCandidate("Batch the heavy path.", 10, "custom");
 		wireRunSuite({ baseline: [1000, 1000], measured: [500, 500] });
 
-		main({
-			agent: "custom",
-			runs: 2,
-			topUp: 1,
-			uniformTopUp: false,
-			retentionRounds: 2,
-		});
+		runMain({ agent: "custom" });
 
 		const out = output();
 		expect(out).toContain(`[candidate] rule ${id} → ACTIVE`);
@@ -342,35 +335,9 @@ describe("select main() orchestration", () => {
 		const id = insertCandidate("Batch related queries into one statement.");
 		// The candidate pass dies environmentally: every run 0 tokens, failed —
 		// the run-2 quota-death profile. The baseline stays healthy.
-		runSuiteMock.mockImplementation(
-			(
-				_db: unknown,
-				_agent: unknown,
-				tasks: Array<{ id: string }>,
-				options: { runs: number; label: string },
-			): TaskSummary[] => {
-				const dead = options.label.startsWith("candidate-");
-				return tasks.map((t) => ({
-					taskId: t.id,
-					results: Array.from({ length: options.runs }, (_, i) => ({
-						sessionId: `${options.label}-${t.id}-${i}`,
-						tokens: dead ? 0 : 1000,
-						completed: !dead,
-					})),
-					meanCompletedTokens: dead ? 0 : 1000,
-					highVariance: false,
-					weight: 1,
-				}));
-			},
-		);
+		wireDeadPass("candidate-");
 
-		main({
-			agent: "sql",
-			runs: 2,
-			topUp: 1,
-			uniformTopUp: false,
-			retentionRounds: 2,
-		});
+		runMain();
 
 		const out = output();
 		expect(out).toContain("ABORTED: environment failure");
@@ -379,52 +346,18 @@ describe("select main() orchestration", () => {
 		expect(out).not.toContain("EVICTED");
 		expect(process.exitCode).toBe(1);
 		process.exitCode = 0;
-		const db = openDb();
-		try {
-			expect(getRuleById(db, id)?.status).toBe("candidate");
-		} finally {
-			db.close();
-		}
+		expect(withDb((db) => getRuleById(db, id))?.status).toBe("candidate");
 	});
 
 	it("prints the re-audit wording on an abort and leaves the rule untouched", () => {
 		const id = insertCandidate("An established rule due for re-audit.");
-		const db = openDb();
-		try {
-			decideRule(db, id, "active", 500, "earned once", "2026-01-01T00:00:00Z");
-		} finally {
-			db.close();
-		}
-		// The without-rule (audit) pass dies environmentally; the baseline is fine.
-		runSuiteMock.mockImplementation(
-			(
-				_db: unknown,
-				_agent: unknown,
-				tasks: Array<{ id: string }>,
-				options: { runs: number; label: string },
-			): TaskSummary[] => {
-				const dead = options.label.startsWith("audit-");
-				return tasks.map((t) => ({
-					taskId: t.id,
-					results: Array.from({ length: options.runs }, (_, i) => ({
-						sessionId: `${options.label}-${t.id}-${i}`,
-						tokens: dead ? 0 : 1000,
-						completed: !dead,
-					})),
-					meanCompletedTokens: dead ? 0 : 1000,
-					highVariance: false,
-					weight: 1,
-				}));
-			},
+		withDb((db) =>
+			decideRule(db, id, "active", 500, "earned once", "2026-01-01T00:00:00Z"),
 		);
+		// The without-rule (audit) pass dies environmentally; the baseline is fine.
+		wireDeadPass("audit-");
 
-		main({
-			agent: "sql",
-			runs: 2,
-			topUp: 1,
-			uniformTopUp: false,
-			retentionRounds: 2,
-		});
+		runMain();
 
 		const out = output();
 		expect(out).toContain("ABORTED: environment failure");
@@ -434,14 +367,9 @@ describe("select main() orchestration", () => {
 		expect(out).not.toContain("remains queued as a candidate");
 		expect(process.exitCode).toBe(1);
 		process.exitCode = 0;
-		const reopened = openDb();
-		try {
-			const rule = getRuleById(reopened, id);
-			expect(rule?.status).toBe("active");
-			expect(rule?.probation).toBe(0);
-		} finally {
-			reopened.close();
-		}
+		const rule = withDb((db) => getRuleById(db, id));
+		expect(rule?.status).toBe("active");
+		expect(rule?.probation).toBe(0);
 	});
 
 	it("marks a decision line ', COMPLETION-DROP' when the with-rule side loses runs", () => {
@@ -474,13 +402,7 @@ describe("select main() orchestration", () => {
 			},
 		);
 
-		main({
-			agent: "sql",
-			runs: 2,
-			topUp: 0,
-			uniformTopUp: false,
-			retentionRounds: 2,
-		});
+		runMain({ topUp: 0 });
 
 		const out = output();
 		expect(out).toContain(`[candidate] rule ${id} → ACTIVE`);
@@ -489,33 +411,19 @@ describe("select main() orchestration", () => {
 
 	it("puts an active rule on probation at its first sub-threshold re-audit", () => {
 		const id = insertCandidate("An old rule that stopped earning.");
-		const db = openDb();
-		try {
-			decideRule(db, id, "active", 100, "earned once", "2026-01-01T00:00:00Z");
-		} finally {
-			db.close();
-		}
+		withDb((db) =>
+			decideRule(db, id, "active", 100, "earned once", "2026-01-01T00:00:00Z"),
+		);
 		// Suite costs the same with and without the rule: worth 0 now.
 		wireRunSuite({ baseline: [1000, 1000], measured: [1000, 1000] });
 
-		main({
-			agent: "sql",
-			runs: 2,
-			topUp: 0,
-			uniformTopUp: false,
-			retentionRounds: 2,
-		});
+		runMain({ topUp: 0 });
 
 		const out = output();
 		expect(out).toContain(`[re-audit] rule ${id} → ACTIVE`);
 		expect(out).toContain("PROBATION (strike 1 of 2)");
-		const reopened = openDb();
-		try {
-			const rule = getRuleById(reopened, id);
-			expect(rule?.status).toBe("active");
-			expect(rule?.probation).toBe(1);
-		} finally {
-			reopened.close();
-		}
+		const rule = withDb((db) => getRuleById(db, id));
+		expect(rule?.status).toBe("active");
+		expect(rule?.probation).toBe(1);
 	});
 });

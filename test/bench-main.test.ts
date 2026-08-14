@@ -18,7 +18,7 @@ import {
 	type runSuite,
 	type TaskSummary,
 } from "../src/bench.js";
-import { insertRule, openDb, recordBaseline, upsertRun } from "../src/db.js";
+import { insertRule, recordBaseline, upsertRun, withDb } from "../src/db.js";
 
 // The spawn boundary (runSuite -> runOnce -> `claude -p`) stays real-run-only;
 // these tests inject a suite stub so the CLI orchestration — task/rule
@@ -71,8 +71,7 @@ describe("bench main() orchestration", () => {
 
 	/** A recent real-work run so meta-cost has a denominator. */
 	function collectRealWork(tokens: number): void {
-		const db = openDb();
-		try {
+		withDb((db) => {
 			upsertRun(db, {
 				agent: "sql",
 				sessionId: "real-1",
@@ -88,18 +87,11 @@ describe("bench main() orchestration", () => {
 				ts: new Date().toISOString(),
 				config: "real",
 			});
-		} finally {
-			db.close();
-		}
+		});
 	}
 
 	it("benches the active set, comparing against frozen baselines", () => {
-		const db = openDb();
-		try {
-			recordBaseline(db, "sql", "sql-01", 1000, "t");
-		} finally {
-			db.close();
-		}
+		withDb((db) => recordBaseline(db, "sql", "sql-01", 1000, "t"));
 		collectRealWork(1_000_000);
 		const suite = fakeSuite(900);
 
@@ -125,13 +117,10 @@ describe("bench main() orchestration", () => {
 	});
 
 	it("reports growth over run1 with a sign and n/a for a failed task", () => {
-		const db = openDb();
-		try {
+		withDb((db) => {
 			recordBaseline(db, "sql", "sql-01", 1000, "t");
 			recordBaseline(db, "sql", "sql-02", 1000, "t");
-		} finally {
-			db.close();
-		}
+		});
 		const suite = vi.fn(((_db, _agent, tasks) =>
 			tasks.map((t) =>
 				// sql-01 got more expensive; sql-02 never completed (0 tokens).
@@ -167,19 +156,15 @@ describe("bench main() orchestration", () => {
 	});
 
 	it("benches a candidate rule on top of the active set without recording baselines", () => {
-		const db = openDb();
-		let id: number;
-		try {
-			id = insertRule(db, {
+		const id = withDb((db) =>
+			insertRule(db, {
 				agent: "sql",
 				body: "Prefer a single query over per-row lookups.",
 				contextCost: 12,
 				sourceRun: null,
 				createdAt: "t",
-			});
-		} finally {
-			db.close();
-		}
+			}),
+		);
 		const suite = fakeSuite(800);
 
 		main(args({ rule: id }), suite);
@@ -198,19 +183,15 @@ describe("bench main() orchestration", () => {
 	});
 
 	it("rejects a missing rule and a rule belonging to another agent", () => {
-		const db = openDb();
-		let backendRule: number;
-		try {
-			backendRule = insertRule(db, {
+		const backendRule = withDb((db) =>
+			insertRule(db, {
 				agent: "backend",
 				body: "A backend-only rule.",
 				contextCost: 10,
 				sourceRun: null,
 				createdAt: "t",
-			});
-		} finally {
-			db.close();
-		}
+			}),
+		);
 
 		expect(() => main(args({ rule: 999 }), fakeSuite(900))).toThrow(
 			/no rule with id 999/,
@@ -234,20 +215,11 @@ describe("bench main() orchestration", () => {
 	});
 
 	it("sums bench tokens across runs for the meta-cost line", () => {
-		const db = openDb();
-		try {
-			recordBaseline(db, "sql", "sql-01", 1000, "t");
-		} finally {
-			db.close();
-		}
+		withDb((db) => recordBaseline(db, "sql", "sql-01", 1000, "t"));
 		collectRealWork(10_000);
-		const dbRead = openDb();
-		let benchTokens = 0;
-		try {
-			benchTokens = benchAgent(dbRead, "sql", args(), fakeSuite(500));
-		} finally {
-			dbRead.close();
-		}
+		const benchTokens = withDb((db) =>
+			benchAgent(db, "sql", args(), fakeSuite(500)),
+		);
 		// 8 golden sql tasks × 1 result × 500 tokens from the stub.
 		// (sql-08 joined the suite as the non-degenerate replacement for sql-01,
 		// whose check passes on the pristine fixture; sql-01 stays frozen.)

@@ -14,16 +14,6 @@
  * Evicted rules are never deleted — they are the negative dataset.
  */
 import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import {
 	assertPosixPlatform,
 	EnvironmentFailureError,
 	type GoldenTask,
@@ -39,7 +29,6 @@ import {
 import { numericFlag, runCli } from "./cli.js";
 import {
 	agentTokenMix,
-	bumpRulesetVersion,
 	decideRule,
 	getActiveRules,
 	getRuleById,
@@ -61,7 +50,6 @@ import {
 } from "./memory.js";
 import { blendedDollarsPerToken, priceFor } from "./pricing.js";
 import { assertKnownAgent } from "./registry.js";
-import { displayText } from "./sanitize.js";
 import {
 	confidenceZ,
 	effectiveRent,
@@ -630,9 +618,9 @@ function assessRobustness(
  * sqrt(var/k) — the legacy formula. */
 function betweenTaskSE(
 	comparisons: TaskComparison[],
-	weights: number[],
 	meanDelta: number,
 ): number {
+	const weights = comparisons.map((c) => c.weight);
 	const sumW = sum(weights);
 	const sumW2 = weights.reduce((acc, w) => acc + w ** 2, 0);
 	const weightedSquares = comparisons.reduce(
@@ -677,7 +665,7 @@ function confidenceBasis(
 		return { standardError: null, basis: null, z };
 	}
 	return {
-		standardError: betweenTaskSE(comparisons, weights, meanDelta),
+		standardError: betweenTaskSE(comparisons, meanDelta),
 		basis: "between-task",
 		z: z * betweenTaskDofInflation(weights, z),
 	};
@@ -1231,14 +1219,9 @@ function measureWithTopUp(
 	const perRound = measured.reduce((total, s) => total + s.results.length, 0);
 	// The retention budget is decided once, from the first (cheapest) look, so
 	// the cost of a decision is knowable before the rounds are spent.
-	//
-	// `topUpBudget` is the ORDINARY round count (`--top-up N`, default 1), which
-	// until now was read only as a boolean: any N > 0 bought exactly one round,
-	// while the CLI validated it as an integer and printed "top-up budget N"
-	// back to the operator. The comment below already described the multi-round
-	// behaviour ("each round allocates against the variance that is still
-	// there") that the code did not implement. At the default N = 1 this
-	// expression is 1 + extra, byte-identical to v0.43.0.
+	// `topUpBudget` is the ORDINARY round count (`--top-up N`, default 1 — see
+	// SelectOptions for why it was a boolean in disguise until v0.44.0); at that
+	// default this is 1 + extra, byte-identical to v0.43.0.
 	const budget = run.topUpBudget + extraRoundsFor(run, plan, assessment);
 	let rounds = 0;
 	while (rounds < budget && assessment.uncertain) {
@@ -1325,24 +1308,24 @@ export interface ProbationOutcome extends ReasonedVerdict {
 }
 
 /**
- * Two-strike probation for re-audits. Admission demanded delta ≥ bar + z·SE,
- * but a point-estimate re-audit retention test churns real earners by
- * regression to the mean (a rule earning exactly the bar fails ~half its
- * re-audits; even a strong earner fails whenever the draw lands a couple of SE
- * low). Keep-when-uncertain is no fix — rent << SE, so a dead rule is always
+ * Two-strike probation for re-audits, as a pure function of the only three
+ * things it depends on. Admission demanded delta ≥ bar + z·SE, but a
+ * point-estimate re-audit retention test churns real earners by regression to
+ * the mean (a rule earning exactly the bar fails ~half its re-audits; even a
+ * strong earner fails whenever the draw lands a couple of SE low).
+ * Keep-when-uncertain is no fix — rent << SE, so a dead rule is always
  * "uncertain" and would never leave. Instead: the first sub-threshold re-audit
  * puts the rule on probation (kept, flagged); a second consecutive one evicts;
- * a passing re-audit clears the strike. A regression still evicts immediately
- * (safety invariant).
- */
-/**
- * Two-strike retention, as a pure function of the only three things it depends
- * on. Split out from `applyProbationPolicy` so the calibration harness can run
- * the REAL policy rather than a re-implementation of it — a re-implemented copy
- * would drift, and a harness that measures a copy measures a fiction.
+ * a passing re-audit clears the strike.
  *
  * `isReAudit` gates the whole policy: a candidate being admitted for the first
- * time gets no probation, and a regression evicts immediately regardless.
+ * time gets no probation, and a regression evicts immediately regardless
+ * (safety invariant).
+ *
+ * Kept pure and exported, rather than folded into the decision path, so the
+ * calibration harness can run the REAL policy instead of a re-implementation of
+ * it — a re-implemented copy would drift, and a harness that measures a copy
+ * measures a fiction.
  */
 export function twoStrikeRetention(
 	isReAudit: boolean,
@@ -1374,19 +1357,6 @@ export function twoStrikeRetention(
 		probation: false,
 		probationWrite: priorProbation !== 0 ? false : null,
 	};
-}
-
-function applyProbationPolicy(
-	plan: MeasurementPlan,
-	regression: boolean,
-	base: ReasonedVerdict,
-): ProbationOutcome {
-	return twoStrikeRetention(
-		plan.kind === "re-audit",
-		plan.rule.probation,
-		regression,
-		base,
-	);
 }
 
 /** Everything the persistence step needs about a finished measurement. Both
@@ -1512,8 +1482,9 @@ function runDecision(run: SelectionRun, plan: MeasurementPlan): Decision {
 		throw deadMeasurementError(run.agent, plan, measured);
 	}
 	const { delta, regression, uncertain, tailRisk, completionDrop } = assessment;
-	const { status, reason, probation, probationWrite } = applyProbationPolicy(
-		plan,
+	const { status, reason, probation, probationWrite } = twoStrikeRetention(
+		plan.kind === "re-audit",
+		plan.rule.probation,
 		regression,
 		finalizeVerdict({
 			delta,

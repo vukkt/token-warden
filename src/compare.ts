@@ -31,8 +31,9 @@ import { assessDelta, type DeltaAssessment } from "./select.js";
 export interface RunDatum {
 	/** input + output + cache_creation — the verdict metric. */
 	processingTokens: number;
-	/** + cache_read — shown for transparency. */
+	/** + cache_read — summed for the meta-cost line, never the verdict metric. */
 	totalTokens: number;
+	/** Reported per task for transparency: it dominates the raw sum. */
 	cacheRead: number;
 	completed: boolean;
 	/** Wall-clock duration (ms) of the run; null for runs recorded before
@@ -51,8 +52,6 @@ interface TaskComparison {
 	taskId: string;
 	baselineProcessingMean: number;
 	candidateProcessingMean: number;
-	baselineTotalMean: number;
-	candidateTotalMean: number;
 	baselineCacheReadMean: number;
 	candidateCacheReadMean: number;
 	/** Completed runs / total runs, per side. */
@@ -128,27 +127,32 @@ function isEnvFailureRun(r: RunDatum): boolean {
 	});
 }
 
-function mean(values: number[]): number {
-	if (values.length === 0) return 0;
+/** Rounded arithmetic mean, or null when there is nothing to average. The
+ * distinction is load-bearing for the advisory latency axis, where a real 0 ms
+ * and "nothing recorded a duration" must not print the same. */
+function meanOrNull(values: number[]): number | null {
+	if (values.length === 0) return null;
 	return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
 }
 
+/** Token mean over completed runs. Collapses "no completed runs" into 0, which
+ * a genuinely 0-token completed run also produces — callers that must tell
+ * those apart read the completed COUNT (see `comparable` below), never this. */
 function completedMean(
 	runs: RunDatum[],
 	pick: (r: RunDatum) => number,
 ): number {
-	return mean(runs.filter((r) => r.completed).map(pick));
+	return meanOrNull(runs.filter((r) => r.completed).map(pick)) ?? 0;
 }
 
 /** Mean duration over completed runs that recorded one; null when none did, so
  * "no latency data" is never conflated with "0 ms". */
 function completedDurationMean(runs: RunDatum[]): number | null {
-	const ds = runs
-		.filter((r) => r.completed && r.durationMs != null)
-		.map((r) => r.durationMs as number);
-	return ds.length === 0
-		? null
-		: Math.round(ds.reduce((a, b) => a + b, 0) / ds.length);
+	return meanOrNull(
+		runs
+			.filter((r) => r.completed && r.durationMs != null)
+			.map((r) => r.durationMs as number),
+	);
 }
 
 /** Mean of the per-task duration means present on a side; null when none. */
@@ -158,10 +162,9 @@ function overallDurationMean(
 ): number | null {
 	const key =
 		side === "baseline" ? "baselineDurationMean" : "candidateDurationMean";
-	const vals = perTask.map((t) => t[key]).filter((n): n is number => n != null);
-	return vals.length === 0
-		? null
-		: Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+	return meanOrNull(
+		perTask.map((t) => t[key]).filter((n): n is number => n != null),
+	);
 }
 
 /** TaskSummary shim carrying the processing-token mean so the existing
@@ -207,8 +210,6 @@ export function compareConfigs(
 			taskId: base.taskId,
 			baselineProcessingMean: baseProc,
 			candidateProcessingMean: candProc,
-			baselineTotalMean: completedMean(base.runs, (r) => r.totalTokens),
-			candidateTotalMean: completedMean(cand.runs, (r) => r.totalTokens),
 			baselineCacheReadMean: completedMean(base.runs, (r) => r.cacheRead),
 			candidateCacheReadMean: completedMean(cand.runs, (r) => r.cacheRead),
 			baselineCompleted: base.runs.filter((r) => r.completed).length,
@@ -252,10 +253,10 @@ export function compareConfigs(
 	// `completedMean` returns the same 0 for both. Restricting to tasks
 	// completed on both sides fixes both: the percentage now describes exactly
 	// the tasks `assessDelta` scored.
-	const overallBaseProc = mean(comparable.map((t) => t.baselineProcessingMean));
-	const overallCandProc = mean(
-		comparable.map((t) => t.candidateProcessingMean),
-	);
+	const overallBaseProc =
+		meanOrNull(comparable.map((t) => t.baselineProcessingMean)) ?? 0;
+	const overallCandProc =
+		meanOrNull(comparable.map((t) => t.candidateProcessingMean)) ?? 0;
 
 	return {
 		subject,
