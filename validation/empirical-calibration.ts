@@ -38,7 +38,7 @@
  * same as any warden command); the harness itself only SELECTs.
  *
  *   npx tsx validation/empirical-calibration.ts [--agent <name>] [--db <path>]
- *     [--mode permutation|bootstrap|eviction|both] [--trials N] [--runs N]
+ *     [--mode permutation|bootstrap|eviction|recovery|both] [--trials N] [--runs N]
  *     [--rent N] [--seed N] [--cycles N] [--retention-rounds N]
  */
 import { pathToFileURL } from "node:url";
