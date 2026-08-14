@@ -21,6 +21,7 @@
 import { summarizeTask, type TaskSummary } from "../src/bench.js";
 import { assessDelta, verdict } from "../src/select.js";
 import { effectiveRent } from "../src/stats.js";
+import { mulberry32 } from "./rng.js";
 
 const BASELINE = 60_000; // representative golden-session token cost
 const RENT = 25; // representative rule context rent (tokens)
@@ -49,18 +50,6 @@ const CS_LIFE_CAP = 500; // cap a simulated life at this many cycles ("> 500")
 // CS policy wins only if BOTH the dead-rule expected exit is at most this many
 // cycles AND the true-earner lifetime is at least two-strike's at every effect.
 const CS_DEAD_EXIT_MAX = 8;
-
-/** Deterministic PRNG (mulberry32) so the calibration is reproducible. */
-function mulberry32(seed: number): () => number {
-	let a = seed >>> 0;
-	return () => {
-		a |= 0;
-		a = (a + 0x6d2b79f5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 /** Standard normal via Box-Muller. */
 function normal(rng: () => number, mean: number, sd: number): number {
@@ -120,7 +109,7 @@ function keptOnce(
 	return verdict({ measuredDelta: a.delta, contextCost: RENT }) === "active";
 }
 
-export function keepRate(
+function keepRate(
 	rng: () => number,
 	trueDelta: number,
 	runs: number,
@@ -218,28 +207,15 @@ function weightedFPReport(model: NoiseModel): void {
 
 /** One simulated re-audit of an ACTIVE rule with known true effect: measures
  * the without-configuration against the with-rule baseline (the real re-audit
- * frame) and returns whether the point estimate lands below the bar — the
- * event that costs a strike (two-strike policy) or the rule (old one-strike
- * policy). Uncertainty is irrelevant here: re-audits are a point-estimate
- * test by design. */
-function reAuditSubThreshold(
-	rng: () => number,
-	trueDelta: number,
-	sd: number,
-	runs: number,
-	model: NoiseModel,
-): boolean {
-	const withRule = side(rng, BASELINE - trueDelta, sd, runs, model);
-	const without = side(rng, BASELINE, sd, runs, model);
-	const a = assessDelta(without, withRule, RENT);
-	if (a.regression || a.delta === null) return true;
-	return verdict({ measuredDelta: a.delta, contextCost: RENT }) === "evicted";
-}
-
-/** One simulated re-audit returning the point ESTIMATE (not just the pass/fail
- * of reAuditSubThreshold) plus the regression flag — the confidence sequence
- * accumulates the running mean of these estimates across cycles. Same draws,
- * same assessDelta path as reAuditSubThreshold; only the return value differs. */
+ * frame) and returns the point ESTIMATE plus the regression flag. The
+ * confidence sequence accumulates the running mean of these estimates across
+ * cycles; `reAuditSubThreshold` reduces the same draw to a pass/fail.
+ *
+ * The two used to be separate functions with identical bodies and different
+ * return statements. Merging them is what keeps the one-strike/two-strike
+ * columns and the confidence-sequence column on the SAME generative model:
+ * two copies could drift, and a churn table comparing policies measured on
+ * different draws would be worthless. */
 function reAuditDelta(
 	rng: () => number,
 	trueDelta: number,
@@ -251,6 +227,21 @@ function reAuditDelta(
 	const without = side(rng, BASELINE, sd, runs, model);
 	const a = assessDelta(without, withRule, RENT);
 	return { delta: a.delta, regression: a.regression };
+}
+
+/** Did the re-audit's point estimate land below the bar — the event that costs
+ * a strike (two-strike policy) or the rule (old one-strike policy)? Uncertainty
+ * is irrelevant here: re-audits are a point-estimate test by design. */
+function reAuditSubThreshold(
+	rng: () => number,
+	trueDelta: number,
+	sd: number,
+	runs: number,
+	model: NoiseModel,
+): boolean {
+	const { delta, regression } = reAuditDelta(rng, trueDelta, sd, runs, model);
+	if (regression || delta === null) return true;
+	return verdict({ measuredDelta: delta, contextCost: RENT }) === "evicted";
 }
 
 /** Per-audit standard error of the re-audit point estimate, estimated as the

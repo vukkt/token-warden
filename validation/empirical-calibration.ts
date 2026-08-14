@@ -69,6 +69,7 @@ import {
 	recoveryMarginFraction,
 	recoveryStrictness,
 } from "../src/stats.js";
+import { mulberry32 } from "./rng.js";
 
 const DEFAULT_TRIALS = 2000;
 /** Permutation deals 2×runs distinct totals per trial, so pools of ≥4 qualify
@@ -86,20 +87,6 @@ const DEFAULT_SEED = 42;
  * first look by one, the least the shipped policy will accept. */
 const DEFAULT_RECOVERY_RUNS = 4;
 const INJECTED_FRACS = [0, 0.02, 0.05, 0.1, 0.2];
-
-/** Deterministic PRNG (mulberry32). Duplicated from validation/calibration.ts
- * on purpose: that file executes its report on import (unconditional
- * `process.exit(main())`), so nothing can be imported from it. */
-function mulberry32(seed: number): () => number {
-	let a = seed >>> 0;
-	return () => {
-		a |= 0;
-		a = (a + 0x6d2b79f5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 export interface ReplicateGroup {
 	taskId: string;
@@ -424,6 +411,21 @@ export function falseEvictionTrial(
  * construction); uncertain verdicts get the hybrid bootstrap top-up from the
  * held-out replicates (see header). Returns whether the null rule was KEPT —
  * a false positive.
+ *
+ * KNOWN DIVERGENCE, measured and left in place (2026-08-14). The top-up below
+ * spends `runsPerSide` on EVERY task; the selector spends the same budget
+ * through `allocateTopUpRuns` (Neyman), as `bootstrapLook` does. Same tokens,
+ * different placement, so this arm is not quite the shipped gate. Paired
+ * execution puts the cost at +1.77pt on the committed fixture and +0.07pt on
+ * the recorded sql pool — always upward, and growing with pool depth, so the
+ * published permutation false-positive rate is a FLOOR.
+ *
+ * NOT corrected here on purpose: it moves a figure FINDINGS.md quotes, and this
+ * repo does not move a calibration number without correcting the document in
+ * the same commit. The argument, the numbers and the CLI that re-derives them
+ * against a real ledger are in validation/topup-placement.ts; the fixture
+ * figures are pinned in test/empirical-calibration.test.ts so the gap cannot
+ * widen unnoticed while the decision is pending.
  */
 export function permutationTrial(
 	rng: () => number,
@@ -716,6 +718,20 @@ function pct(x: number): string {
 	return `${(x * 100).toFixed(1)}%`;
 }
 
+/**
+ * Mean of every replicate in the pool, pooled across tasks WITHOUT re-weighting
+ * by task — a task with more recorded replicates counts for more.
+ *
+ * It is the denominator every injected effect is expressed against ("a rule
+ * saving 5% of a run"), so all three modes must compute it the same way or a
+ * "5%" row would mean a different number of tokens in each table. It was three
+ * copies of the same two lines.
+ */
+function pooledMean(groups: readonly ReplicateGroup[]): number {
+	const all = groups.flatMap((g) => g.totals);
+	return all.reduce((a, b) => a + b, 0) / all.length;
+}
+
 function ci(k: number, n: number): string {
 	const w = wilson(k, n);
 	return `${pct(k / n)} [${pct(w.lo)}, ${pct(w.hi)}]`;
@@ -755,8 +771,7 @@ function reportRecovery(
 				"so this row measures what the depth requirement is worth, not what ships.",
 		);
 	}
-	const all = groups.flatMap((g) => g.totals);
-	const pooledMean = all.reduce((a, b) => a + b, 0) / all.length;
+	const mean = pooledMean(groups);
 	console.log(
 		`recovery of underpowered evictions (first look ${args.bootRuns} runs/side, ` +
 			`second look ${args.recoveryRuns}, ${groups.length} tasks, ${args.trials} trials/row):`,
@@ -776,7 +791,7 @@ function reportRecovery(
 		].join("  "),
 	);
 	for (const frac of INJECTED_FRACS) {
-		const injected = Math.round(pooledMean * frac);
+		const injected = Math.round(mean * frac);
 		const rng = mulberry32(agentSeed ^ (0xc0de + Math.round(frac * 1000)));
 		let keptFirst = 0;
 		let zone = 0;
@@ -870,10 +885,9 @@ function reportAgent(
 		if (bootEligible.length < 2) {
 			console.log(`bootstrap: ${INSUFFICIENT}`);
 		} else {
-			const all = bootEligible.flatMap((g) => g.totals);
-			const pooledMean = all.reduce((a, b) => a + b, 0) / all.length;
+			const mean = pooledMean(bootEligible);
 			console.log(
-				`bootstrap (runs=${args.bootRuns}/side, ${bootEligible.length} tasks, ${args.trials} trials/row, pooled mean ${Math.round(pooledMean)} tok):`,
+				`bootstrap (runs=${args.bootRuns}/side, ${bootEligible.length} tasks, ${args.trials} trials/row, pooled mean ${Math.round(mean)} tok):`,
 			);
 			console.log(
 				[
@@ -882,7 +896,7 @@ function reportAgent(
 				].join("  "),
 			);
 			for (const frac of INJECTED_FRACS) {
-				const injected = Math.round(pooledMean * frac);
+				const injected = Math.round(mean * frac);
 				const rng = mulberry32(agentSeed ^ (0xb00 + Math.round(frac * 1000)));
 				let kept = 0;
 				for (let i = 0; i < args.trials; i++) {
@@ -912,8 +926,7 @@ function reportAgent(
 			console.log(`eviction: ${INSUFFICIENT}`);
 			return;
 		}
-		const all = bootEligible.flatMap((g) => g.totals);
-		const pooledMean = all.reduce((a, b) => a + b, 0) / all.length;
+		const mean = pooledMean(bootEligible);
 		console.log(
 			`false eviction (runs=${args.bootRuns}/side, ${bootEligible.length} tasks, ` +
 				`${args.cycles} consecutive re-audits, ${args.trials} trials/row):`,
@@ -992,7 +1005,7 @@ function reportAgent(
 			// A true saving of 0 is not a false eviction — the rule genuinely is
 			// not earning, and evicting it is the gate working. Skip that row.
 			if (frac === 0) continue;
-			const trueSaving = Math.round(pooledMean * frac);
+			const trueSaving = Math.round(mean * frac);
 			const control = evictionArm(trueSaving, 0);
 			const policy = evictionArm(trueSaving, args.retentionRounds);
 			console.log(

@@ -15,19 +15,8 @@ import {
 	recoveryTrial,
 	wilson,
 } from "../validation/empirical-calibration.js";
-
-/** Local mulberry32 so trial-level tests are deterministic (same generator as
- * the harness, duplicated for the same executes-on-import reason). */
-function mulberry32(seed: number): () => number {
-	let a = seed >>> 0;
-	return () => {
-		a |= 0;
-		a = (a + 0x6d2b79f5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
+import { mulberry32 } from "../validation/rng.js";
+import { comparePlacements } from "../validation/topup-placement.js";
 
 function row(
 	taskHash: string,
@@ -193,6 +182,33 @@ describe("bootstrapTrial", () => {
 			if (bootstrapTrial(rng, tight, 3, 25, 13500)) kept++;
 		}
 		expect(kept / trials).toBeGreaterThan(0.8);
+	});
+});
+
+describe("top-up placement: the harness's arm vs the shipped selector's", () => {
+	// DIVERGENCE, measured and deliberately NOT fixed here. `permutationTrial`
+	// places its top-up UNIFORMLY; the selector places a candidate's top-up with
+	// `allocateTopUpRuns` (Neyman), and `bootstrapLook` models that. Same budget,
+	// different placement. See validation/topup-placement.ts for the argument and
+	// the CLI that re-derives this against a real ledger.
+	//
+	// Pinned so the gap cannot drift unnoticed, and so that whoever corrects
+	// `permutationTrial` has to confront the published figure in the same commit.
+	it("Neyman placement admits MORE null rules than the uniform arm (published pin)", () => {
+		const counts = comparePlacements(NOISY_GROUPS, 2, 25, 20_000, 42);
+		expect(counts.uniform).toBe(1_100);
+		expect(counts.neyman).toBe(1_453);
+		// The paired disagreement is what makes the gap real rather than noise:
+		// the arms see the same split and the same drawn values, so a 6:1 skew in
+		// the discordant pairs cannot be a sampling artifact.
+		expect(counts.uniformOnly).toBe(65);
+		expect(counts.neymanOnly).toBe(418);
+		// 5.50% vs 7.27%: the harness understates the shipped gate by 1.77 points
+		// on this pool. On the shallower real sql pool (3 tasks, 4-5 replicates)
+		// the same execution gives 8.41% vs 8.48% at 50,000 trials — same
+		// direction, far smaller, because a 4-replicate pool leaves the Neyman
+		// allocator almost nothing to concentrate.
+		expect(counts.neyman - counts.uniform).toBeGreaterThan(300);
 	});
 });
 

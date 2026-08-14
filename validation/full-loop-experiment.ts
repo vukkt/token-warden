@@ -3,14 +3,14 @@
  *
  * The naive-headroom experiment proved the engine banks a *curated* rule. This
  * proves the half that's still unproven on real tokens: the **distiller**. It
- * runs the real distiller logic (buildPrompt + the haiku call + parseRulesJson)
+ * runs the real distiller logic (buildPrompt + the model call + parseRulesJson)
  * on a wasteful session transcript to get a rule the SYSTEM proposed, then
  * benchmarks that rule on the naive agent (real runSuite + assessDelta). If the
  * distilled rule survives, the autonomous collect -> distill -> bench -> select
  * loop is demonstrated end-to-end.
  *
- * Spends REAL tokens (one haiku distill call + the benchmark sessions); gated
- * behind --yes. Dry run by default.
+ * Spends REAL tokens (one distill call + the benchmark sessions); gated behind
+ * --yes. Dry run by default.
  *
  * Input: a transcript from a wasteful (naive-agent) session. The easiest way to
  * produce one is to run `validation/naive-headroom-experiment.ts --yes` first
@@ -30,7 +30,13 @@ import {
 	runSuite,
 } from "../src/bench.js";
 import { insertRule, openDb, type RuleRow, type RunRow } from "../src/db.js";
-import { buildPrompt, contextCost, parseRulesJson } from "../src/distill.js";
+import { buildPrompt, parseRulesJson } from "../src/distill.js";
+// `contextCost` lives in rules.ts; distill.ts imports it but re-exports nothing.
+// It moved there in the v0.41.0 shared-module extraction and this script kept
+// importing it from distill.js, which made the module fail to LOAD across three
+// releases — see test/validation-imports.test.ts, added because validation/ is
+// outside tsconfig's include and the typecheck cannot see a break like this.
+import { contextCost } from "../src/rules.js";
 import { assessDelta } from "../src/select.js";
 import { effectiveRent } from "../src/stats.js";
 import { digestTranscript } from "../src/transcript.js";
@@ -38,6 +44,9 @@ import { digestTranscript } from "../src/transcript.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const AGENT = "sql";
 const MAX_DIGEST_CHARS = 8000;
+/** Read once so the plan line cannot name a different model from the one the
+ * distill call spends tokens on. Same default as the shipped distiller. */
+const DISTILL_MODEL = process.env.TOKEN_WARDEN_DISTILL_MODEL ?? "sonnet";
 
 function parseArgs(argv: string[]): {
 	transcript: string | null;
@@ -84,14 +93,13 @@ function distillRule(transcriptPath: string): string | null {
 		model: null,
 	} as unknown as RunRow;
 	const prompt = buildPrompt(synthRun, digest, []);
-	const model = process.env.TOKEN_WARDEN_DISTILL_MODEL ?? "sonnet";
 	const claude = spawnSync(
 		"claude",
 		[
 			"-p",
 			prompt,
 			"--model",
-			model,
+			DISTILL_MODEL,
 			"--max-turns",
 			"1",
 			"--output-format",
@@ -113,7 +121,7 @@ function main(): number {
 	console.log("=== full autonomous-loop experiment ===");
 	console.log(`agent: ${AGENT} (NAIVE def: validation/naive-sql.md)`);
 	console.log(
-		`plan: 1 haiku distill call + ${benchSessions} benchmark sessions (${tasks.length} tasks x ${runs} runs x 2 configs)`,
+		`plan: 1 ${DISTILL_MODEL} distill call + ${benchSessions} benchmark sessions (${tasks.length} tasks x ${runs} runs x 2 configs)`,
 	);
 
 	if (!yes) {
