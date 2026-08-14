@@ -1046,6 +1046,65 @@ describe("selectForAgent retention budget (end-to-end)", () => {
 		expect(labels).toContain(`audit-${id}-topup`);
 		expect(labels).toContain(`audit-${id}-topup2`);
 		expect(labels).toContain(`audit-${id}-topup3`);
+		// Retention rounds re-measure BOTH sides — the whole reason the
+		// one-sided design was discarded. A reference pass per retention round,
+		// and none for the ordinary one.
+		expect(labels).toContain(`audit-${id}-ref2`);
+		expect(labels).toContain(`audit-${id}-ref3`);
+		expect(labels).not.toContain(`audit-${id}-ref`);
+	});
+
+	/**
+	 * PIN on a shipped consequence that is easy to change by accident and
+	 * impossible to see from `retentionRounds` alone.
+	 *
+	 * `decideRule` overwrites `rules.measured_delta` with the delta of every
+	 * decision, including a sub-threshold re-audit that only puts the rule on
+	 * probation. `retentionRounds` sizes the budget from that same column, so
+	 * once strike 1 has banked a sub-threshold draw the margin is negative and
+	 * strike 2 — the cycle that actually evicts — buys nothing.
+	 *
+	 * This is deliberately a pin, not an assertion that the behaviour is right.
+	 * Whether the budget should read the LAST draw or the rule's established
+	 * worth is a policy question that needs the calibration harness and the real
+	 * replicate pool to settle. What must not happen is the behaviour changing
+	 * silently, or the harness modelling one while the selector does the other.
+	 */
+	it("PIN: strike 1 banks a sub-threshold delta, so strike 2 buys no rounds", () => {
+		const id = seedBankedRule();
+		expect(getRuleById(db, id)?.measured_delta).toBe(2000);
+
+		// Noisy enough to stay uncertain, centred so the point estimate lands at
+		// zero: sub-threshold, so each cycle is a strike.
+		const noisy: SuiteRunner = (rules) =>
+			rules.length === 0
+				? [summary("t1", [4000, 12_000]), summary("t2", [4000, 12_000])]
+				: [summary("t1", [8000, 8000]), summary("t2", [8000, 8000])];
+
+		const cycle = (): {
+			rounds: number;
+			status: string;
+			banked: number | null;
+		} => {
+			const report = selectForAgent(db, agent, noisy);
+			const d = report.decisions.find((x) => x.kind === "re-audit");
+			return {
+				rounds: d?.topUpRounds ?? 0,
+				status: d?.status ?? "",
+				banked: getRuleById(db, id)?.measured_delta ?? null,
+			};
+		};
+
+		// Strike 1: the full banked margin is still there, so the budget is spent.
+		const first = cycle();
+		expect(first.rounds).toBe(3);
+		expect(first.status).toBe("active"); // probation, not eviction
+		expect(first.banked).toBe(0); // and the strike overwrote the margin
+
+		// Strike 2 decides the eviction, and gets the ordinary round only.
+		const second = cycle();
+		expect(second.rounds).toBe(1);
+		expect(second.status).toBe("evicted");
 	});
 
 	it("retentionRounds: 0 restores the single-top-up control arm", () => {
