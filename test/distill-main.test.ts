@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -335,6 +335,27 @@ describe("distill() orchestration", () => {
 
 		// Still just the one pre-existing rule: the near-duplicate was skipped.
 		expect(listRulesByAgent(db, "sql")).toHaveLength(1);
+	});
+
+	// distill.log records raw model output that FAILED validation, so nothing
+	// upstream has made it printable. A reply carrying newlines and an escape
+	// sequence must not be able to forge a second log entry or repaint the
+	// terminal when the user cats the log.
+	it("neutralizes an unvalidated model reply before it reaches the log", () => {
+		const runId = seedExpensiveRun();
+		mockSpawn.mockReturnValue(
+			spawnOk("not json\n2026-01-01T00:00:00.000Z forged entry\u001b[31m"),
+		);
+
+		distill({ runId, transcriptPath });
+
+		const log = readFileSync(join(dir, "distill.log"), "utf8");
+		// The reply was rejected, so it is logged verbatim-ish — but flattened.
+		expect(log).toContain("invalid rules JSON");
+		expect(log).toContain("forged entry");
+		// One log entry, not two: the embedded newline did not survive.
+		expect(log.trimEnd().split("\n")).toHaveLength(1);
+		expect(log).not.toContain("\u001b");
 	});
 });
 

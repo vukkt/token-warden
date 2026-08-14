@@ -47,6 +47,7 @@ import {
 	SIMILARITY_THRESHOLD,
 	trigramSimilarity,
 } from "./rules.js";
+import { displayText } from "./sanitize.js";
 import { digestTranscript } from "./transcript.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,11 +78,21 @@ function defaultK(): number {
 	return Number.isInteger(raw) && raw >= 1 && raw <= MAX_K ? raw : 1;
 }
 
+/** Append one line to distill.log. Most of what lands here is untrusted: raw
+ * model replies that failed validation, `claude` stderr, and agent names that
+ * originate in a transcript. The whole line goes through `displayText` (the
+ * same treatment collect.ts gives collect.log) so a newline in a rejected
+ * reply cannot forge a log entry and an escape sequence cannot fire when the
+ * user cats the log. Validated rule bodies are already printable; the
+ * unvalidated values around them are the reason this is not optional. */
 function logLine(message: string): void {
 	try {
 		const logPath = join(dirname(defaultDbPath()), "distill.log");
 		mkdirSync(dirname(logPath), { recursive: true });
-		appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
+		appendFileSync(
+			logPath,
+			`${new Date().toISOString()} ${displayText(message, 2000)}\n`,
+		);
 	} catch {
 		// Logging must never take the distiller down.
 	}
