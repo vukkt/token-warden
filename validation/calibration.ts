@@ -109,7 +109,7 @@ function keptOnce(
 	return verdict({ measuredDelta: a.delta, contextCost: RENT }) === "active";
 }
 
-export function keepRate(
+function keepRate(
 	rng: () => number,
 	trueDelta: number,
 	runs: number,
