@@ -628,18 +628,6 @@ export interface RunResult {
 	timedOut?: boolean;
 }
 
-/**
- * Environment for the spawned benchmark `claude`, hermetically detached from
- * any parent Claude Code session. When the benchmark runs INSIDE a Claude
- * Code session (a /warden-* command, or a remote/cloud session), the child
- * CLI can bind to the parent session and report the PARENT's session id —
- * findTranscript then parses the parent's multi-megatoken transcript as the
- * run's cost (observed live 2026-07-10: a golden run "measured" 30.4M tokens,
- * and recordBaseline would have frozen that as run1). Stripping the
- * session-identity variables forces a fresh child session whose transcript is
- * the run's own. TOKEN_WARDEN_NO_DISTILL serves the same hermeticity goal for
- * the Stop hook.
- */
 /** Session-identity variables stripped from the benchmark child's environment.
  * Exported for the hermeticity test: this list IS the fix for the 30.4M-token
  * false baseline, so a silent shortening of it must fail a test. */
@@ -653,6 +641,18 @@ export const SESSION_ENV_KEYS = [
 	"CLAUDE_SESSION_INGRESS_TOKEN_FILE",
 ] as const;
 
+/**
+ * Environment for the spawned benchmark `claude`, hermetically detached from
+ * any parent Claude Code session. When the benchmark runs INSIDE a Claude
+ * Code session (a /warden-* command, or a remote/cloud session), the child
+ * CLI can bind to the parent session and report the PARENT's session id —
+ * findTranscript then parses the parent's multi-megatoken transcript as the
+ * run's cost (observed live 2026-07-10: a golden run "measured" 30.4M tokens,
+ * and recordBaseline would have frozen that as run1). Stripping the
+ * session-identity variables forces a fresh child session whose transcript is
+ * the run's own. TOKEN_WARDEN_NO_DISTILL serves the same hermeticity goal for
+ * the Stop hook.
+ */
 export function benchChildEnv(): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
