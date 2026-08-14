@@ -11,6 +11,15 @@ export type WardenDb = Database.Database;
 export const RUN_TOTAL_TOKENS_SQL =
 	"input_tokens + output_tokens + cache_creation + cache_read";
 
+/** SQL expression for a run's project bucket. NULL-project rows must fold onto
+ * a literal '(unknown)' rather than stay NULL: they are grouped by this, matched
+ * against it with IN, and compared to a caller's project with `=`, and under
+ * SQL's three-valued NULL semantics all three would silently drop them.
+ * Centralized for the same reason as the token total — the sentinel appears in
+ * both the grouping half and the filtering half of these queries, and a value
+ * that drifted between them would mis-bucket rows rather than fail. */
+const PROJECT_KEY_SQL = "COALESCE(project, '(unknown)')";
+
 /** DB lives outside any repo so the plugin works across projects. */
 export function defaultDbPath(): string {
 	return (
@@ -877,24 +886,22 @@ export function realWorkCurveByProject(
 	db: WardenDb,
 	limit: number,
 ): ProjectCurvePoint[] {
-	// COALESCE so NULL-project rows group as "(unknown)" instead of being
-	// silently dropped by IN's three-valued NULL semantics.
 	return db
 		.prepare<unknown[], ProjectCurvePoint>(
-			`SELECT COALESCE(project, '(unknown)') AS project,
+			`SELECT ${PROJECT_KEY_SQL} AS project,
 				ruleset_version AS rulesetVersion,
 				COUNT(*) AS runs,
 				CAST(AVG(${RUN_TOTAL_TOKENS_SQL}) AS INTEGER) AS avgTokens
 			 FROM runs
 			 WHERE task_hash IS NULL AND completed = 1 AND agent != 'main'
-				AND COALESCE(project, '(unknown)') IN (
-					SELECT COALESCE(project, '(unknown)') FROM runs
+				AND ${PROJECT_KEY_SQL} IN (
+					SELECT ${PROJECT_KEY_SQL} FROM runs
 					WHERE task_hash IS NULL AND completed = 1 AND agent != 'main'
-					GROUP BY COALESCE(project, '(unknown)')
+					GROUP BY ${PROJECT_KEY_SQL}
 					ORDER BY SUM(${RUN_TOTAL_TOKENS_SQL}) DESC
 					LIMIT ?
 				)
-			 GROUP BY COALESCE(project, '(unknown)'), ruleset_version
+			 GROUP BY ${PROJECT_KEY_SQL}, ruleset_version
 			 ORDER BY project, ruleset_version`,
 		)
 		.all(limit);
@@ -941,7 +948,7 @@ export function realWorkTotalsByVersion(
 	agent: string,
 	project?: string,
 ): VersionedTotal[] {
-	const clause = project ? "AND COALESCE(project, '(unknown)') = ?" : "";
+	const clause = project ? `AND ${PROJECT_KEY_SQL} = ?` : "";
 	const params: unknown[] = project ? [agent, project] : [agent];
 	return db
 		.prepare<unknown[], VersionedTotal>(
