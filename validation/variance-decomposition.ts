@@ -40,17 +40,25 @@
  *    shares, because a share estimated from 16 runs is itself an estimate and
  *    this project has been fooled by an unreplicated reading before.
  *
- * 4. THE MECHANISM. Within-task-centred regression of cost on `tool_calls`.
- *    If one number explains the spread, the spread is not a property of the
- *    tasks and no amount of task redesign will move it.
+ * 4. THE MECHANISM. Within-task-centred regression of cost on `tool_calls`,
+ *    plus the turn count's own per-task CV. If one number explains the spread,
+ *    and its CV is flat across tasks of very different sizes, then the spread
+ *    is a property of the AGENT and no task redesign can move it.
  *
  * 5. THE PRIZE. Minimum detectable saving and required runs per side, through
  *    the REAL planner (`minDetectableSaving`, `requiredRunsPerSide` from
- *    src/power.ts), for each metric and for task subsets — priced in tokens,
- *    against the quota windows this environment actually delivers.
+ *    src/power.ts), for each metric — priced in tokens against the quota
+ *    windows this environment actually delivers. Then the same question for
+ *    task SUBSETS at a fixed token budget, which is the only honest way to ask
+ *    whether removing the noisiest tasks would help.
+ *
+ * 6. THE RECORDED ARMS, DIFFERENCED on each metric. A quieter metric is only
+ *    worth switching to if the SIGNAL survives it; this is the check that
+ *    stops a smaller error bar being mistaken for better detectability.
  *
  *   npx tsx validation/variance-decomposition.ts [--agent <name>] [--db <path>]
- *     [--config <name>] [--rent N] [--effect FRACTION] [--trials N] [--seed N]
+ *     [--config <name>] [--ruleset N] [--rent N] [--effect FRACTION]
+ *     [--runs N] [--budget N] [--trials N] [--seed N]
  */
 import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
@@ -100,8 +108,18 @@ export interface AnalysisRun {
 	completed: boolean;
 }
 
-export type MetricName = "total" | "processing" | "costEquivalent";
+export type MetricName =
+	| "total"
+	| "processing"
+	| "costEquivalent"
+	| "toolCalls";
 
+/**
+ * The three COST metrics, in tokens — the ones a burn budget and an MDS are
+ * meaningful for. `toolCalls` is deliberately not among them: it is measured
+ * the same way, but a "minimum detectable saving" denominated in tool calls
+ * would be reported against a token-denominated rent bar.
+ */
 export const METRIC_NAMES: readonly MetricName[] = [
 	"total",
 	"processing",
@@ -109,12 +127,18 @@ export const METRIC_NAMES: readonly MetricName[] = [
 ];
 
 /**
- * The three ways to price a run, in tokens.
+ * The ways to price a run.
  *
  * `costEquivalent` divides through by the input rate so the result is
  * "input-equivalent tokens" — comparable in magnitude to the other two rather
  * than a dollar figure four decimal places wide. `priceFor` is the shipped
  * price path, so TOKEN_WARDEN_PRICE_* overrides apply here too.
+ *
+ * `toolCalls` is the run's agentic turn count. It is here so the same pooled
+ * variance estimator can be pointed at it: if the suite's token noise is
+ * really turn-count noise, then the turn count's OWN coefficient of variation
+ * is the number that has to move, and it is a property of the agent rather
+ * than of any task.
  */
 export function metricValue(run: AnalysisRun, metric: MetricName): number {
 	if (metric === "total") {
@@ -123,6 +147,7 @@ export function metricValue(run: AnalysisRun, metric: MetricName): number {
 	if (metric === "processing") {
 		return run.input + run.output + run.cacheCreation;
 	}
+	if (metric === "toolCalls") return run.toolCalls;
 	const p = priceFor(run.model === "" ? null : run.model);
 	return (
 		(run.input * p.input +
@@ -802,6 +827,28 @@ export function renderReport(
 		out.push(
 			`${metric.padEnd(14)} one extra tool call costs ${fmt(fit.slope).padStart(7)}` +
 				`  ·  explains ${pct(fit.r2)} of the within-task spread (n=${fit.n})`,
+		);
+	}
+	const turns = taskNoise(groups, "toolCalls");
+	if (turns.length > 0) {
+		out.push(
+			`tool calls per run: ${turns
+				.map(
+					(t) =>
+						`${t.taskId} ${t.metricMean.toFixed(1)}+-${Math.sqrt(t.variance).toFixed(2)} (${pct(t.cv)})`,
+				)
+				.join("  ")}`,
+		);
+		const cvs = turns.map((t) => t.cv).sort((a, b) => a - b);
+		out.push(
+			`turn-count CV spans ${pct(cvs[0] as number)}-${pct(cvs[cvs.length - 1] as number)} across tasks whose means span` +
+				` ${Math.min(...turns.map((t) => t.metricMean)).toFixed(1)}-${Math.max(...turns.map((t) => t.metricMean)).toFixed(1)} calls.`,
+		);
+		out.push(
+			"A turn-count CV that is flat across tasks of very different sizes is the finding: the spread is the",
+		);
+		out.push(
+			"AGENT's run-to-run variability, not a defect in any task, and no task rewrite or split can move it.",
 		);
 	}
 
