@@ -229,20 +229,22 @@ export function retrieveSection(
 	query: string,
 	budgetTokens: number,
 ): Retrieval {
-	const scored = bm25(index, query);
+	// One expression answers both "have I already expanded this section" and "is
+	// this chunk a sibling". The two MUST agree, and previously agreed only by
+	// inspection: the dedupe key was a joined string while the sibling test
+	// compared docId and joined path as separate operands. NUL-joined because it
+	// occurs in neither a path nor a heading, so distinct sections cannot collide.
+	const sectionKey = (c: Chunk): string =>
+		`${c.docId}\u0000${c.sectionPath.join("\u0000")}`;
 	const seen = new Set<string>();
 	const expanded: ScoredChunk[] = [];
-	for (const hit of scored) {
-		const key = `${hit.chunk.docId}\u0000${hit.chunk.sectionPath.join("\u0000")}`;
+	for (const hit of bm25(index, query)) {
+		const key = sectionKey(hit.chunk);
 		if (seen.has(key)) continue;
 		seen.add(key);
 		// Siblings keep document order so a reassembled section reads correctly.
 		const siblings = index.chunks
-			.filter(
-				(c) =>
-					c.docId === hit.chunk.docId &&
-					c.sectionPath.join("\u0000") === hit.chunk.sectionPath.join("\u0000"),
-			)
+			.filter((c) => sectionKey(c) === key)
 			.sort((a, b) => a.charStart - b.charStart);
 		for (const sibling of siblings)
 			expanded.push({ chunk: sibling, score: hit.score });
