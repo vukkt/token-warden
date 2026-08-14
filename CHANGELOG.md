@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+### CORRECTION: the retrieval headline was 11.2x and is 3.7x
+
+v0.42.0 published `section` retrieval matching mega-prompt recall from 400
+tokens/question, 11.2x cheaper, with `bm25` at 600 and 7.5x. Both figures were
+wrong, and the fault was in the SCORER, not the retriever.
+
+`valueAppearsIn` decides whether a strategy put the answer into the context, so
+it is the sole source of every recall number in this feature. It built its
+trailing-zero variants with `n.toFixed(dp)` under the guard `n >= 10 ** -dp`.
+`toFixed` pads and rounds, and nothing separated the two — so the accepted set
+contained every rendering a value ROUNDS to. That is a half-unit-in-the-last-place
+tolerance window sitting inside the one function DECISIONS.md says has none.
+
+Against the bundled corpus it was scoring `3.25` as retrieved from "compared with
+**3.0x**", `3.75` from "repurchased **4.1 million shares**", and a `14.5%` segment
+margin from "roughly **15 to 18**" distribution centres. In each case the literal
+value was absent from the retrieved context.
+
+Corrected: the knee moves 400 -> **1,200 tokens/question** and the ratio
+**11.2x -> 3.7x** (`bm25`'s 7.5x moves to 3.7x as well). `section` no longer beats
+`bm25` — they tie, and below the knee `section` is briefly worse. The "87.5% doc
+recall" asterisk disappears, because at the true knee both lexical arms retrieve
+every required document. Every correction is unfavourable to retrieval.
+
+Fixed by keeping a rendering only when `Number(n.toFixed(dp)) === n`. All eight
+pre-existing `valueAppearsIn` tests still pass unchanged, which is the point: they
+used values whose rounded forms did not happen to appear in their fixtures.
+
+**Nothing had pinned any published number.** `sweepBudgets` was tested for
+monotonicity and for the existence of a knee, never its value. `test/ragbench.ts`
+now pins the knee, the 22% floor at 200 tokens and the `section`-is-not-better
+ordering; `test/extract.test.ts` pins the three real false positives.
+
+### Documentation brought back to the evidence
+
+- **README and ROADMAP said end-to-end accuracy "has never been run".** It has —
+  four burns on 2026-07-28, recorded in FINDINGS.md at the time, in a commit that
+  updated FINDINGS and nothing else. What is genuinely unestablished is narrower
+  and is now stated as such: there is no accuracy RANKING between the four arms.
+- **`fin-07` is described as the question lexical retrieval fails.** It does not
+  fail, at any budget at or above the knee. The suite therefore contains no case a
+  semantic retriever would win, which is now the first work item under hybrid
+  retrieval rather than an unstated gap.
+- **`expectConflict` is inert.** `fin-05` claims to be "scored on whether BOTH
+  sources are cited"; nothing reads the flag, and end to end any single grounded
+  fact marks the row correct. Named in `scoreAnswer` and in ROADMAP rather than
+  tightened silently, since changing it would move an accuracy figure no re-run
+  exists to re-establish. `benchmarks/finance/` is byte-identical: benchmark data
+  is frozen and amended by addition, and the 2026-07-28 burns ran against exactly
+  these twelve questions.
+- The retrieval limitation is now listed under README *Limitations* with the
+  corpus size (5 documents, 4,474 tokens) attached.
+
 ### `/warden-dogfood` — the production window is now observable
 
 ROADMAP section 1 (the production dogfood window) had shown no progress since
@@ -35,6 +88,7 @@ golden suite to be measured on and no agent-memory file to be installed into
 declare `memory: user`; the main thread's equivalent is `CLAUDE.md`, which this
 project never writes). The supported path for a real workload is BYOA. See
 DECISIONS.md.
+
 
 ## v0.43.1 — 2026-08-05
 

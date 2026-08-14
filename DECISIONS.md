@@ -737,6 +737,17 @@ all fixed) and motivated one algorithm change.
   CLOSE to something in the document — the failure it exists to catch. Accounting
   parentheses are honored for negatives only, so the sign convention cannot be
   laundered by the check itself.
+  **The implementation broke this invariant from the day it was written, and was
+  fixed on 2026-08-13.** The trailing-zero variants were generated as
+  `n.toFixed(dp)` guarded only by `n >= 10 ** -dp`, which admits every rendering
+  the value ROUNDS to as well as every rendering it PADS to — a half-unit-in-the-
+  last-place tolerance, sitting inside the function this bullet says has none. It
+  is worth recording how it hid: the guard reads as a magnitude check, the
+  comment above it says "trailing-zero variants", and the eight unit tests all
+  used values whose rounded forms happened not to appear in their fixtures. It
+  was found by executing the scorer against the shipped corpus and printing WHICH
+  rendering matched, not by reading it. A rendering is now kept only when
+  `Number(padded) === n`, so padding is admitted and rounding is not.
 
 - **The unanswerable questions are the most important rows in the suite.** Two of
   twelve golden questions have no answer in the corpus, and one of them
@@ -755,11 +766,19 @@ all fixed) and motivated one algorithm change.
   decision, never a side effect of running a report — the same rule every other
   burn path in this repo follows.
 
-- **The 11.2x saving ships with its own caveat attached to the output, not
+- **The retrieval saving ships with its own caveat attached to the output, not
   buried in a doc.** A 5-document corpus is small enough that the mega-prompt is
   a legitimate architecture. `renderSweep` prints that the ratio is a FLOOR for a
   real document set, because a number that travels without its caveat will be
   quoted without it.
+  **CORRECTED 2026-08-13: the ratio is 3.7x, not the 11.2x published here.** The
+  caveat travelled with the number exactly as designed; the number itself was
+  wrong, because the scorer deciding "was the answer retrieved" accepted rounded
+  renderings (see the value-matching bullet above). The knee moves from 400 to
+  1,200 tokens/question and `section` no longer beats `bm25` — they tie. The
+  lesson is narrower than the caveat discipline this bullet describes: a caveat
+  attached to a number is not a substitute for a TEST holding the number in
+  place, and nothing pinned this one. `test/ragbench.test.ts` now does.
 
 - **`full` (the mega-prompt) is a first-class arm, not a straw man.** It has
   recall 1.0 by construction and zero retrieval risk, and below some corpus size

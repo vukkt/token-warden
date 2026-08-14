@@ -220,6 +220,28 @@ describe("sweepBudgets", () => {
 		// than silently reported as a small number.
 		expect(knee(sweepBudgets(SUITE, [1]), "bm25")).toBeNull();
 	});
+
+	it("pins the PUBLISHED knee for the bundled suite", () => {
+		// Added 2026-08-13. Nothing pinned this before, which is how the v0.42.0
+		// headline (`section` at 400 tokens, 11.2x) survived to the README while
+		// resting on a rounding hole in `valueAppearsIn`. The corrected knee is
+		// 1,200 tokens/question for BOTH lexical strategies — 3.7x, not 11.2x —
+		// and any change to the scorer, the chunker or the corpus that moves it
+		// must move the published figure in the same commit.
+		const rows = sweepBudgets(SUITE, [200, 400, 600, 800, 1200, 2400]);
+		for (const strategy of ["bm25", "section"] as const) {
+			expect(knee(rows, strategy)?.budget).toBe(1200);
+		}
+		const at = (strategy: string, budget: number): number =>
+			(rows.find((r) => r.strategy === strategy && r.budget === budget)
+				?.recall ?? -1) * 100;
+		// The knee is real: recall is still far from complete an octave below it.
+		expect(Math.round(at("bm25", 200))).toBe(22);
+		expect(Math.round(at("section", 200))).toBe(22);
+		// `section` does not beat `bm25`. The v0.42.0 claim that it did was the
+		// same artifact; below the knee it is briefly WORSE.
+		expect(at("section", 600)).toBeLessThan(at("bm25", 600));
+	});
 });
 
 describe("parseArgs", () => {

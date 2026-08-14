@@ -120,6 +120,12 @@ export interface QuestionResult {
 	 * For an `expectEmpty` question there is no value to find, so this is scored
 	 * INVERSELY — see `distractorOnly`. Null when the question is not scorable
 	 * on retrieval alone (conflict questions need both sources judged).
+	 *
+	 * The mechanism is `expect.value === null`, NOT `expectConflict` — nothing
+	 * reads that flag. The conflict question is excluded only because it happens
+	 * to carry a null expected value; a conflict question written with a value
+	 * would be scored like any other. Named because the two read the same from
+	 * outside and are not the same rule.
 	 */
 	answerBearing: boolean | null;
 	/**
@@ -514,6 +520,14 @@ export function scoreAnswer(
 	}
 	const expected = question.expect.value;
 	if (expected === null) {
+		// WEAK, and named as such (2026-08-13). This branch is reached by the
+		// CONFLICT question, whose suite entry claims it is "scored on whether BOTH
+		// sources are cited". Nothing reads `expectConflict` — not here, not in
+		// `scoreRetrieval` — so any single grounded fact marks the row correct,
+		// including one about an entirely different metric. It is left as-is rather
+		// than tightened silently, because changing it would move an end-to-end
+		// accuracy figure that no re-run exists to re-establish. Implementing real
+		// conflict scoring is tracked in ROADMAP.
 		return { correct: report.accepted.length > 0, ungrounded };
 	}
 	return {

@@ -984,3 +984,114 @@ they still carry. The guard was verified by injecting a vacuous check
 failed before the guard was committed.
 
 Zero tokens: no model is involved at any point in this audit.
+
+## The 11.2x retrieval headline was a scorer bug (2026-08-13)
+
+Zero tokens. An audit of the v0.42.0 retrieval surface — the newest and least
+validated code in the repo — asked whether its published numbers survive being
+EXECUTED rather than read. One does not.
+
+### The finding
+
+`--sweep` published `section` retrieval matching mega-prompt recall from 400
+tokens/question, **11.2x cheaper**, with `bm25` following at 600 and 7.5x. Those
+figures reached CHANGELOG, DECISIONS, ROADMAP and the README table.
+
+The retriever was never the problem. `valueAppearsIn` — the function that decides
+whether a strategy put the answer into the context, and therefore the sole source
+of every recall number here — enumerated its renderings like this:
+
+```ts
+for (const dp of [0, 1, 2, 3]) {
+  if (n >= 10 ** -dp || n === 0) renderings.add(n.toFixed(dp));
+}
+```
+
+The comment above it says "trailing-zero variants", and the guard reads as a
+magnitude check. But `toFixed` PADS and ROUNDS, and nothing distinguished the
+two, so the set contained every rendering the value rounds to: a tolerance window
+of half a unit in the last place, inside the one function DECISIONS.md states in
+as many words "does not use a tolerance."
+
+### What it was actually matching
+
+Found by printing WHICH rendering matched and against what text, not by reading
+the function. All three are from the bundled corpus, at the published knee:
+
+| question | wanted | matched | in |
+|---|---|---|---|
+| `fin-06` | 3.25 (covenant) | `"3"` | "compared with **3.0x** at December 31, 2023" |
+| `fin-11` | 3.75 (max leverage) | `"4"` | "repurchased **4.1 million shares**" |
+| `fin-04` | 14.5 (segment margin) | `"15"` | "plan calls for roughly **15 to 18**" |
+
+In each case the literal value was absent from the retrieved context. The last
+one is the clearest: a count of distribution centres was accepted as evidence
+that an operating-margin percentage had been retrieved.
+
+### Corrected frontier
+
+```text
+  budget      bm25   section      full        (was: bm25 / section)
+     200       22%       22%      100%        (44% / 44%)
+     400       67%       67%      100%        (89% / 100%)
+     600       89%       78%      100%        (100% / 100%)
+     800       89%       89%      100%
+   1,200      100%      100%      100%
+```
+
+- The knee moves **400 -> 1,200** tokens/question.
+- The headline moves **11.2x -> 3.7x**. `bm25`'s 7.5x moves to 3.7x too.
+- **`section` does not beat `bm25`.** They tie at the knee, and below it
+  `section` is briefly WORSE (78% vs 89% at 600). The ordering that made
+  `section` the recommended strategy was the artifact, not a result.
+- The "87.5% doc recall" asterisk disappears: at the true knee both lexical arms
+  retrieve every required document. It was an artifact of measuring at a budget
+  where retrieval had not actually succeeded.
+
+Direction matters here: every correction is UNFAVOURABLE to retrieval, and the
+bug had been inflating the case for the feature since the day it shipped.
+
+### Why nothing caught it
+
+- **No test pinned any published number.** `sweepBudgets` was tested for
+  monotonicity and for "a knee exists below corpus size"; the knee's VALUE, the
+  ratio and the recall curve were free to move silently. The caveat discipline
+  the project is proud of — the FLOOR warning printed with the ratio — travelled
+  faithfully alongside a wrong number. A caveat is not a test.
+- **The eight `valueAppearsIn` unit tests all used values whose rounded forms did
+  not happen to appear in their fixtures.** Every one still passes unchanged
+  after the fix.
+- The one function whose contract is "no tolerance" is exactly where a tolerance
+  is hardest to see, because the code that implements padding and the code that
+  implements rounding are the same call.
+
+Fixed by keeping a rendering only when `Number(n.toFixed(dp)) === n`, so padding
+is admitted and rounding is not. `test/extract.test.ts` pins the three real cases
+and `test/ragbench.test.ts` pins the corrected knee, the 22% floor and the
+`section`-is-not-better ordering.
+
+### Two smaller findings from the same audit
+
+- **`expectConflict` is inert.** `fin-05`'s suite entry says it is "scored on
+  whether BOTH sources are cited". Nothing reads the flag. On retrieval the row
+  is scored on nothing; end to end, `scoreAnswer` marks it correct if ANY
+  grounded fact came back — verified by handing it a single accepted fact about
+  consolidated revenue, a metric the question does not ask about, which scored
+  `correct: true`. Named in `scoreAnswer` and in ROADMAP rather than silently
+  tightened, since changing it would move an accuracy figure no re-run exists to
+  re-establish. `benchmarks/finance/` is left BYTE-IDENTICAL — benchmark data in
+  this repo is frozen and amended by addition, and the recorded burns of
+  2026-07-28 ran against exactly these twelve questions.
+- **`fin-07` does not fail.** The paraphrase question is described in README and
+  ROADMAP as the case lexical retrieval fails and the bar a semantic retriever
+  must clear. Both lexical arms answer it at every budget at or above the knee,
+  on the corrected scorer, and the paired burn agreed. The suite therefore
+  contains no case a hybrid retriever would win — the bar as written is one BM25
+  already clears.
+
+### Reproduce (no tokens)
+
+```bash
+npx tsx src/ragbench.ts --sweep
+npx vitest run test/ragbench.test.ts test/extract.test.ts
+```
