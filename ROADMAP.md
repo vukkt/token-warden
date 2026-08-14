@@ -64,9 +64,22 @@ what remains is running the experiments and recording their results:
   burns (~16M tokens plus ~1.6M characterization) were each killed by quota
   exhaustion, and the effect sits below the `sql` suite's derailment-noise floor
   at any run count the available quota windows can hold (see FINDINGS.md).
-  Re-open only after per-run suite cost and tail variance come down, or on an
-  environment with larger windows. **Do not re-run it as-is** — that is a fourth
-  ~16M-token burn with the same expected outcome.
+  Re-open only on an environment with larger windows. **Do not re-run it as-is**
+  — that is a fourth ~16M-token burn with the same expected outcome.
+
+  *Update (2026-08-13): the "re-open after suite variance comes down" escape
+  clause is withdrawn, because that route has now been measured and does not
+  exist.* The gate's own metric needs **35 runs/side and 49.2M tokens** to
+  resolve the recorded +10,851 effect at 80% power — six to sixteen times the
+  largest quota window ever observed here. The most aggressive suite narrowing
+  possible (keep only the three quietest tasks) still needs **16M tokens and 282
+  runs**, i.e. more than the burns that already died twice. And re-scoring on a
+  quieter metric makes it WORSE, not better: differencing burn 1's own arms
+  gives delta/SE of 0.63 on total tokens, 0.56 on cost-equivalent and 0.26 on
+  processing — the error bar shrinks 28-fold and detectability drops, because
+  the effect lives in cache-read, the noisiest and cheapest component. The
+  effect is 0.77 of one tool call against a run-to-run turn spread of 1.0-4.2
+  calls: smaller than one unit of the thing that varies.
 - **Out-of-fixture confirmation.** Shipped: `/warden-confirm` joins fixture
   receipts with the production cohort verdict per agent (corroborated /
   contradicted / unconfirmed), `--gate` for CI. Open: the dogfood window that
@@ -92,14 +105,39 @@ what remains is running the experiments and recording their results:
   and exit 1". Three read-only import allowlists (`contradict`, `cohort`,
   `confirm`) name the helper explicitly and were updated deliberately —
   `withDb` is the same capability as `openDb`, which is why those tests exist.
-- **Cut golden-suite variance further.** Real runs varied >25%, burying modest
-  savings under noise. Shipped in v0.34.0: `/warden-health` now ranks golden
-  tasks by run-to-run variance so the noisiest are named with evidence. Also
-  shipped in v0.36.0: the splits themselves — `sql-06`/`sql-07` and
-  `testing-05`/`testing-06`, added as new files with the frozen originals
-  untouched. Open: cutting per-run cost and tail variance further, which
-  FINDINGS.md now names as the binding constraint on every future burn — nothing
-  below the derailment-noise floor is measurable until it moves.
+- **Cut golden-suite variance further — CLOSED as not achievable this way
+  (2026-08-13).** The premise was that specific tasks are noisy and that
+  narrower replacements would quiet the suite. Shipped along the way and still
+  useful: `/warden-health`'s per-task variance ranking (v0.34.0) and the splits
+  `sql-06`/`sql-07`, `testing-05`/`testing-06` (v0.36.0, added as new files with
+  the frozen originals untouched). But
+  [`validation/variance-decomposition.ts`](validation/variance-decomposition.ts)
+  measured the premise and it is false.
+
+  **The noise is not in the tasks.** One integer — the run's `tool_calls` count
+  — explains **94.6%** of the within-task spread the gate consumes, and its
+  coefficient of variation is flat at 22.4%-42.0% across tasks whose mean turn
+  counts span 3.8 to 13.3. `sql-03`/`04`/`05` dominate the standard error
+  because they are two to three times bigger, not because they are defective.
+  There is nothing in them to fix, and a narrower task inherits the same CV.
+
+  **Removing them does not help, and the honest arithmetic says why.** At a
+  fixed 6M-token budget (the generous end of a real quota window), discarding
+  four of the seven tasks moves the gate's statistic from 0.97 to 1.78 against
+  the 2.84 it needs — because under a proportional effect a dropped task takes
+  its SIGNAL with its noise. Comparing standard errors alone makes this look
+  like progress; it is not. Full numbers, with bootstrap intervals and the
+  trial-count stability check, in FINDINGS.md; each one pinned in
+  `test/variance-published.test.ts`.
+
+  Two things remain genuinely open, and neither is task design. (i) The gate's
+  metric weights cache-read at 1.0 when it bills at 0.1, so it prices an agentic
+  turn at **5.7x** its real cost — switching to a cost-weighted metric is
+  defensible on economics alone, but it re-defines the estimand behind every
+  published FP/FN number and so is re-calibration work, not a tweak. It would
+  NOT have rescued the compression burn (see below). (ii) The agent's own
+  turn-count variability is the only quantity that would move the floor, and
+  nothing in this repository controls it.
 - **False evictions: a good rule binned by an unlucky sample.** The gate's
   false-POSITIVE rate is measured (8.8% empirically, FINDINGS.md); its
   false-NEGATIVE rate is not. A rule that genuinely earns can draw one bad

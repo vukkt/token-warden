@@ -924,7 +924,7 @@ export function runOnce(
 					` (signal ${check.signal ?? "unknown"}; timeout ${CHECK_TIMEOUT_MS}ms)`,
 			);
 		}
-		const completed = check.status === 0;
+		const checkPassed = check.status === 0;
 
 		const transcriptPath = deps.findTranscript(sessionId);
 		if (!transcriptPath) {
@@ -933,6 +933,26 @@ export function runOnce(
 		const parsed = parseTranscript(deps.readTranscript(transcriptPath));
 		const tokens = totalTokens(parsed);
 		const ts = deps.now();
+
+		// BUG FIX (2026-08-13): a run that burned essentially no tokens measured
+		// NOTHING. Its transcript is empty because the environment died (quota
+		// exhaustion, API outage), not because the agent did the job for free —
+		// no `claude -p` invocation that reaches a model costs under a thousand
+		// tokens. The success check cannot tell the difference, and on a task
+		// whose check passes on the PRISTINE fixture (`sql-01`, `backend-03`;
+		// pinned by test/golden-checks.test.ts) it reports SUCCESS for a run
+		// that never made a single tool call. Every environment-failure guard
+		// downstream requires `completed = false`, so such a run slips past the
+		// streak abort, past the pass-level majority check, and lands in the
+		// task mean as a zero-cost success.
+		//
+		// Not hypothetical. The live ledger carries 19 rows on `sql-01` from the
+		// two quota-killed compression burns (2026-07-08/09) recorded
+		// `completed = 1` at 0 tokens; they drag that task's recorded mean from
+		// 70,855 to 46,815 tokens, a 34% downward bias the gate reads as a
+		// genuine measurement. One of them would also have frozen a 0-token
+		// `run1` baseline below, permanently, had the pass recorded baselines.
+		const completed = checkPassed && tokens >= ENV_FAILURE_TOKEN_FLOOR;
 
 		upsertRun(db, {
 			agent: task.agent,
@@ -1005,9 +1025,23 @@ export function summarizeTask(
 	return { taskId, results, meanCompletedTokens: avg, highVariance, weight };
 }
 
-/** True when a run's failure is environmental (quota death, API error, crash)
+/**
+ * True when a run's failure is environmental (quota death, API error, crash)
  * rather than evidence about the rule: it failed AND burned essentially no
- * tokens. Failed runs with real token spend stay regression signal. */
+ * tokens. Failed runs with real token spend stay regression signal.
+ *
+ * The `!completed` half is load-bearing in BOTH directions, which is why it is
+ * still here after the 2026-08-13 vacuous-check fix. A quota death that a
+ * pristine-passing `success_check` waved through as a SUCCESS is caught
+ * upstream now — `runOnce` refuses to record a sub-floor run as completed — so
+ * this predicate never sees one from the live runner. Dropping the flag here as
+ * well was tried and reverted: this function is also applied to SYNTHETIC
+ * summaries by the calibration harnesses and the selector's own tests, which
+ * work at token scales of hundreds by design, and a bare magnitude test
+ * reclassifies their runs as environment failures and aborts the pass.
+ * Recorded rows read back from the ledger are handled where they are read
+ * (`compare.ts`), at their real magnitude.
+ */
 export function isEnvironmentFailure(result: RunResult): boolean {
 	return !result.completed && result.tokens < ENV_FAILURE_TOKEN_FLOOR;
 }

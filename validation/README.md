@@ -61,6 +61,22 @@ for one agent (the `sql` suite is 5 tasks, `testing` 4, `frontend`/`backend` 3).
 `sql` is the cheapest per task; `testing`/`backend` have heavier tasks. Requires
 `claude` logged in.
 
+## Where the suite's noise comes from (no tokens)
+
+```bash
+npx tsx validation/variance-decomposition.ts --agent sql \
+  --config candidate --ruleset 4
+```
+
+Reads the recorded golden runs READ-ONLY and attributes the suite's variance:
+per-task noise on three metrics (total / processing / cost-equivalent), each
+task's bootstrapped share of the standard error the gate consumes, the
+regression of cost on `tool_calls` that identifies the mechanism, the burn size
+a given effect would need, and — the question worth asking before any suite
+redesign — what a fixed token budget buys on narrower subsets. Scope with
+`--config`/`--ruleset` to a single A/B burn to also get its two arms
+differenced. See FINDINGS.md, "Where the variance actually lives".
+
 ## Prove the harness works *without* spending tokens
 
 ```bash
