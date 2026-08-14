@@ -166,7 +166,7 @@ what remains is running the experiments and recording their results:
   than spreading the same runs uniformly at 2 runs/task, where the variance
   estimate carries one degree of freedom. See FINDINGS.md; the lesson is that
   the admission side's tuning does not transfer to the retention side.
-  **The recovery half is MERGED and unreleased.** The dedupe can now tell a measured
+  **The recovery half SHIPPED in v0.44.0.** The dedupe can now tell a measured
   negative from a measured positive too noisy to bank: an eviction whose point
   estimate cleared the bar and reached at least half the gate's confidence
   margin is classed `underpowered`, and such a body may be proposed once more.

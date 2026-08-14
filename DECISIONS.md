@@ -557,7 +557,7 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
-## Unreleased — the dogfood window never started, and `main` stays out of the loop
+## v0.44.0 — the dogfood window never started, and `main` stays out of the loop
 
 - **The window was not weak, it was inert — and the failure was invisible.**
   The live ledger holds nine real-work sessions: eight under `main` and one
@@ -611,7 +611,7 @@ all fixed) and motivated one algorithm change.
   a `--gate` mode (an inert window is a state to read, not a CI failure) and any
   write path — the module imports four SELECT helpers and a test pins that list.
 
-## Unreleased — recovering evictions the gate could not resolve
+## v0.44.0 — recovering evictions the gate could not resolve
 
 - **"Evicted" was two facts wearing one name.** A candidate can be evicted
   because its measured saving is at or below the 2x-rent bar, or because the

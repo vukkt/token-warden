@@ -12,10 +12,10 @@ that it saves more tokens than it costs to carry. Rules that fail are evicted. R
 already passed are re-tested and evicted when they stop paying.
 
 ```text
-  version    0.43.1 released, main ahead    tests       1414 across 56 files
-  released   48 versions                    coverage    97.09% lines, CI floor
-  built      2026-06 to now                 source      44 modules, 16.2k lines
-  license    MIT                            test code   22.2k lines
+  version    0.44.0            tests       1414 across 56 files
+  released   50 versions       coverage    97.09% lines, CI-enforced floor
+  built      2026-06 to now    source      44 modules, 16.2k lines
+  license    MIT               test code   22.2k lines
 ```
 
 ---

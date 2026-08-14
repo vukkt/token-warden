@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.44.0 — 2026-08-14
 
 ### CORRECTION: the retrieval headline was 11.2x and is 3.7x
 
