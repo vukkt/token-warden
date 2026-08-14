@@ -31,8 +31,9 @@ import { assessDelta, type DeltaAssessment } from "./select.js";
 export interface RunDatum {
 	/** input + output + cache_creation — the verdict metric. */
 	processingTokens: number;
-	/** + cache_read — shown for transparency. */
+	/** + cache_read — summed for the meta-cost line, never the verdict metric. */
 	totalTokens: number;
+	/** Reported per task for transparency: it dominates the raw sum. */
 	cacheRead: number;
 	completed: boolean;
 	/** Wall-clock duration (ms) of the run; null for runs recorded before
@@ -51,8 +52,6 @@ interface TaskComparison {
 	taskId: string;
 	baselineProcessingMean: number;
 	candidateProcessingMean: number;
-	baselineTotalMean: number;
-	candidateTotalMean: number;
 	baselineCacheReadMean: number;
 	candidateCacheReadMean: number;
 	/** Completed runs / total runs, per side. */
@@ -207,8 +206,6 @@ export function compareConfigs(
 			taskId: base.taskId,
 			baselineProcessingMean: baseProc,
 			candidateProcessingMean: candProc,
-			baselineTotalMean: completedMean(base.runs, (r) => r.totalTokens),
-			candidateTotalMean: completedMean(cand.runs, (r) => r.totalTokens),
 			baselineCacheReadMean: completedMean(base.runs, (r) => r.cacheRead),
 			candidateCacheReadMean: completedMean(cand.runs, (r) => r.cacheRead),
 			baselineCompleted: base.runs.filter((r) => r.completed).length,
