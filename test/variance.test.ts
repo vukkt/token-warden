@@ -982,6 +982,91 @@ describe("retentionRounds (variance-proportional re-audit budget)", () => {
 			MAX_RETENTION_ROUNDS,
 		);
 	});
+
+	/**
+	 * The budget is `min(MAX, max(0, ceil(z·SE/margin) - 1))`, so every branch
+	 * of it lands on an integer boundary and every input can be degenerate. A
+	 * budget that silently became NaN, negative or fractional would not throw —
+	 * it would be handed to `Math.min` in `extraRoundsFor` and quietly resolve
+	 * to a plausible round count. These pin the boundaries themselves rather
+	 * than samples near them.
+	 */
+	describe("boundaries", () => {
+		/** `assessed` with the confidence multiple opened up too. */
+		function withZ(se: number | null, z: number): DeltaAssessment {
+			return { ...assessed(se), confidenceMultiple: z };
+		}
+
+		it("treats the bar as exclusive: margin 0 buys nothing, margin epsilon buys", () => {
+			expect(retentionRounds(bar, 25, assessed(5000))).toBe(0);
+			expect(retentionRounds(bar + 1e-9, 25, assessed(5000))).toBe(2);
+			expect(retentionRounds(bar - 1e-9, 25, assessed(5000))).toBe(0);
+		});
+
+		it("grades on ceil(threat) - 1 exactly at the integer thresholds", () => {
+			// margin = 10_000 - bar; pick the SE that puts threat on the integer.
+			const margin = 10_000 - bar;
+			const seFor = (threat: number): number => (threat * margin) / 2;
+			expect(retentionRounds(10_000, 25, assessed(seFor(1)))).toBe(0);
+			expect(retentionRounds(10_000, 25, assessed(seFor(2)))).toBe(1);
+			expect(retentionRounds(10_000, 25, assessed(seFor(3)))).toBe(2);
+			// Just past a threshold rounds up, which is the intended direction:
+			// a noise band that reaches even slightly further buys the round.
+			expect(retentionRounds(10_000, 25, assessed(seFor(1.0000001)))).toBe(1);
+		});
+
+		it("returns 0, never NaN or a negative, for a degenerate standard error", () => {
+			for (const se of [
+				0,
+				-5000,
+				Number.POSITIVE_INFINITY,
+				Number.NEGATIVE_INFINITY,
+				Number.NaN,
+			]) {
+				expect(retentionRounds(10_000, 25, assessed(se))).toBe(0);
+			}
+		});
+
+		it("returns 0, never NaN, for a degenerate banked delta", () => {
+			for (const banked of [
+				Number.NaN,
+				Number.POSITIVE_INFINITY,
+				Number.NEGATIVE_INFINITY,
+				-10_000,
+			]) {
+				expect(retentionRounds(banked, 25, assessed(5000))).toBe(0);
+			}
+		});
+
+		it("returns 0, never NaN, for a degenerate confidence multiple", () => {
+			for (const z of [Number.NaN, 0, -2, Number.POSITIVE_INFINITY]) {
+				expect(retentionRounds(10_000, 25, withZ(5000, z))).toBe(0);
+			}
+		});
+
+		it("is always an integer in 0..MAX over a wide random sweep", () => {
+			// A fractional or out-of-range budget would survive `Math.min` in
+			// `extraRoundsFor` and be spent as if it were a round count.
+			const rand = lcg(4242);
+			for (let trial = 0; trial < 2000; trial++) {
+				const banked = (rand() - 0.2) * 10 ** Math.floor(rand() * 7);
+				const se = (rand() - 0.1) * 10 ** Math.floor(rand() * 8);
+				const cost = Math.floor(rand() * 500);
+				const n = retentionRounds(banked, cost, assessed(se));
+				expect(Number.isInteger(n)).toBe(true);
+				expect(n).toBeGreaterThanOrEqual(0);
+				expect(n).toBeLessThanOrEqual(MAX_RETENTION_ROUNDS);
+			}
+		});
+
+		it("survives a zero context cost, where the bar itself is zero", () => {
+			// effectiveRent(0) is 0, so the margin is the whole banked delta and
+			// the division below it must not become 0/0.
+			expect(retentionRounds(0, 0, assessed(5000))).toBe(0);
+			expect(retentionRounds(10_000, 0, assessed(5000))).toBe(0);
+			expect(retentionRounds(10_000, 0, assessed(20_000))).toBe(2);
+		});
+	});
 });
 
 describe("selectForAgent retention budget (end-to-end)", () => {
