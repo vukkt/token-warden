@@ -207,28 +207,15 @@ function weightedFPReport(model: NoiseModel): void {
 
 /** One simulated re-audit of an ACTIVE rule with known true effect: measures
  * the without-configuration against the with-rule baseline (the real re-audit
- * frame) and returns whether the point estimate lands below the bar — the
- * event that costs a strike (two-strike policy) or the rule (old one-strike
- * policy). Uncertainty is irrelevant here: re-audits are a point-estimate
- * test by design. */
-function reAuditSubThreshold(
-	rng: () => number,
-	trueDelta: number,
-	sd: number,
-	runs: number,
-	model: NoiseModel,
-): boolean {
-	const withRule = side(rng, BASELINE - trueDelta, sd, runs, model);
-	const without = side(rng, BASELINE, sd, runs, model);
-	const a = assessDelta(without, withRule, RENT);
-	if (a.regression || a.delta === null) return true;
-	return verdict({ measuredDelta: a.delta, contextCost: RENT }) === "evicted";
-}
-
-/** One simulated re-audit returning the point ESTIMATE (not just the pass/fail
- * of reAuditSubThreshold) plus the regression flag — the confidence sequence
- * accumulates the running mean of these estimates across cycles. Same draws,
- * same assessDelta path as reAuditSubThreshold; only the return value differs. */
+ * frame) and returns the point ESTIMATE plus the regression flag. The
+ * confidence sequence accumulates the running mean of these estimates across
+ * cycles; `reAuditSubThreshold` reduces the same draw to a pass/fail.
+ *
+ * The two used to be separate functions with identical bodies and different
+ * return statements. Merging them is what keeps the one-strike/two-strike
+ * columns and the confidence-sequence column on the SAME generative model:
+ * two copies could drift, and a churn table comparing policies measured on
+ * different draws would be worthless. */
 function reAuditDelta(
 	rng: () => number,
 	trueDelta: number,
@@ -240,6 +227,21 @@ function reAuditDelta(
 	const without = side(rng, BASELINE, sd, runs, model);
 	const a = assessDelta(without, withRule, RENT);
 	return { delta: a.delta, regression: a.regression };
+}
+
+/** Did the re-audit's point estimate land below the bar — the event that costs
+ * a strike (two-strike policy) or the rule (old one-strike policy)? Uncertainty
+ * is irrelevant here: re-audits are a point-estimate test by design. */
+function reAuditSubThreshold(
+	rng: () => number,
+	trueDelta: number,
+	sd: number,
+	runs: number,
+	model: NoiseModel,
+): boolean {
+	const { delta, regression } = reAuditDelta(rng, trueDelta, sd, runs, model);
+	if (regression || delta === null) return true;
+	return verdict({ measuredDelta: delta, contextCost: RENT }) === "evicted";
 }
 
 /** Per-audit standard error of the re-audit point estimate, estimated as the

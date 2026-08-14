@@ -718,6 +718,20 @@ function pct(x: number): string {
 	return `${(x * 100).toFixed(1)}%`;
 }
 
+/**
+ * Mean of every replicate in the pool, pooled across tasks WITHOUT re-weighting
+ * by task — a task with more recorded replicates counts for more.
+ *
+ * It is the denominator every injected effect is expressed against ("a rule
+ * saving 5% of a run"), so all three modes must compute it the same way or a
+ * "5%" row would mean a different number of tokens in each table. It was three
+ * copies of the same two lines.
+ */
+function pooledMean(groups: readonly ReplicateGroup[]): number {
+	const all = groups.flatMap((g) => g.totals);
+	return all.reduce((a, b) => a + b, 0) / all.length;
+}
+
 function ci(k: number, n: number): string {
 	const w = wilson(k, n);
 	return `${pct(k / n)} [${pct(w.lo)}, ${pct(w.hi)}]`;
@@ -757,8 +771,7 @@ function reportRecovery(
 				"so this row measures what the depth requirement is worth, not what ships.",
 		);
 	}
-	const all = groups.flatMap((g) => g.totals);
-	const pooledMean = all.reduce((a, b) => a + b, 0) / all.length;
+	const mean = pooledMean(groups);
 	console.log(
 		`recovery of underpowered evictions (first look ${args.bootRuns} runs/side, ` +
 			`second look ${args.recoveryRuns}, ${groups.length} tasks, ${args.trials} trials/row):`,
@@ -778,7 +791,7 @@ function reportRecovery(
 		].join("  "),
 	);
 	for (const frac of INJECTED_FRACS) {
-		const injected = Math.round(pooledMean * frac);
+		const injected = Math.round(mean * frac);
 		const rng = mulberry32(agentSeed ^ (0xc0de + Math.round(frac * 1000)));
 		let keptFirst = 0;
 		let zone = 0;
@@ -872,10 +885,9 @@ function reportAgent(
 		if (bootEligible.length < 2) {
 			console.log(`bootstrap: ${INSUFFICIENT}`);
 		} else {
-			const all = bootEligible.flatMap((g) => g.totals);
-			const pooledMean = all.reduce((a, b) => a + b, 0) / all.length;
+			const mean = pooledMean(bootEligible);
 			console.log(
-				`bootstrap (runs=${args.bootRuns}/side, ${bootEligible.length} tasks, ${args.trials} trials/row, pooled mean ${Math.round(pooledMean)} tok):`,
+				`bootstrap (runs=${args.bootRuns}/side, ${bootEligible.length} tasks, ${args.trials} trials/row, pooled mean ${Math.round(mean)} tok):`,
 			);
 			console.log(
 				[
@@ -884,7 +896,7 @@ function reportAgent(
 				].join("  "),
 			);
 			for (const frac of INJECTED_FRACS) {
-				const injected = Math.round(pooledMean * frac);
+				const injected = Math.round(mean * frac);
 				const rng = mulberry32(agentSeed ^ (0xb00 + Math.round(frac * 1000)));
 				let kept = 0;
 				for (let i = 0; i < args.trials; i++) {
@@ -914,8 +926,7 @@ function reportAgent(
 			console.log(`eviction: ${INSUFFICIENT}`);
 			return;
 		}
-		const all = bootEligible.flatMap((g) => g.totals);
-		const pooledMean = all.reduce((a, b) => a + b, 0) / all.length;
+		const mean = pooledMean(bootEligible);
 		console.log(
 			`false eviction (runs=${args.bootRuns}/side, ${bootEligible.length} tasks, ` +
 				`${args.cycles} consecutive re-audits, ${args.trials} trials/row):`,
@@ -994,7 +1005,7 @@ function reportAgent(
 			// A true saving of 0 is not a false eviction — the rule genuinely is
 			// not earning, and evicting it is the gate working. Skip that row.
 			if (frac === 0) continue;
-			const trueSaving = Math.round(pooledMean * frac);
+			const trueSaving = Math.round(mean * frac);
 			const control = evictionArm(trueSaving, 0);
 			const policy = evictionArm(trueSaving, args.retentionRounds);
 			console.log(
