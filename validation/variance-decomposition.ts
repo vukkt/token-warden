@@ -285,10 +285,15 @@ export function bootstrapShares(
 	const samples = new Map<string, number[]>(ids.map((id) => [id, []]));
 	const usable = groups.filter((g) => g.runs.length >= 2);
 	for (let trial = 0; trial < trials; trial++) {
+		// Draw n runs WITH replacement from within the same pass, n unchanged, so
+		// the resample respects the configuration boundaries the point estimate
+		// does. One rng() call per run, in order — the same consumption the old
+		// `runs.map((_, __, all) => ...)` form had, written so it reads as a draw.
 		const resampled: PassGroup[] = usable.map((g) => ({
 			...g,
-			runs: g.runs.map(
-				(_, __, all) => all[Math.floor(rng() * all.length)] as AnalysisRun,
+			runs: Array.from(
+				{ length: g.runs.length },
+				() => g.runs[Math.floor(rng() * g.runs.length)] as AnalysisRun,
 			),
 		}));
 		const noises = taskNoise(resampled, metric);
@@ -463,16 +468,23 @@ export function armDelta(
 		);
 		byTask.set(group.taskId, passes);
 	}
+	const variance = (xs: number[]): number => {
+		const m = mean(xs);
+		return xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1);
+	};
 	const perTask: Array<{ taskId: string; delta: number }> = [];
 	let varSum = 0;
-	for (const [taskId, passes] of [...byTask].sort()) {
+	// Sorted by taskId so `perTask` renders in a stable order. This used to be
+	// `[...byTask].sort()`, which sorts ENTRIES by their default string form —
+	// it happened to work only because every entry stringifies to
+	// "<taskId>,[object Map]" and so compares on the id.
+	const byTaskId = [...byTask.entries()].sort(([a], [b]) =>
+		a < b ? -1 : a > b ? 1 : 0,
+	);
+	for (const [taskId, passes] of byTaskId) {
 		const first = passes.get(1);
 		const second = passes.get(2);
 		if (first === undefined || second === undefined) continue;
-		const variance = (xs: number[]): number => {
-			const m = mean(xs);
-			return xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1);
-		};
 		perTask.push({ taskId, delta: mean(second) - mean(first) });
 		varSum += variance(first) / first.length + variance(second) / second.length;
 	}
@@ -862,25 +874,28 @@ export function renderReport(
 	out.push(
 		"suite                                   runs/side    delta       SE   delta/SE   80% power?",
 	);
-	for (const metric of ["total"] as const) {
-		for (const { label, taskIds } of candidateSubsets(groups, metric)) {
-			const outcome = subsetAtBudget(
-				groups,
-				metric,
-				args.rent,
-				args.effect,
-				args.budget,
-				taskIds,
-				label,
-			);
-			if (outcome === null) {
-				out.push(`${label.padEnd(38)} (budget buys fewer than 2 runs/side)`);
-				continue;
-			}
-			out.push(
-				`${label.padEnd(38)} ${String(outcome.runsPerSide).padStart(9)} ${fmt(outcome.targetSaving).padStart(8)} ${fmt(outcome.standardError).padStart(8)} ${outcome.detectionRatio.toFixed(2).padStart(10)}   ${outcome.powered80 ? "YES" : "no"}`,
-			);
+	// Total tokens only, deliberately: this section asks whether a cheaper SUITE
+	// is worth buying, and the burn is billed in total tokens whatever metric
+	// scores the verdict. Running it per metric would print three tables that
+	// differ only in a column the budget does not depend on.
+	const subsetMetric = "total";
+	for (const { label, taskIds } of candidateSubsets(groups, subsetMetric)) {
+		const outcome = subsetAtBudget(
+			groups,
+			subsetMetric,
+			args.rent,
+			args.effect,
+			args.budget,
+			taskIds,
+			label,
+		);
+		if (outcome === null) {
+			out.push(`${label.padEnd(38)} (budget buys fewer than 2 runs/side)`);
+			continue;
 		}
+		out.push(
+			`${label.padEnd(38)} ${String(outcome.runsPerSide).padStart(9)} ${fmt(outcome.targetSaving).padStart(8)} ${fmt(outcome.standardError).padStart(8)} ${outcome.detectionRatio.toFixed(2).padStart(10)}   ${outcome.powered80 ? "YES" : "no"}`,
+		);
 	}
 	out.push(
 		`80% power needs delta/SE >= ${(confidenceZ() + Z_POWER_80).toFixed(2)}. The delta column SHRINKS with the suite because a`,
