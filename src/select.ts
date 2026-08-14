@@ -14,16 +14,6 @@
  * Evicted rules are never deleted — they are the negative dataset.
  */
 import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import {
 	assertPosixPlatform,
 	EnvironmentFailureError,
 	type GoldenTask,
@@ -39,7 +29,6 @@ import {
 import { numericFlag, runCli } from "./cli.js";
 import {
 	agentTokenMix,
-	bumpRulesetVersion,
 	decideRule,
 	getActiveRules,
 	getRuleById,
@@ -61,7 +50,6 @@ import {
 } from "./memory.js";
 import { blendedDollarsPerToken, priceFor } from "./pricing.js";
 import { assertKnownAgent } from "./registry.js";
-import { displayText } from "./sanitize.js";
 import {
 	confidenceZ,
 	effectiveRent,
