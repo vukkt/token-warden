@@ -77,6 +77,7 @@ exactly like `sql` or `backend`.
 | `cohort.ts` | Production-cohort validation (`/warden-cohort`): real-work cost before vs. after rules, with a confidence verdict — the out-of-fixture signal ([design](docs/production-cohort-validation.md)) |
 | `share.ts` / `adopt.ts` / `verify-ledger.ts` | Team rule ledgers: export, re-measured import, offline CI gate |
 | `status.ts` / `notify.ts` | Status dashboard and the SessionStart pending-candidate nudge |
+| `dogfood.ts` | Dogfood-window diagnostic (`/warden-dogfood`): collection liveness, real-work sessions per agent, which agents are INERT (recorded but outside `knownAgents()`, so never distillable), distance to the p75 trigger, one next action |
 | `gate.ts` | Inter-agent `SendMessage` approval prompt (sanitized, fails open) |
 | `sanitize.ts` | Single presentation-security chokepoint (control/ANSI stripping) |
 | `db.ts` / `types.ts` | SQLite access, versioned migrations, shared types |

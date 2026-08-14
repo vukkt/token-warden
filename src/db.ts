@@ -989,6 +989,41 @@ export function recentRealWorkTotals(
 		.map((row) => row.total);
 }
 
+/** One agent's real-work footprint in the ledger, whether or not that agent is
+ * still (or ever was) a known agent. */
+export interface RealWorkAgentSummary {
+	agent: string;
+	/** Every real-work row, completed or not. */
+	sessions: number;
+	/** Completed rows only — the population the distiller's trigger reads. */
+	completed: number;
+	firstTs: string;
+	lastTs: string;
+	tokens: number;
+}
+
+/**
+ * Real-work sessions grouped by agent, busiest last-seen first.
+ *
+ * Deliberately NOT filtered to `knownAgents()`: the whole point is to surface
+ * the agents that ARE recorded but cannot be distilled from ('main', an
+ * ad-hoc subagent type), which a known-agent-only query would hide.
+ */
+export function realWorkByAgent(db: WardenDb): RealWorkAgentSummary[] {
+	return db
+		.prepare<unknown[], RealWorkAgentSummary>(
+			`SELECT agent,
+				COUNT(*) AS sessions,
+				COALESCE(SUM(completed = 1), 0) AS completed,
+				MIN(ts) AS firstTs,
+				MAX(ts) AS lastTs,
+				COALESCE(SUM(${RUN_TOTAL_TOKENS_SQL}), 0) AS tokens
+			 FROM runs WHERE task_hash IS NULL
+			 GROUP BY agent ORDER BY lastTs DESC, agent ASC`,
+		)
+		.all();
+}
+
 export interface ProjectUsage {
 	project: string | null;
 	runs: number;

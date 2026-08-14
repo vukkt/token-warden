@@ -557,6 +557,60 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## Unreleased — the dogfood window never started, and `main` stays out of the loop
+
+- **The window was not weak, it was inert — and the failure was invisible.**
+  The live ledger holds nine real-work sessions: eight under `main` and one
+  under `Explore`, all from 2026-06-11/12. `knownAgents()` returns
+  `["frontend","backend","sql","testing"]`, and `collect.ts` gates the distiller
+  spawn on membership, so not one of those nine could ever produce a candidate.
+  Verified by EXECUTION, not by reading the gate: the real Stop hook was run
+  twice against a throwaway ledger over two transcripts identical but for the
+  `agentName` field, with a fake `npx` on `PATH` to capture the spawn. The `sql`
+  session logged `run 14 above p75 for sql; distiller spawned` and the fake
+  binary recorded exactly one invocation of `src/distill.ts`; the `main` session
+  logged nothing but its anomaly alert. `shouldDistill(db, 'main', ...)` returns
+  **true** on that same data — the p75 trigger was never the blocker, the
+  registry check in front of it was. Nothing in the product said so: `/warden-status`
+  prints a `main` row in its summary table, which reads like participation.
+
+- **Collection had also simply stopped, which no command reported.** The newest
+  real-work row is 61 days old. There is no hook heartbeat and `collect.log` is
+  append-on-exception, so its mtime proves nothing; the freshness of the newest
+  real-work row is the only honest liveness signal available for free, and
+  `/warden-dogfood` now reports it as LIVE / IDLE / STOPPED / NEVER-RECORDED.
+
+- **`main` is NOT admitted to distillation, and this is a design position, not a
+  deferral.** It was considered on its merits. For: the user's day-to-day work
+  IS the main thread, ROADMAP section 1 asks for exactly that work, the rows are
+  already collected, and BYOA already proves an agent list can be extended. But
+  a distilled rule has to go somewhere and be measurable, and for `main` neither
+  holds. Compiled rules are written to `~/.claude/agent-memory/<agent>/MEMORY.md`
+  and are read because the four bundled agents declare `memory: user` in their
+  frontmatter — the main thread has no such file; its equivalent is `CLAUDE.md`,
+  which this project deliberately never writes (`/warden-contradict` reads it to
+  FLAG contradictions and owns no writer at all). And `main` has no golden
+  suite, so a `main` candidate could never be measured — it would queue forever,
+  which is precisely the state `collect.ts`'s comment describes. Admitting it
+  would convert "only measured survivors persist" into "LLM proposals persist in
+  the user's CLAUDE.md", the project's founding non-goal, in exchange for the
+  one thing it cannot supply: a verdict.
+
+- **The supported path already exists, and it is BYOA.** A user whose real work
+  is a distinct workload registers it as an agent (`TOKEN_WARDEN_AGENTS_DIR`)
+  with a golden suite (`TOKEN_WARDEN_BENCHMARKS_DIR`, drafted by
+  `/warden-sample-tasks`), and then it is measurable by construction. That
+  requires no code change; what was missing was anything that TOLD the user this
+  is the fork in the road. `/warden-dogfood`'s `inert-only` next-action does.
+
+- **Deliberately not built: an opt-in `main` collection flag.** An env var that
+  added `main` to `knownAgents()` is three lines and would have produced
+  candidates within a week — candidates that no fixture can rule on and no
+  memory file can hold. A flag that manufactures unmeasurable evidence is worse
+  than no flag, because the queue would then look like progress. Also not built:
+  a `--gate` mode (an inert window is a state to read, not a CI failure) and any
+  write path — the module imports four SELECT helpers and a test pins that list.
+
 ## v0.43.0 — the retention budget, and two designs the harness rejected
 
 - **A harness that imports the real functions can still measure the wrong

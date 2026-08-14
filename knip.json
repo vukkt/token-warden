@@ -24,6 +24,7 @@
 		"src/cost.ts",
 		"src/scope.ts",
 		"src/health.ts",
+		"src/dogfood.ts",
 		"scripts/*.mjs"
 	],
 	"project": ["src/**/*.ts"],

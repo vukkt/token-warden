@@ -246,6 +246,11 @@ Stated plainly, because the project's only real claim is that it does not overst
 - **No rule distilled from day-to-day production work has yet survived the gate.** Survivors
   so far come from benchmark runs. Whether real workloads contain catchable, generalizable
   waste is the open question — `/warden-cohort` and `/warden-confirm` exist to answer it.
+- **Only work routed through a measurable agent can be learned from.** Main-thread sessions
+  (and ad-hoc subagent types) are recorded and cost-attributed, but distillation is gated on
+  the agent having a golden suite and an agent-memory file, so they can never produce a
+  candidate rule. `/warden-dogfood` reports which of your recorded sessions are inert and
+  what to do about it.
 - The rule-compression experiment is **closed as unconfirmable**, not as a win: three token
   burns were each killed by quota exhaustion, and the effect is smaller than the suite's own
   noise at any affordable run count.
@@ -272,7 +277,10 @@ npm run bench -- --agent all      # freeze baselines, once
 npx tsx src/select.ts --agent sql # measure pending candidates
 ```
 
-The bench step spends real tokens — `/warden-power` sizes it first, for free. 21 commands
+`/warden-dogfood` says, for free, whether collection is actually live and whether the
+sessions you are recording can be learned from at all.
+
+The bench step spends real tokens — `/warden-power` sizes it first, for free. 22 commands
 cover reporting, cost, A/B benchmarking of models, prompts and context architectures,
 governance and team sharing. The context-architecture benchmark runs for free:
 

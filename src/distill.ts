@@ -50,13 +50,17 @@ import { digestTranscript } from "./transcript.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const MIN_PRIOR_RUNS = 5;
+/** Prior completed real-work sessions an agent needs before the p75 trigger
+ * means anything. Exported so `/warden-dogfood` reports the REAL number the
+ * gate uses instead of a second copy that could drift from it. */
+export const MIN_PRIOR_RUNS = 5;
 /** Most recent evicted rules fed back into the distiller prompt as measured
  * negative examples. Bounded so the feedback block cannot grow without limit
  * as the negative dataset accumulates. */
 const MAX_EVICTED_FEEDBACK = 8;
-/** Rolling window of most recent runs used for the p75. */
-const ROLLING_WINDOW = 50;
+/** Rolling window of most recent runs used for the p75. Exported for the same
+ * reason as MIN_PRIOR_RUNS. */
+export const ROLLING_WINDOW = 50;
 const MAX_DIGEST_CHARS = 8000;
 const DISTILL_TIMEOUT_MS = 2 * 60 * 1000;
 /** Hard ceiling on samples per distillation and on candidates inserted per
