@@ -122,6 +122,24 @@ function* iterateLines(text: string): Generator<string> {
 	}
 }
 
+/**
+ * Validate one non-blank JSONL line into a transcript entry; null when the
+ * line is not parseable JSON or does not match the entry shape. Both callers
+ * treat those two failures identically, so they are not distinguished here —
+ * and sharing this step is what keeps the streaming parser and the digest
+ * agreeing on what counts as a readable line.
+ */
+function parseEntryLine(line: string): Entry | null {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(line);
+	} catch {
+		return null;
+	}
+	const result = entrySchema.safeParse(raw);
+	return result.success ? result.data : null;
+}
+
 /** Only the four counters are kept per message — the loose-parsed usage
  * object retains every unknown transcript field and would bloat the map. */
 interface UsageSums {
@@ -166,19 +184,11 @@ class TranscriptAccumulator {
 		this.lineIndex++;
 		if (!line || line.trim() === "") return;
 
-		let raw: unknown;
-		try {
-			raw = JSON.parse(line);
-		} catch {
+		const entry = parseEntryLine(line);
+		if (entry === null) {
 			this.malformedLines++;
 			return;
 		}
-		const result = entrySchema.safeParse(raw);
-		if (!result.success) {
-			this.malformedLines++;
-			return;
-		}
-		const entry = result.data;
 
 		this.sessionId ??= entry.sessionId ?? null;
 		this.agentId ??= entry.agentId ?? null;
@@ -376,15 +386,8 @@ export function digestTranscript(jsonlText: string, maxChars = 8000): string {
 		const line = first ? stripBom(rawLine) : rawLine;
 		first = false;
 		if (!line || line.trim() === "") continue;
-		let raw: unknown;
-		try {
-			raw = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		const result = entrySchema.safeParse(raw);
-		if (!result.success) continue;
-		const entry = result.data;
+		const entry = parseEntryLine(line);
+		if (entry === null) continue;
 		if (!CONVERSATIONAL.has(entry.type)) continue;
 		const content = entry.message?.content;
 		if (typeof content === "string") {
