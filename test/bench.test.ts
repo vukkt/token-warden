@@ -113,6 +113,19 @@ describe("golden task files", () => {
 		);
 	});
 
+	it("rejects a prompt the benchmarked CLI would read as a flag", () => {
+		// `-p`/`--print` takes an OPTIONAL value, so a prompt starting with "-"
+		// is parsed by the child CLI as a new flag — a suite file could hand
+		// itself a different permission mode than the scoped `acceptEdits` the
+		// whole benchmark depends on.
+		const file = (prompt: string) =>
+			`---\nid: x-01\nagent: sql\nprompt: "${prompt}"\nsuccess_check: "true"\n---\nbody`;
+		expect(() =>
+			parseGoldenTask(file("--dangerously-skip-permissions"), "x.md"),
+		).toThrow(/must not start with/);
+		expect(() => parseGoldenTask(file("Do the thing."), "x.md")).not.toThrow();
+	});
+
 	it("every shipped agent has a complete, well-formed golden suite (>=3 tasks, unique ids)", () => {
 		for (const agent of knownAgents()) {
 			const tasks = loadGoldenTasks(agent);
@@ -677,6 +690,77 @@ describe("benchChildEnv (hermetic child session)", () => {
 		expect(SESSION_ENV_KEYS).toContain("CLAUDECODE");
 		expect(SESSION_ENV_KEYS).toContain("CLAUDE_CODE_SESSION_ID");
 		expect(SESSION_ENV_KEYS).toContain("CLAUDE_CODE_REMOTE_SESSION_ID");
+	});
+});
+
+describe("checkChildEnv (the success check never sees credentials)", () => {
+	// A success check is arbitrary shell from a golden-suite file, which under
+	// BYOA (TOKEN_WARDEN_BENCHMARKS_DIR) may be third-party. It used to inherit
+	// process.env verbatim, so "run a check" also meant "read every key in the
+	// parent environment". The source env is injected, so nothing here depends
+	// on what the machine running the tests happens to export.
+	const source: NodeJS.ProcessEnv = {
+		PATH: "/usr/bin",
+		HOME: "/home/u",
+		ANTHROPIC_API_KEY: "sk-secret",
+		AWS_SECRET_ACCESS_KEY: "aws-secret",
+		GITHUB_TOKEN: "ghp-secret",
+		SOME_FUTURE_CREDENTIAL: "on-nobody's-blocklist",
+	};
+
+	it("passes through the allowlisted variables and the bench marker, nothing else", () => {
+		const env = checkChildEnv(source);
+		expect(env.PATH).toBe("/usr/bin");
+		expect(env.HOME).toBe("/home/u");
+		expect(env.TOKEN_WARDEN_BENCH).toBe("1");
+		expect(Object.keys(env).sort()).toEqual([
+			"HOME",
+			"PATH",
+			"TOKEN_WARDEN_BENCH",
+		]);
+	});
+
+	it("withholds every credential, including ones no blocklist names", () => {
+		const env = checkChildEnv(source);
+		for (const key of [
+			"ANTHROPIC_API_KEY",
+			"AWS_SECRET_ACCESS_KEY",
+			"GITHUB_TOKEN",
+			"SOME_FUTURE_CREDENTIAL",
+		]) {
+			expect(env[key], key).toBeUndefined();
+		}
+		// The guard is an allowlist by design: a credential variable invented
+		// tomorrow is excluded by default instead of leaking until someone
+		// remembers to name it.
+		expect(CHECK_ENV_ALLOWLIST).not.toContain("ANTHROPIC_API_KEY");
+	});
+
+	it("omits an absent allowlisted variable instead of defining it undefined", () => {
+		expect("LANG" in checkChildEnv({ PATH: "/usr/bin" })).toBe(false);
+	});
+});
+
+describe("isSpawnTimeout", () => {
+	const spawnResult = (error?: Error): SpawnResult => ({
+		status: null,
+		stdout: "",
+		stderr: "",
+		error,
+	});
+
+	it("is true only for the timeout kill, never for another spawn failure", () => {
+		const withCode = (code: string) =>
+			spawnResult(Object.assign(new Error(code), { code }));
+		expect(isSpawnTimeout(withCode("ETIMEDOUT"))).toBe(true);
+		// Everything below must stay false: this predicate is the gate on
+		// transcript recovery, and recovering for a run that never started would
+		// invent a measurement.
+		expect(isSpawnTimeout(withCode("ENOENT"))).toBe(false);
+		expect(isSpawnTimeout(spawnResult(new Error("no code at all")))).toBe(
+			false,
+		);
+		expect(isSpawnTimeout(spawnResult())).toBe(false);
 	});
 });
 
