@@ -144,6 +144,30 @@ export function verdictWithReason(
 			};
 }
 
+/**
+ * The smallest measured saving that clears the 2x-rent bar by `scale` times the
+ * gate's confidence margin: `bar + scale·z·SE`. Null when no standard error is
+ * estimable, which no confidence test can survive.
+ *
+ * ONE definition, three callers: promotion (scale 1, via the `uncertain` band),
+ * the recovery classification (scale `recoveryMarginFraction()`, a fraction of
+ * the same margin) and the stricter second look (scale `recoveryStrictness()`).
+ * They must move together or the classification would name a set the gate does
+ * not actually reject — and the calibration harness imports this rather than
+ * re-deriving it, so what it measures is what ships.
+ */
+export function promotionThreshold(
+	contextCost: number,
+	standardError: number | null,
+	confidenceMultiple: number,
+	scale = 1,
+): number | null {
+	if (standardError === null) return null;
+	return (
+		2 * effectiveRent(contextCost) + scale * confidenceMultiple * standardError
+	);
+}
+
 /** Everything the eviction CLASS depends on. Passed explicitly so the policy is
  * a pure function of the verdict and its measurement, and the calibration
  * harness can run the shipped policy rather than a copy of it. */
@@ -197,10 +221,13 @@ export function evictedUnderpowered(input: EvictionClassInput): boolean {
 	if (delta === null || standardError === null) return false;
 	// verdict() already encodes "delta > 0 AND delta >= 2x cache-aware rent".
 	if (verdict({ measuredDelta: delta, contextCost }) !== "active") return false;
-	const bar = 2 * effectiveRent(contextCost);
-	return (
-		delta - bar >= recoveryMarginFraction() * confidenceMultiple * standardError
+	const threshold = promotionThreshold(
+		contextCost,
+		standardError,
+		confidenceMultiple,
+		recoveryMarginFraction(),
 	);
+	return threshold !== null && delta >= threshold;
 }
 
 /**
@@ -1831,17 +1858,16 @@ function finalizeVerdict(input: FinalVerdictInput): ReasonedVerdict {
 	// It clears a proportionally harder bar so the extra look does not simply
 	// buy extra chances at a false positive.
 	if (base.status === "active" && input.confidenceScale > 1) {
-		const { standardError, confidenceMultiple, contextCost } = input;
-		const required = input.confidenceScale * confidenceMultiple;
-		const bar = 2 * effectiveRent(contextCost);
-		if (
-			standardError === null ||
-			delta === null ||
-			delta - bar < required * standardError
-		) {
+		const threshold = promotionThreshold(
+			input.contextCost,
+			input.standardError,
+			input.confidenceMultiple,
+			input.confidenceScale,
+		);
+		if (threshold === null || delta === null || delta < threshold) {
 			return {
 				status: "evicted",
-				reason: `recovery attempt: measured savings (${delta}) did not clear the 2× rent threshold by the ${input.confidenceScale}× margin a re-tried rule must show (${Math.ceil(required * (standardError ?? 0))} tokens over the bar)`,
+				reason: `recovery attempt: measured savings (${delta}) did not clear the ${input.confidenceScale}× margin a re-tried rule must show (needs ${threshold === null ? "an estimable standard error" : `${Math.ceil(threshold)} tokens/run`})`,
 			};
 		}
 	}
