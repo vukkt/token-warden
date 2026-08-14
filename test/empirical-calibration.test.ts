@@ -10,7 +10,9 @@ import {
 	groupReplicates,
 	parseEmpiricalArgs,
 	permutationTrial,
+	type RecoveryTrialSpec,
 	type ReplicateGroup,
+	recoveryTrial,
 	wilson,
 } from "../validation/empirical-calibration.js";
 
@@ -459,5 +461,92 @@ describe("falseEvictionTrial", () => {
 				environmentFailure: false,
 			}),
 		).toBe(0);
+	});
+});
+
+describe("recoveryTrial (the recovery policy's calibration arm)", () => {
+	const spec = (overrides: Partial<RecoveryTrialSpec> = {}) => ({
+		groups: NOISY_GROUPS,
+		runsPerSide: 2,
+		recoveryRuns: 4,
+		rent: 25,
+		injectedSaving: 0,
+		...overrides,
+	});
+
+	it("never counts one trial twice: a first-look keep takes no second look", () => {
+		const rng = mulberry32(31_337);
+		for (let i = 0; i < 500; i++) {
+			const r = recoveryTrial(rng, spec());
+			expect(r.keptFirst && r.keptOnRecovery).toBe(false);
+			expect(r.keptFirst && r.inZone).toBe(false);
+			// A conversion is only possible from inside the zone.
+			if (r.keptOnRecovery) expect(r.inZone).toBe(true);
+		}
+	});
+
+	it("adds almost nothing to the A/A false-positive rate (published pin)", () => {
+		// The number this feature lives or dies by. On the recorded sql pool it
+		// is +0.08pt on a 10.7% base at 20,000 trials (FINDINGS.md); this is the
+		// same measurement on the committed noisy fixture, pinned EXACTLY so the
+		// published claim cannot drift without a test failing.
+		const rng = mulberry32(20_260_814);
+		const trials = 4000;
+		let keptFirst = 0;
+		let zone = 0;
+		let recovered = 0;
+		for (let i = 0; i < trials; i++) {
+			const r = recoveryTrial(rng, spec());
+			if (r.keptFirst) keptFirst++;
+			if (r.inZone) zone++;
+			if (r.keptOnRecovery) recovered++;
+		}
+		expect(keptFirst).toBe(320);
+		expect(zone).toBe(608);
+		// 2 extra false keeps in 4,000 trials, against the 320 the gate already
+		// makes: a 0.6% relative increase in the false-positive rate.
+		expect(recovered).toBe(2);
+	});
+
+	it("recovers a genuinely large saving that the first look could not resolve", () => {
+		const rng = mulberry32(20_260_814);
+		const trials = 4000;
+		let keptFirst = 0;
+		let recovered = 0;
+		for (let i = 0; i < trials; i++) {
+			const r = recoveryTrial(rng, spec({ injectedSaving: 12_000 }));
+			if (r.keptFirst) keptFirst++;
+			if (r.keptOnRecovery) recovered++;
+		}
+		// Same trial count, same pool, same policy: a real effect converts far
+		// more often than the null does. That ratio IS the argument for the
+		// feature, and it is the thing a threshold change would break.
+		expect(keptFirst).toBe(1934);
+		// 213 real rules rescued for the 2 null rules admitted above, on the
+		// same pool, seed and trial count: a 106:1 marginal ratio, against the
+		// gate's own 1934/320 = 6:1.
+		expect(recovered).toBe(213);
+	});
+
+	it("a stricter second look converts strictly less than a lenient one", () => {
+		const count = (): number => {
+			const rng = mulberry32(555);
+			let recovered = 0;
+			for (let i = 0; i < 1500; i++) {
+				if (
+					recoveryTrial(rng, spec({ injectedSaving: 12_000 })).keptOnRecovery
+				) {
+					recovered++;
+				}
+			}
+			return recovered;
+		};
+		const shipped = count();
+		process.env.WARDEN_RECOVERY_STRICTNESS = "3";
+		try {
+			expect(count()).toBeLessThan(shipped);
+		} finally {
+			delete process.env.WARDEN_RECOVERY_STRICTNESS;
+		}
 	});
 });

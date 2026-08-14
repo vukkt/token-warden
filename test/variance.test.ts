@@ -10,6 +10,7 @@ import {
 	assessDelta,
 	betweenTaskDofInflation,
 	type DeltaAssessment,
+	evictedUnderpowered,
 	MAX_RETENTION_ROUNDS,
 	mergeSummaries,
 	type RunAllocation,
@@ -18,7 +19,13 @@ import {
 	selectForAgent,
 	withinTaskDofInflation,
 } from "../src/select.js";
-import { effectiveRent, pooledVariance, sampleVariance } from "../src/stats.js";
+import {
+	effectiveRent,
+	pooledVariance,
+	recoveryMarginFraction,
+	recoveryStrictness,
+	sampleVariance,
+} from "../src/stats.js";
 
 /** Deterministic LCG so the property sweeps below are reproducible — a flaky
  * statistical test is worse than no test. */
@@ -1420,5 +1427,70 @@ describe("candidate cap per invocation", () => {
 			3,
 		);
 		expect(getRuleById(db2, ids[3] ?? -1)?.status).toBe("candidate");
+	});
+});
+
+describe("recovery gate parameters (published-number pins)", () => {
+	afterEach(() => {
+		delete process.env.WARDEN_RECOVERY_MARGIN;
+		delete process.env.WARDEN_RECOVERY_STRICTNESS;
+	});
+
+	// These two numbers are the whole recovery policy, and both were CHOSEN on
+	// calibration evidence (FINDINGS.md: 3,000 trials/cell on the recorded sql
+	// pool). Pinned exactly, because a threshold that drifts silently turns a
+	// published false-positive figure into a false one.
+	it("defaults are the calibrated 0.5 and 1.5", () => {
+		expect(recoveryMarginFraction()).toBe(0.5);
+		expect(recoveryStrictness()).toBe(1.5);
+	});
+
+	it("accepts in-range overrides so the harness can sweep them", () => {
+		process.env.WARDEN_RECOVERY_MARGIN = "0.75";
+		process.env.WARDEN_RECOVERY_STRICTNESS = "2";
+		expect(recoveryMarginFraction()).toBe(0.75);
+		expect(recoveryStrictness()).toBe(2);
+	});
+
+	it("rejects out-of-range values rather than clamping them", () => {
+		// A fraction of the margin is in [0, 1): 1 would BE the gate, and a
+		// strictness below 1 would make a re-tried rule easier to bank than a
+		// first-time one, which inverts the point of the policy.
+		for (const bad of ["1", "1.5", "-0.1", "", "x"]) {
+			process.env.WARDEN_RECOVERY_MARGIN = bad;
+			expect(recoveryMarginFraction()).toBe(0.5);
+		}
+		for (const bad of ["0.9", "0", "-2", "", "x"]) {
+			process.env.WARDEN_RECOVERY_STRICTNESS = bad;
+			expect(recoveryStrictness()).toBe(1.5);
+		}
+	});
+
+	it("pins the exact classification boundary in tokens", () => {
+		// Bar for a 13-token rule is 2 x effectiveRent(13) = 27.625. At SE 6,000
+		// and z=2 the gate demands delta >= bar + 12,000; the classifier demands
+		// delta >= bar + 6,000. Both sides of that boundary, to the token.
+		const bar = 2 * effectiveRent(13);
+		const at = (delta: number): boolean =>
+			evictedUnderpowered({
+				status: "evicted",
+				kind: "candidate",
+				contextCost: 13,
+				assessment: {
+					delta,
+					regression: false,
+					standardError: 6000,
+					standardErrorBasis: "within-task",
+					uncertain: true,
+					confidenceMultiple: 2,
+					robustDelta: delta,
+					tailRisk: false,
+					completionDrop: false,
+					environmentFailure: false,
+				},
+			});
+		expect(Math.ceil(bar + 6000)).toBe(6028);
+		expect(at(6028)).toBe(true);
+		expect(at(6027)).toBe(false);
 	});
 });

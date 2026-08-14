@@ -166,12 +166,22 @@ what remains is running the experiments and recording their results:
   than spreading the same runs uniformly at 2 runs/task, where the variance
   estimate carries one degree of freedom. See FINDINGS.md; the lesson is that
   the admission side's tuning does not transfer to the retention side.
-  Still open: the trigram dedupe still cannot tell a measured negative from a
-  measured positive that was too noisy to bank, so nothing re-queues a
-  good-but-unlucky rule. The expensive version — re-queuing evicted-as-uncertain
-  rules when the suite's noise floor drops — still waits on the variance work
-  above, since re-running them into the same noise would only reproduce the same
-  verdict. **The false-negative rate is now measured** (v0.42.0). The prerequisite this
+  **The recovery half is MERGED and unreleased.** The dedupe can now tell a measured
+  negative from a measured positive too noisy to bank: an eviction whose point
+  estimate cleared the bar and reached at least half the gate's confidence
+  margin is classed `underpowered`, and such a body may be proposed once more.
+  The re-proposal is a fresh candidate measured from scratch, held (free) until
+  the run budget exceeds the depth its eviction was decided at, and judged at
+  1.5x the ordinary margin. This entry's own prediction was right and turned out
+  to be the load-bearing part: re-running into the same noise reproduces the
+  verdict, and the equal-depth variant measured SIX TIMES the false-positive cost
+  for LESS power than the deeper one (FINDINGS.md). Cost of the whole feature:
+  +0.08 points of false positives on a 10.7% base at 20,000 trials, for +9.30
+  points of recovered power on a 20%-saving rule.
+  Still open: a rule evicted at RE-AUDIT is deliberately not recoverable (its
+  point estimate is below the bar by construction, and it had already been banked
+  once), so the Type II tail measured on the retention side is addressed only by
+  the retention budget above, not by recovery. **The false-negative rate is now measured** (v0.42.0). The prerequisite this
   entry set for itself is met: `validation/empirical-calibration.ts --mode
   eviction` replays a rule of known true saving through the REAL
   `assessDelta` -> `verdictWithReason` -> `twoStrikeRetention` path for N

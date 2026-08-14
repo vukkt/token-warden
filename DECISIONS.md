@@ -611,6 +611,77 @@ all fixed) and motivated one algorithm change.
   a `--gate` mode (an inert window is a state to read, not a CI failure) and any
   write path — the module imports four SELECT helpers and a test pins that list.
 
+## Unreleased — recovering evictions the gate could not resolve
+
+- **"Evicted" was two facts wearing one name.** A candidate can be evicted
+  because its measured saving is at or below the 2x-rent bar, or because the
+  point estimate cleared the bar and the standard error was too wide to say so.
+  Verified by execution before anything was built: two candidates driven through
+  the real `selectForAgent`, one at -7 tok/run and one at +10,222 tok/run (~300x
+  its bar) at SE 6,839, produce rules rows distinguishable only by
+  `measured_delta` and a free-text reason no code parses, and the deduper's own
+  predicate suppresses a re-proposal of both identically. The gap was narrower
+  than ROADMAP recorded in one respect: `rule_receipts` already stores the delta
+  and the standard error. What was missing was the CLASSIFICATION, on the rules
+  row, where the dedupe looks.
+
+- **The criterion is half the gate's own margin, and the fraction is measured,
+  not chosen for taste.** An eviction is underpowered when
+  `delta - bar >= 0.5·z·SE` (promotion needs `1.0·z·SE`). "The point estimate
+  was positive" is the lazy version and it fails concretely: the bar is ~54
+  tokens against a standard error in the thousands, so it would reclassify half
+  the null distribution as promising. At f=0.25 the second look adds 0.93 points
+  of false positives; at f=0.5, 0.10 (FINDINGS.md).
+
+- **No recovery policy can leave the false-positive rate unchanged, and saying
+  otherwise would be the lie.** Total risk is `p + P(zone|H0)·p2`; no second-look
+  threshold returns that to `p` without making the second look unpassable. The
+  measured cost is **+0.08 points on a 10.7% base (20,000 trials, stable to
+  +/-0.01pt across three seeds)** against **+9.30 points of recovered power on a
+  20%-saving rule** — 116 rules recovered per false rule admitted, against the
+  gate's own 6.5:1. That is the number the ship decision rests on, and it is
+  reported as an increase rather than dressed up as parity. The robust-SE
+  estimator was vetoed at 3% -> 7%; this is 10.7% -> 10.8%.
+
+- **The depth requirement turned out to be the statistical defence, not the
+  economic one.** Holding a recovery attempt until the run budget exceeds the
+  depth its eviction was decided at began as cost discipline — re-running into
+  identical noise reproduces the verdict and pays a suite pass for it. Measured,
+  an equal-depth second look costs +0.48pt of false positives and buys LESS
+  power (+6.43pt at 20% vs +9.30pt); the deeper one costs +0.08pt. Type-I error
+  is scale-invariant in the noise, so quieting the suite cannot buy back false
+  positives in general — but at 2 runs/side the variance estimate carries one
+  degree of freedom, and the occasional spuriously-small SE is what converts
+  recoveries that should not convert. Same "one degree of freedom is the enemy"
+  reading that sank Neyman placement on the retention side in v0.43.0.
+
+- **A stricter second look, not a free retry.** A recovered candidate must clear
+  the bar by 1.5x the ordinary margin. `s = 1` was measured and rejected: five
+  times the false-positive cost (+0.50pt) for more power (+11.87pt at 10%).
+  Recorded so it is not re-proposed as an obvious improvement.
+
+- **The lineage is capped at two measurements, in the deduper.** A candidate
+  carrying `recovers` can never be a recovery root, so the multiplicity that was
+  calibrated is the multiplicity that ships. Without that cap the same argument
+  would license a third look, a fourth, and eventually the gate is a formality.
+
+- **Regression stays absolutely terminal.** A regression sets no class, so the
+  dedupe suppresses it forever. Enforced at the classifier (which refuses
+  regressions, environment failures and re-audit evictions explicitly, not
+  incidentally) and again at the dedupe, with a test at each layer, because this
+  is the one path where a wrong answer costs correctness rather than tokens.
+
+- **Two published numbers are now pinned by tests.** The exact conversion counts
+  on a committed fixture, and the classification boundary to the token (6,028
+  passes, 6,027 does not, at rent 13 and SE 6,000). A sibling agent proved this
+  session what an unpinned published number costs: a headline stayed wrong for
+  weeks while an accurate caveat travelled beside it. Pinning the boundary
+  immediately earned itself — a blank `WARDEN_RECOVERY_MARGIN` parsed as 0,
+  silently selecting the loosest possible policy, because `Number("")` is 0 and
+  0 is inside this parameter's legal range (`confidenceZ` is accidentally safe
+  from this only because 0 is outside ITS range).
+
+
 ## v0.43.0 — the retention budget, and two designs the harness rejected
 
 - **A harness that imports the real functions can still measure the wrong

@@ -17,6 +17,10 @@ import {
 import { compileActiveMemory, memoryFilePath } from "../src/memory.js";
 import {
 	assessDelta,
+	type DeltaAssessment,
+	type EvictionClassInput,
+	evictedUnderpowered,
+	evidenceDepth,
 	MAX_RETENTION_ROUNDS,
 	parseSelectArgs,
 	type SuiteRunner,
@@ -887,5 +891,412 @@ describe("selectForAgent environment-failure abort", () => {
 		expect(report.aborted?.ruleId).toBe(id);
 		expect(getRuleById(db, id)?.status).toBe("candidate");
 		expect(latestReceipts(db, agent)).toHaveLength(0);
+	});
+});
+
+describe("evictedUnderpowered (the eviction class)", () => {
+	const contextCost = 13;
+	const bar = 2 * effectiveRent(contextCost);
+
+	function assessment(
+		overrides: Partial<DeltaAssessment> = {},
+	): DeltaAssessment {
+		return {
+			delta: 10_000,
+			regression: false,
+			standardError: 6000,
+			standardErrorBasis: "within-task",
+			uncertain: true,
+			confidenceMultiple: 2,
+			robustDelta: 10_000,
+			tailRisk: false,
+			completionDrop: false,
+			environmentFailure: false,
+			...overrides,
+		};
+	}
+	const classify = (
+		overrides: Partial<DeltaAssessment> = {},
+		rest: Partial<EvictionClassInput> = {},
+	): boolean =>
+		evictedUnderpowered({
+			status: "evicted",
+			kind: "candidate",
+			contextCost,
+			assessment: assessment(overrides),
+			...rest,
+		});
+
+	it("classes a large point estimate drowned in noise as underpowered", () => {
+		// 10,000 tokens/run, ~360x its bar, but 6,000 SE: promotion needs
+		// delta - bar >= 2*SE = 12,000, so the gate cannot say it earns. It
+		// cleared 10,000/12,000 = 83% of the required margin, well past the 50%
+		// classification threshold.
+		expect(classify()).toBe(true);
+	});
+
+	it("does NOT class a regression as underpowered (safety invariant)", () => {
+		// A rule that made a golden task fail is evicted immediately and
+		// permanently. No width argument applies to a correctness failure.
+		expect(classify({ regression: true })).toBe(false);
+	});
+
+	it("does NOT class a re-audit eviction as underpowered (safety invariant)", () => {
+		expect(classify({}, { kind: "re-audit" })).toBe(false);
+	});
+
+	it("does NOT class an environment-failed measurement as underpowered", () => {
+		expect(classify({ environmentFailure: true })).toBe(false);
+	});
+
+	it("does NOT class a surviving rule at all", () => {
+		expect(classify({}, { status: "active" })).toBe(false);
+	});
+
+	it("does NOT class a sub-threshold or negative point estimate", () => {
+		expect(classify({ delta: Math.floor(bar) - 1 })).toBe(false);
+		expect(classify({ delta: 0 })).toBe(false);
+		expect(classify({ delta: -9000 })).toBe(false);
+	});
+
+	it("does NOT class a point estimate that reached less than half the margin", () => {
+		// Required margin 2*6,000 = 12,000; half is 6,000. A 5,000 delta is on
+		// the right side of the bar and still not promising enough to re-try.
+		expect(classify({ delta: 5000 })).toBe(false);
+		expect(classify({ delta: 6100 })).toBe(true);
+	});
+
+	it("does NOT class a verdict with no estimable standard error", () => {
+		expect(classify({ standardError: null })).toBe(false);
+		expect(classify({ delta: null })).toBe(false);
+	});
+
+	it("honours WARDEN_RECOVERY_MARGIN", () => {
+		process.env.WARDEN_RECOVERY_MARGIN = "0.9";
+		try {
+			// Needs 0.9*12,000 = 10,800 now; 10,000 no longer qualifies.
+			expect(classify()).toBe(false);
+		} finally {
+			delete process.env.WARDEN_RECOVERY_MARGIN;
+		}
+	});
+});
+
+describe("evidenceDepth", () => {
+	const runs = (taskId: string, n: number, completed = true): TaskSummary =>
+		summarizeTask(
+			taskId,
+			Array.from({ length: n }, (_, i) => ({
+				sessionId: `${taskId}-${i}`,
+				tokens: 1000,
+				completed,
+			})),
+		);
+
+	it("reports the thinnest task on the thinner side", () => {
+		expect(
+			evidenceDepth(
+				[runs("sql-01", 3), runs("sql-02", 3)],
+				[runs("sql-01", 3), runs("sql-02", 2)],
+			),
+		).toBe(2);
+	});
+
+	it("ignores tasks that are not comparable on both sides", () => {
+		expect(
+			evidenceDepth(
+				[runs("sql-01", 3), runs("sql-02", 3)],
+				[runs("sql-01", 3), runs("sql-02", 2, false)],
+			),
+		).toBe(3);
+		expect(evidenceDepth([runs("sql-01", 3)], [])).toBe(0);
+	});
+});
+
+describe("selectForAgent recovery of underpowered evictions", () => {
+	let dir: string;
+	let db: WardenDb;
+	const agent = "sql";
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-select-rec-"));
+		db = openDb(join(dir, "warden.db"));
+		process.env.TOKEN_WARDEN_MEMORY_DIR = join(dir, "agent-memory");
+	});
+
+	afterEach(() => {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+		delete process.env.TOKEN_WARDEN_MEMORY_DIR;
+	});
+
+	const TASKS = ["sql-01", "sql-02", "sql-03"];
+
+	/** A pass with several runs per task, so a within-task SE exists. */
+	function pass(vectors: number[][], tag: string): TaskSummary[] {
+		return TASKS.map((taskId, i) =>
+			summarizeTask(
+				taskId,
+				(vectors[i] as number[]).map((tokens, j) => ({
+					sessionId: `${taskId}-${tag}-${j}`,
+					tokens,
+					completed: true,
+				})),
+			),
+		);
+	}
+
+	const BASELINE = [
+		[40_000, 40_100, 39_900],
+		[54_000, 53_800, 54_200],
+		[47_000, 47_200, 46_800],
+	];
+	/** Saves ~10k/run on average, but the runs are all over the place: the
+	 * point estimate clears the bar by a mile and the SE swamps it. */
+	const NOISY_POSITIVE = [
+		[8000, 62_000, 20_000],
+		[80_000, 12_000, 40_000],
+		[9000, 75_000, 25_000],
+	];
+	/** Costs slightly more than the baseline, tightly. A measured negative. */
+	const NEGATIVE = [
+		[40_010, 40_080, 39_930],
+		[53_990, 53_850, 54_180],
+		[47_010, 47_180, 46_830],
+	];
+
+	function seedCandidate(body: string, recovers: number | null = null): number {
+		return insertRule(db, {
+			agent,
+			body,
+			contextCost: Math.ceil(body.length / 4),
+			sourceRun: null,
+			createdAt: new Date().toISOString(),
+			...(recovers === null ? {} : { recovers }),
+		});
+	}
+
+	/** Fake bench: the named rule's presence switches the pass. */
+	function runnerFor(id: number, vectors: number[][]): SuiteRunner {
+		return (rules, label) =>
+			rules.some((r) => r.id === id)
+				? pass(vectors, label)
+				: pass(BASELINE, label);
+	}
+
+	it("records an underpowered eviction with the depth it was decided at", () => {
+		const id = seedCandidate(
+			"Always state a one-line plan before the first edit of the session.",
+		);
+		const report = selectForAgent(db, agent, runnerFor(id, NOISY_POSITIVE), {
+			runsPerSide: 3,
+		});
+
+		const decision = report.decisions.find((d) => d.rule.id === id);
+		expect(decision?.status).toBe("evicted");
+		expect(decision?.uncertain).toBe(true);
+		const row = getRuleById(db, id);
+		expect(row?.status).toBe("evicted");
+		expect(row?.measured_delta).toBeGreaterThan(9000);
+		expect(row?.underpowered).toBe(1);
+		// Three runs a side on the first pass; the uncertain top-up only ever
+		// deepens the measured side, so the thinner side stays at 3.
+		expect(row?.recovery_runs).toBe(3);
+		expect(row?.decided_reason).toContain("uncertain");
+	});
+
+	it("does NOT class a measured-negative eviction as underpowered", () => {
+		const id = seedCandidate(
+			"Use Grep to locate every symbol before opening any file at all.",
+		);
+		selectForAgent(db, agent, runnerFor(id, NEGATIVE), { runsPerSide: 3 });
+		const row = getRuleById(db, id);
+		expect(row?.status).toBe("evicted");
+		expect(row?.underpowered).toBe(0);
+		expect(row?.recovery_runs).toBeNull();
+	});
+
+	it("does NOT class a REGRESSION as underpowered, however noisy (safety invariant)", () => {
+		const id = seedCandidate(
+			"Skip the verification step whenever the change looks obviously right.",
+		);
+		// Same wildly noisy, hugely positive token profile as the recoverable
+		// case — but one golden task now FAILS with the rule. A rule that broke a
+		// task must never be re-proposable through the recovery path.
+		const runner: SuiteRunner = (rules, label) => {
+			if (!rules.some((r) => r.id === id)) return pass(BASELINE, label);
+			const summaries = pass(NOISY_POSITIVE, label);
+			summaries[2] = summarizeTask("sql-03", [
+				{ sessionId: `sql-03-${label}-fail`, tokens: 21_000, completed: false },
+			]);
+			return summaries;
+		};
+
+		const report = selectForAgent(db, agent, runner, { runsPerSide: 3 });
+
+		const decision = report.decisions.find((d) => d.rule.id === id);
+		expect(decision?.regression).toBe(true);
+		expect(decision?.status).toBe("evicted");
+		const row = getRuleById(db, id);
+		expect(row?.underpowered).toBe(0);
+		expect(row?.recovery_runs).toBeNull();
+		expect(row?.decided_reason).toContain("regression");
+	});
+
+	it("holds a recovery attempt that would bring no more evidence, spending nothing", () => {
+		const parent = seedCandidate(
+			"Always state a one-line plan before the first edit of the session.",
+		);
+		selectForAgent(db, agent, runnerFor(parent, NOISY_POSITIVE), {
+			runsPerSide: 3,
+		});
+		expect(getRuleById(db, parent)?.recovery_runs).toBe(3);
+
+		const child = seedCandidate(
+			"Always state a one-line plan before the session's first edit.",
+			parent,
+		);
+		const labels: string[] = [];
+		const runner: SuiteRunner = (rules, label) => {
+			labels.push(label);
+			return runnerFor(child, NOISY_POSITIVE)(rules, label, false);
+		};
+
+		const report = selectForAgent(db, agent, runner, { runsPerSide: 3 });
+
+		expect(report.held).toHaveLength(1);
+		expect(report.held[0]).toMatchObject({
+			recovers: parent,
+			runs: 3,
+			requiredRuns: 4,
+		});
+		expect(report.decisions).toHaveLength(0);
+		// Nothing was benched: a held candidate must not cost a suite pass.
+		expect(labels).toHaveLength(0);
+		expect(getRuleById(db, child)?.status).toBe("candidate");
+	});
+
+	it("measures a recovery attempt at a deeper budget, against a STRICTER bar", () => {
+		const parent = seedCandidate(
+			"Always state a one-line plan before the first edit of the session.",
+		);
+		selectForAgent(db, agent, runnerFor(parent, NOISY_POSITIVE), {
+			runsPerSide: 3,
+		});
+
+		const child = seedCandidate(
+			"Always state a one-line plan before the session's first edit.",
+			parent,
+		);
+		// The same noisy measurement that evicted the parent. A deeper budget is
+		// permission to measure, not permission to pass: the second look must
+		// clear the bar by 1.5x the ordinary margin.
+		const report = selectForAgent(db, agent, runnerFor(child, NOISY_POSITIVE), {
+			runsPerSide: 4,
+		});
+
+		expect(report.held).toHaveLength(0);
+		expect(report.decisions).toHaveLength(1);
+		const row = getRuleById(db, child);
+		expect(row?.status).toBe("evicted");
+		// Re-MEASURED, never re-banked: the verdict carries this pass's own
+		// number, not the parent's.
+		expect(row?.measured_delta).toBeGreaterThan(0);
+		expect(row?.decided_reason).toContain("recovery of rule");
+	});
+
+	it("banks a recovery attempt that clears the stricter bar", () => {
+		const parent = seedCandidate(
+			"Always state a one-line plan before the first edit of the session.",
+		);
+		selectForAgent(db, agent, runnerFor(parent, NOISY_POSITIVE), {
+			runsPerSide: 3,
+		});
+		const child = seedCandidate(
+			"Always state a one-line plan before the session's first edit.",
+			parent,
+		);
+		// A clean, decisive 10k saving: no noise, so 1.5x a near-zero margin is
+		// still easily cleared.
+		const CLEAN = [
+			[30_000, 30_100, 29_900],
+			[44_000, 43_800, 44_200],
+			[37_000, 37_200, 36_800],
+		];
+		const report = selectForAgent(db, agent, runnerFor(child, CLEAN), {
+			runsPerSide: 4,
+		});
+
+		expect(report.decisions[0]?.status).toBe("active");
+		const row = getRuleById(db, child);
+		expect(row?.status).toBe("active");
+		expect(row?.underpowered).toBe(0);
+		expect(row?.measured_delta).toBeGreaterThan(9000);
+	});
+
+	/** Measured to sit between the two bars: delta 10,000 at SE ~4,306, so
+	 * delta - bar is 2.3 standard errors. An ordinary candidate clears the
+	 * gate's 2 SE; a recovery attempt must clear 3 SE and does not. */
+	const BORDERLINE = [
+		[17_000, 30_100, 42_900],
+		[57_000, 43_800, 31_200],
+		[24_000, 37_200, 49_800],
+	];
+	const BORDERLINE_BODY =
+		"Always state a one-line plan before the session's first edit.";
+
+	it("banks a borderline measurement when it is a FIRST look", () => {
+		const id = seedCandidate(BORDERLINE_BODY);
+		const report = selectForAgent(db, agent, runnerFor(id, BORDERLINE), {
+			runsPerSide: 4,
+		});
+		expect(report.decisions[0]?.status).toBe("active");
+		expect(getRuleById(db, id)?.status).toBe("active");
+	});
+
+	it("evicts the SAME measurement when it is a SECOND look", () => {
+		const parent = seedCandidate(
+			"Always state a one-line plan before the first edit of the session.",
+		);
+		selectForAgent(db, agent, runnerFor(parent, NOISY_POSITIVE), {
+			runsPerSide: 3,
+		});
+		const child = seedCandidate(BORDERLINE_BODY, parent);
+
+		const report = selectForAgent(db, agent, runnerFor(child, BORDERLINE), {
+			runsPerSide: 4,
+		});
+
+		// Identical numbers, opposite verdict: the only difference is that this
+		// rule has now had two looks at the same gate, and the second one is
+		// deliberately harder so the extra look does not buy extra chances at a
+		// false positive.
+		expect(report.decisions[0]?.status).toBe("evicted");
+		const row = getRuleById(db, child);
+		expect(row?.status).toBe("evicted");
+		expect(row?.measured_delta).toBe(10_000);
+		expect(row?.decided_reason).toContain("recovery of rule");
+		expect(row?.decided_reason).toContain("1.5× margin");
+	});
+
+	it("a rule that fails its second look cannot open a third", () => {
+		const parent = seedCandidate(
+			"Always state a one-line plan before the first edit of the session.",
+		);
+		selectForAgent(db, agent, runnerFor(parent, NOISY_POSITIVE), {
+			runsPerSide: 3,
+		});
+		const child = seedCandidate(
+			"Always state a one-line plan before the session's first edit.",
+			parent,
+		);
+		selectForAgent(db, agent, runnerFor(child, NOISY_POSITIVE), {
+			runsPerSide: 4,
+		});
+
+		// The child may well be classed underpowered too — that is honest, it
+		// was. What it must not do is qualify as a recovery ROOT: it already
+		// carries a lineage pointer, so the dedupe will not open a third look.
+		expect(getRuleById(db, child)?.recovers).toBe(parent);
 	});
 });

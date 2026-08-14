@@ -304,12 +304,37 @@ describe("formatStatus (pure — no DB)", () => {
 						delta: null,
 						reason: null,
 						body: "Dead rule.",
+						underpowered: false,
+						recoveryRuns: null,
 					},
 				],
 			}),
 		);
 		expect(out).toContain(
 			'[sql #4] delta=n/a — no reason recorded — "Dead rule."',
+		);
+	});
+
+	it("marks an underpowered eviction as not falsified, with the depth to beat", () => {
+		const out = formatStatus(
+			emptyData({
+				evictions: [
+					{
+						agent: "sql",
+						id: 9,
+						delta: 10_222,
+						reason: "uncertain after top-up",
+						body: "State a one-line plan before the first edit.",
+						underpowered: true,
+						recoveryRuns: 3,
+					},
+				],
+			}),
+		);
+		// "Evicted" and "disproved" are different facts, and the ledger is where
+		// a human decides whether to spend a deeper run budget on it.
+		expect(out).toContain(
+			"[sql #9] delta=10222 [UNDERPOWERED: not falsified, re-measurable at >3 runs/side]",
 		);
 	});
 
@@ -399,7 +424,15 @@ describe("formatStatus (pure — no DB)", () => {
 					},
 				],
 				evictions: [
-					{ agent: "sql", id: 2, delta: 0, reason: hostile, body: hostile },
+					{
+						agent: "sql",
+						id: 2,
+						delta: 0,
+						reason: hostile,
+						body: hostile,
+						underpowered: false,
+						recoveryRuns: null,
+					},
 				],
 				projectCurves: [
 					{ project: hostile, rulesetVersion: 0, runs: 1, avgTokens: 1 },

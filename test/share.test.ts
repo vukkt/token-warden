@@ -37,6 +37,9 @@ function rule(overrides: Partial<RuleRow> = {}): RuleRow {
 		scope: null,
 		probation: 0,
 		replaces: null,
+		underpowered: 0,
+		recovery_runs: null,
+		recovers: null,
 		...overrides,
 	};
 }

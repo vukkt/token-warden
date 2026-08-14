@@ -53,14 +53,22 @@ import { assertKnownAgent, knownAgents } from "../src/registry.js";
 import {
 	allocateTopUpRuns,
 	assessDelta,
+	type DeltaAssessment,
+	evictedUnderpowered,
 	MAX_RETENTION_ROUNDS,
 	mergeSummaries,
+	promotionThreshold,
 	retentionRounds,
 	twoStrikeRetention,
 	verdict,
 	verdictWithReason,
 } from "../src/select.js";
-import { confidenceZ, effectiveRent } from "../src/stats.js";
+import {
+	confidenceZ,
+	effectiveRent,
+	recoveryMarginFraction,
+	recoveryStrictness,
+} from "../src/stats.js";
 
 const DEFAULT_TRIALS = 2000;
 /** Permutation deals 2×runs distinct totals per trial, so pools of ≥4 qualify
@@ -74,6 +82,9 @@ const DEFAULT_RENT = 25;
  * consecutive unlucky draws to be a real risk rather than a curiosity. */
 const DEFAULT_CYCLES = 12;
 const DEFAULT_SEED = 42;
+/** Runs per side of the second look in recovery mode. Deeper than the default
+ * first look by one, the least the shipped policy will accept. */
+const DEFAULT_RECOVERY_RUNS = 4;
 const INJECTED_FRACS = [0, 0.02, 0.05, 0.1, 0.2];
 
 /** Deterministic PRNG (mulberry32). Duplicated from validation/calibration.ts
@@ -169,29 +180,58 @@ function toSummary(taskId: string, totals: number[], tag: string): TaskSummary {
  * assessment is uncertain — confidently clearing the 2×-rent bar. Mirrors
  * `selectForAgent`'s decide() path for candidates (evict-when-uncertain).
  */
+export function candidateLook(
+	without: TaskSummary[],
+	withRule: TaskSummary[],
+	rent: number,
+	topUp: ((measured: TaskSummary[]) => TaskSummary[] | null) | null,
+): DeltaAssessment {
+	const a = assessDelta(without, withRule, rent);
+	// An environment-failed measurement makes the selector ABORT (no verdict);
+	// for the keep-rate harness that maps to "not kept".
+	if (a.regression || a.environmentFailure || a.delta === null) return a;
+	if (a.uncertain && topUp !== null) {
+		const extra = topUp(withRule);
+		if (extra) {
+			return assessDelta(without, mergeSummaries(withRule, extra), rent);
+		}
+	}
+	return a;
+}
+
+/**
+ * The promotion test itself, at `scale` times the gate's confidence margin.
+ * scale 1 is the shipped gate (`!uncertain` plus the 2×-rent verdict); a
+ * recovery attempt is judged at `recoveryStrictness()`, through the SAME
+ * `promotionThreshold` the selector uses, so the harness cannot drift from the
+ * policy it is measuring.
+ */
+export function promotedAt(
+	a: DeltaAssessment,
+	rent: number,
+	scale = 1,
+): boolean {
+	if (a.delta === null || a.regression || a.environmentFailure) return false;
+	if (verdict({ measuredDelta: a.delta, contextCost: rent }) !== "active") {
+		return false;
+	}
+	if (scale === 1) return !a.uncertain;
+	const threshold = promotionThreshold(
+		rent,
+		a.standardError,
+		a.confidenceMultiple,
+		scale,
+	);
+	return threshold !== null && a.delta >= threshold;
+}
+
 export function candidateKept(
 	without: TaskSummary[],
 	withRule: TaskSummary[],
 	rent: number,
 	topUp: ((measured: TaskSummary[]) => TaskSummary[] | null) | null,
 ): boolean {
-	let a = assessDelta(without, withRule, rent);
-	// An environment-failed measurement makes the selector ABORT (no verdict);
-	// for the keep-rate harness that maps to "not kept".
-	if (a.regression || a.environmentFailure || a.delta === null) return false;
-	if (a.uncertain && topUp !== null) {
-		const extra = topUp(withRule);
-		if (extra) {
-			const merged = mergeSummaries(withRule, extra);
-			a = assessDelta(without, merged, rent);
-		}
-	}
-	return (
-		!a.uncertain &&
-		a.delta !== null &&
-		!a.environmentFailure &&
-		verdict({ measuredDelta: a.delta, contextCost: rent }) === "active"
-	);
+	return promotedAt(candidateLook(without, withRule, rent, topUp), rent);
 }
 
 /**
@@ -426,13 +466,13 @@ export function permutationTrial(
  * more with-replacement draws, placed by the real Neyman allocator when it
  * returns an allocation (uniform runsPerSide per task otherwise).
  */
-export function bootstrapTrial(
+export function bootstrapLook(
 	rng: () => number,
 	groups: ReplicateGroup[],
 	runsPerSide: number,
 	rent: number,
 	injectedSaving: number,
-): boolean {
+): DeltaAssessment {
 	const drawWith = (group: ReplicateGroup, n: number): number[] =>
 		resample(rng, group.totals, n).map((t) => Math.max(0, t - injectedSaving));
 	const without = groups.map((group) =>
@@ -453,7 +493,92 @@ export function bootstrapTrial(
 		}
 		return extra.length > 0 ? extra : null;
 	};
-	return candidateKept(without, withRule, rent, topUp);
+	return candidateLook(without, withRule, rent, topUp);
+}
+
+export function bootstrapTrial(
+	rng: () => number,
+	groups: ReplicateGroup[],
+	runsPerSide: number,
+	rent: number,
+	injectedSaving: number,
+): boolean {
+	return promotedAt(
+		bootstrapLook(rng, groups, runsPerSide, rent, injectedSaving),
+		rent,
+	);
+}
+
+/**
+ * RECOVERY: what a second look at an underpowered eviction costs and buys.
+ *
+ * One trial is one rule's whole life under each policy, on the SAME draws:
+ *
+ *   control — the shipped pipeline before this feature: one look, and an
+ *             eviction is final because the trigram dedupe will not let the
+ *             body be proposed again.
+ *   policy  — the same first look; if it was evicted AND the real
+ *             `evictedUnderpowered` classes it recoverable, one independent
+ *             second look at `recoveryRuns` per side, judged at
+ *             `recoveryStrictness()` times the ordinary margin.
+ *
+ * The arms are paired by construction: the policy arm can only ADD keeps, so
+ * the difference between them is the feature and never the RNG. At
+ * `injectedSaving = 0` that difference IS the added false-positive rate; at
+ * `injectedSaving > 0` it is the recovered power.
+ *
+ * Exactly one second look is ever taken, which is what the lineage cap in
+ * `dedupeOutcome` enforces (a candidate carrying `recovers` can never itself
+ * become a recovery root). Bootstrap draws throughout: a second look must be
+ * INDEPENDENT of the first and DEEPER than it, and a permutation of a 4-run
+ * pool can supply neither.
+ */
+export interface RecoveryTrialSpec {
+	groups: ReplicateGroup[];
+	runsPerSide: number;
+	/** Runs per side of the second look. The policy refuses a re-measurement
+	 * that is not deeper than the one it re-tries. */
+	recoveryRuns: number;
+	rent: number;
+	injectedSaving: number;
+}
+
+export interface RecoveryTrialResult {
+	/** Kept on the first look: both arms agree, the feature is not involved. */
+	keptFirst: boolean;
+	/** Evicted, and classed underpowered — the recovery zone. */
+	inZone: boolean;
+	/** Kept ONLY because of the second look: the policy's marginal effect. */
+	keptOnRecovery: boolean;
+}
+
+export function recoveryTrial(
+	rng: () => number,
+	spec: RecoveryTrialSpec,
+): RecoveryTrialResult {
+	const { groups, runsPerSide, recoveryRuns, rent, injectedSaving } = spec;
+	const first = bootstrapLook(rng, groups, runsPerSide, rent, injectedSaving);
+	if (promotedAt(first, rent)) {
+		return { keptFirst: true, inZone: false, keptOnRecovery: false };
+	}
+	// The shipped classifier, not a re-statement of it. `rent` stands in for the
+	// rule's context cost throughout this harness, exactly as the other modes
+	// use it.
+	const inZone = evictedUnderpowered({
+		status: "evicted",
+		kind: "candidate",
+		contextCost: rent,
+		assessment: first,
+	});
+	if (!inZone) {
+		return { keptFirst: false, inZone: false, keptOnRecovery: false };
+	}
+	const second = bootstrapLook(rng, groups, recoveryRuns, rent, injectedSaving);
+	return {
+		keptFirst: false,
+		inZone: true,
+		keptOnRecovery: promotedAt(second, rent, recoveryStrictness()),
+	};
 }
 
 /**
@@ -472,7 +597,12 @@ export function wilson(k: number, n: number): { lo: number; hi: number } {
 	return { lo: Math.max(0, center - half), hi: Math.min(1, center + half) };
 }
 
-export type CalibrationMode = "permutation" | "bootstrap" | "eviction" | "both";
+export type CalibrationMode =
+	| "permutation"
+	| "bootstrap"
+	| "eviction"
+	| "recovery"
+	| "both";
 
 export interface EmpiricalArgs {
 	agent: string | null;
@@ -488,6 +618,10 @@ export interface EmpiricalArgs {
 	/** Retention cap for the eviction mode's policy arm; the control arm is
 	 * always 0, so one invocation reports both. */
 	retentionRounds: number;
+	/** Runs per side of the SECOND look in recovery mode. Must exceed the first
+	 * look's, which is what the shipped policy requires before it will spend a
+	 * pass on a re-measurement. */
+	recoveryRuns: number;
 }
 
 export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
@@ -502,6 +636,7 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 		seed: DEFAULT_SEED,
 		cycles: DEFAULT_CYCLES,
 		retentionRounds: MAX_RETENTION_ROUNDS,
+		recoveryRuns: DEFAULT_RECOVERY_RUNS,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
@@ -521,6 +656,12 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 				);
 			}
 			args.retentionRounds = n;
+		} else if (flag === "--recovery-runs") {
+			const n = Number(argv[++i]);
+			if (!Number.isInteger(n) || n < 1) {
+				throw new Error("--recovery-runs must be a positive integer");
+			}
+			args.recoveryRuns = n;
 		} else if (flag === "--cycles") {
 			const n = numericFlag(argv[++i]);
 			if (!Number.isInteger(n) || n < 1) {
@@ -533,10 +674,11 @@ export function parseEmpiricalArgs(argv: string[]): EmpiricalArgs {
 				mode !== "permutation" &&
 				mode !== "bootstrap" &&
 				mode !== "eviction" &&
+				mode !== "recovery" &&
 				mode !== "both"
 			) {
 				throw new Error(
-					`--mode must be permutation, bootstrap, eviction, or both (got "${mode}")`,
+					`--mode must be permutation, bootstrap, eviction, recovery, or both (got "${mode}")`,
 				);
 			}
 			args.mode = mode;
@@ -581,6 +723,94 @@ function ci(k: number, n: number): string {
 
 const INSUFFICIENT =
 	"insufficient replicate history (need >= 2 tasks with >= 2x runs-per-side completed active-set runs at one ruleset version)";
+
+/**
+ * RECOVERY mode: the false-positive cost and the power benefit of allowing one
+ * stricter, deeper second look at an underpowered eviction.
+ *
+ * The two arms are PAIRED on identical draws and the policy arm can only add
+ * keeps, so the column that matters is the difference, not the two levels: at a
+ * true saving of 0 it is the added false-positive rate, and every other row is
+ * recovered power. Wilson intervals cover Monte-Carlo error only.
+ */
+function reportRecovery(
+	groups: ReplicateGroup[],
+	args: EmpiricalArgs,
+	agentSeed: number,
+): void {
+	if (groups.length < 2) {
+		console.log(`recovery: ${INSUFFICIENT}`);
+		return;
+	}
+	if (args.recoveryRuns < args.bootRuns) {
+		console.log(
+			`recovery: --recovery-runs (${args.recoveryRuns}) must be at least --runs (${args.bootRuns}).`,
+		);
+		return;
+	}
+	if (args.recoveryRuns === args.bootRuns) {
+		console.log(
+			"WARNING: equal-depth second look — this is the CONTROL ARM the shipped policy refuses. " +
+				"A recovery attempt is held until the run budget exceeds the depth its eviction was decided at, " +
+				"so this row measures what the depth requirement is worth, not what ships.",
+		);
+	}
+	const all = groups.flatMap((g) => g.totals);
+	const pooledMean = all.reduce((a, b) => a + b, 0) / all.length;
+	console.log(
+		`recovery of underpowered evictions (first look ${args.bootRuns} runs/side, ` +
+			`second look ${args.recoveryRuns}, ${groups.length} tasks, ${args.trials} trials/row):`,
+	);
+	console.log(
+		`zone = point estimate reached >= ${recoveryMarginFraction()} of the gate's margin above the bar; ` +
+			`second look judged at ${recoveryStrictness()}x that margin. Paired arms, same draws.`,
+	);
+	console.log(
+		[
+			"true saving".padStart(20),
+			"control [95% CI]".padStart(24),
+			"with recovery [95% CI]".padStart(24),
+			"difference".padStart(12),
+			"zone".padStart(8),
+			"converted".padStart(11),
+		].join("  "),
+	);
+	for (const frac of INJECTED_FRACS) {
+		const injected = Math.round(pooledMean * frac);
+		const rng = mulberry32(agentSeed ^ (0xc0de + Math.round(frac * 1000)));
+		let keptFirst = 0;
+		let zone = 0;
+		let recovered = 0;
+		for (let i = 0; i < args.trials; i++) {
+			const result = recoveryTrial(rng, {
+				groups,
+				runsPerSide: args.bootRuns,
+				recoveryRuns: args.recoveryRuns,
+				rent: args.rent,
+				injectedSaving: injected,
+			});
+			if (result.keptFirst) keptFirst++;
+			if (result.inZone) zone++;
+			if (result.keptOnRecovery) recovered++;
+		}
+		const tag = frac === 0 ? "0 (A/A: FP)" : `${pct(frac)} (${injected} tok)`;
+		console.log(
+			[
+				tag.padStart(20),
+				ci(keptFirst, args.trials).padStart(24),
+				ci(keptFirst + recovered, args.trials).padStart(24),
+				`+${((100 * recovered) / args.trials).toFixed(2)}pt`.padStart(12),
+				pct(zone / args.trials).padStart(8),
+				`${recovered}/${zone}`.padStart(11),
+			].join("  "),
+		);
+	}
+	console.log(
+		"\nRead: the 0-saving row is the false-positive cost of the feature and every other row is what it buys. " +
+			"A second look can only ADD keeps, so a positive difference on the 0 row is real however small — the question is its SIZE " +
+			"against the power rows, and against the ~8.8% base rate the gate already carries.",
+	);
+}
 
 function reportAgent(
 	agent: string,
@@ -629,6 +859,11 @@ function reportAgent(
 					`keep rate ${ci(kept, args.trials)} — empirical false-positive rate`,
 			);
 		}
+	}
+
+	if (args.mode === "recovery") {
+		reportRecovery(bootEligible, args, agentSeed);
+		return;
 	}
 
 	if (args.mode === "bootstrap" || args.mode === "both") {

@@ -171,6 +171,22 @@ const MIGRATIONS: readonly string[] = [
 		WHERE task_hash IS NULL AND completed = 1;
 	CREATE INDEX IF NOT EXISTS idx_receipts_agent ON rule_receipts(agent, rule_id);
 	`,
+	// Eviction CLASS, so the two reasons a candidate can be evicted stop looking
+	// alike downstream. `underpowered` = the point estimate cleared the 2x-rent
+	// bar and only the WIDTH of the measurement stopped the promotion; every
+	// other eviction (sub-threshold, non-positive, regression, re-audit) leaves
+	// it 0. `recovery_runs` records the per-side run depth that verdict was
+	// decided at, so a later re-measurement can be required to bring MORE
+	// evidence rather than re-running into the same noise. `recovers` is the
+	// lineage pointer: the evicted rule this candidate is a second look at.
+	// Before this, both eviction reasons were `status = 'evicted'` plus a
+	// free-text reason no code parses, so the distiller's trigram dedupe
+	// suppressed a good-but-unlucky rule exactly as hard as a falsified one.
+	`
+	ALTER TABLE rules ADD COLUMN underpowered INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE rules ADD COLUMN recovery_runs INTEGER;
+	ALTER TABLE rules ADD COLUMN recovers INTEGER;
+	`,
 ];
 
 /** Current schema version — what `PRAGMA user_version` reads after openDb. */
@@ -467,6 +483,22 @@ export interface RuleRow {
 	/** Rule id this candidate proposes to replace (compression A/B swap);
 	 * null for ordinary candidates. */
 	replaces: number | null;
+	/** 1 = this rule was evicted for want of POWER, not for want of an effect:
+	 * its point estimate cleared the 2x-rent bar and only the width of the
+	 * measurement stopped the promotion. A measured negative, a regression and a
+	 * re-audit eviction all leave this 0. Read only as an eviction CLASS — it
+	 * never re-admits anything, it only tells the distiller's dedupe that this
+	 * body has not actually been falsified. */
+	underpowered: number;
+	/** Per-side, per-task run depth the underpowered verdict was decided at. A
+	 * recovery attempt must be measured DEEPER than this or it is held: a second
+	 * look into the same noise reproduces the same verdict. */
+	recovery_runs: number | null;
+	/** The evicted rule this candidate is a second look at; null for ordinary
+	 * candidates. Set by the distiller when it re-proposes a body that was
+	 * evicted underpowered, and it caps the lineage at two measurements — a
+	 * candidate that already carries it can never itself be recovered. */
+	recovers: number | null;
 }
 
 export function getRuleById(db: WardenDb, id: number): RuleRow | undefined {
@@ -517,6 +549,10 @@ export interface NewRule {
 	bornDigest?: string | null;
 	/** Rule id this candidate proposes to replace (compression A/B swap). */
 	replaces?: number | null;
+	/** The underpowered eviction this candidate is a second look at. The
+	 * candidate is measured from scratch like any other — the pointer is
+	 * provenance and a lineage cap, never a shortcut into memory. */
+	recovers?: number | null;
 }
 
 /** Insert a candidate rule. Candidates live only in SQLite until measured
@@ -524,8 +560,8 @@ export interface NewRule {
 export function insertRule(db: WardenDb, rule: NewRule): number {
 	const row = db
 		.prepare<unknown[], { id: number }>(
-			`INSERT INTO rules (agent, body, status, context_cost, source_run, created_at, born_digest, replaces)
-			 VALUES (?, ?, 'candidate', ?, ?, ?, ?, ?) RETURNING id`,
+			`INSERT INTO rules (agent, body, status, context_cost, source_run, created_at, born_digest, replaces, recovers)
+			 VALUES (?, ?, 'candidate', ?, ?, ?, ?, ?, ?) RETURNING id`,
 		)
 		.get(
 			rule.agent,
@@ -535,6 +571,7 @@ export function insertRule(db: WardenDb, rule: NewRule): number {
 			rule.createdAt,
 			rule.bornDigest ?? null,
 			rule.replaces ?? null,
+			rule.recovers ?? null,
 		);
 	return requireRow(row, "insertRule").id;
 }
@@ -560,10 +597,32 @@ export function setRuleProbation(
 	);
 }
 
+/** Record the CLASS of an eviction: whether it was decided by the width of the
+ * measurement rather than by its point estimate, and at what per-side run depth.
+ * A single statement on purpose — `select.ts` owns the transaction that writes
+ * a verdict, its probation strike and its receipt as one unit, and this belongs
+ * inside it. */
+export function setRuleUnderpowered(
+	db: WardenDb,
+	id: number,
+	underpowered: boolean,
+	recoveryRuns: number | null,
+): void {
+	db.prepare(
+		"UPDATE rules SET underpowered = ?, recovery_runs = ? WHERE id = ?",
+	).run(underpowered ? 1 : 0, underpowered ? recoveryRuns : null, id);
+}
+
 /** The most recently decided evicted rules for an agent — the distiller's
  * negative feedback set. Each carries the measured delta and the eviction
  * reason so the proposer can learn what failed and why (a proposal that was
- * measured and rejected must not be re-proposed as a minor variant). */
+ * measured and rejected must not be re-proposed as a minor variant).
+ *
+ * UNDERPOWERED evictions are excluded. That block tells the proposer "this was
+ * measured and rejected, aim at a bigger waste source", which is precisely the
+ * wrong lesson from a rule whose measured effect was LARGE and merely
+ * unresolvable — and it would contradict the dedupe, which deliberately lets
+ * such a body be proposed again. */
 export function recentEvictedRules(
 	db: WardenDb,
 	agent: string,
@@ -575,7 +634,7 @@ export function recentEvictedRules(
 			Pick<RuleRow, "body" | "measured_delta" | "decided_reason">
 		>(
 			`SELECT body, measured_delta, decided_reason FROM rules
-			 WHERE agent = ? AND status = 'evicted'
+			 WHERE agent = ? AND status = 'evicted' AND underpowered = 0
 			 ORDER BY decided_at DESC, id DESC LIMIT ?`,
 		)
 		.all(agent, limit);

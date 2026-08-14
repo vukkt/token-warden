@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { RunRow } from "../src/db.js";
+import type { RuleRow, RunRow } from "../src/db.js";
 import {
 	openDb,
 	RUN_TOTAL_TOKENS_SQL,
@@ -11,6 +11,7 @@ import {
 } from "../src/db.js";
 import {
 	buildPrompt,
+	dedupeOutcome,
 	p75,
 	parseDistillArgs,
 	parseRulesJson,
@@ -583,5 +584,123 @@ describe("digestTranscript", () => {
 		expect(digest).toContain("step number 0");
 		expect(digest).toContain("step number 499");
 		expect(digest).toContain("[transcript truncated]");
+	});
+});
+
+describe("dedupeOutcome (what the trigram dedupe does with an eviction)", () => {
+	const BODY = "Use Grep to locate symbols before reading any file.";
+	const NEAR = "Use Grep to locate symbols before reading any files.";
+	const FAR = "State a one-line plan before making the first edit.";
+
+	function rule(overrides: Partial<RuleRow> = {}): RuleRow {
+		return {
+			id: 1,
+			agent: "sql",
+			body: BODY,
+			status: "evicted",
+			measured_delta: 10_000,
+			context_cost: 13,
+			source_run: null,
+			decided_at: "2026-08-01T00:00:00.000Z",
+			created_at: "2026-08-01T00:00:00.000Z",
+			decided_reason: "uncertain after top-up",
+			protected: 0,
+			born_digest: null,
+			scope: null,
+			probation: 0,
+			replaces: null,
+			underpowered: 1,
+			recovery_runs: 3,
+			recovers: null,
+			...overrides,
+		};
+	}
+
+	it("allows a body nothing resembles", () => {
+		expect(dedupeOutcome([rule()], FAR)).toEqual({ kind: "allow" });
+	});
+
+	it("re-queues a near-duplicate of an UNDERPOWERED eviction as a recovery", () => {
+		const outcome = dedupeOutcome([rule()], NEAR);
+		expect(outcome.kind).toBe("recover");
+		expect(outcome.kind === "recover" && outcome.of.id).toBe(1);
+	});
+
+	it("suppresses a near-duplicate of a MEASURED-NEGATIVE eviction", () => {
+		// The distinction this whole feature exists for: same status, same
+		// dedupe input, opposite outcome.
+		const outcome = dedupeOutcome([rule({ underpowered: 0 })], NEAR);
+		expect(outcome.kind).toBe("suppress");
+		expect(outcome.kind === "suppress" && outcome.why).toBe(
+			"already measured and rejected",
+		);
+	});
+
+	it("suppresses a near-duplicate of a REGRESSION eviction (safety invariant)", () => {
+		// A regression never sets `underpowered`, so it can never be recovered.
+		// Pinned here as well as at the verdict, because this is the layer where
+		// a re-proposal would actually get through.
+		const regressed = rule({
+			underpowered: 0,
+			recovery_runs: null,
+			measured_delta: 4000,
+			decided_reason: "regression: a previously passing golden task failed",
+		});
+		expect(dedupeOutcome([regressed], NEAR).kind).toBe("suppress");
+	});
+
+	it("suppresses a near-duplicate of an active or queued rule", () => {
+		expect(dedupeOutcome([rule({ status: "active" })], NEAR)).toMatchObject({
+			kind: "suppress",
+			why: "already active",
+		});
+		expect(dedupeOutcome([rule({ status: "candidate" })], NEAR)).toMatchObject({
+			kind: "suppress",
+			why: "already candidate",
+		});
+	});
+
+	it("suppresses when ANY match blocks, even if another is recoverable", () => {
+		const outcome = dedupeOutcome(
+			[rule({ id: 1 }), rule({ id: 2, status: "active", underpowered: 0 })],
+			NEAR,
+		);
+		expect(outcome).toMatchObject({ kind: "suppress", why: "already active" });
+	});
+
+	it("allows exactly ONE recovery per lineage", () => {
+		// The queued attempt is worded far enough from this proposal not to match
+		// it directly, so only the lineage pointer stops a second one. (When it
+		// does match directly it is suppressed anyway, as a queued candidate.)
+		const parent = rule({ id: 1 });
+		const child = rule({ id: 2, body: FAR, status: "candidate", recovers: 1 });
+		expect(dedupeOutcome([parent, child], NEAR)).toMatchObject({
+			kind: "suppress",
+			why: "its one recovery attempt has already been queued",
+		});
+	});
+
+	it("suppresses a proposal matching a lineage whose attempt is still queued", () => {
+		const parent = rule({ id: 1 });
+		const child = rule({ id: 2, status: "candidate", recovers: 1 });
+		expect(dedupeOutcome([parent, child], NEAR)).toMatchObject({
+			kind: "suppress",
+			why: "already candidate",
+		});
+	});
+
+	it("never treats a recovery attempt as a recovery ROOT", () => {
+		// The child carries a lineage pointer, so even once it is itself evicted
+		// underpowered it cannot open a third look.
+		const child = rule({ id: 2, recovers: 1, underpowered: 1 });
+		expect(dedupeOutcome([child], NEAR)).toMatchObject({ kind: "suppress" });
+	});
+
+	it("re-tries against the most recent underpowered verdict", () => {
+		const outcome = dedupeOutcome(
+			[rule({ id: 1, recovery_runs: 2 }), rule({ id: 5, recovery_runs: 4 })],
+			NEAR,
+		);
+		expect(outcome.kind === "recover" && outcome.of.id).toBe(5);
 	});
 });

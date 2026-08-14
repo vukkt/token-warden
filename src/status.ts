@@ -193,6 +193,13 @@ export interface EvictionEntry {
 	delta: number | null;
 	reason: string | null;
 	body: string;
+	/** True when the eviction was decided by the WIDTH of the measurement, not
+	 * by its point estimate: the rule may be proposed again and re-measured.
+	 * Surfaced because "we could not tell" and "it does not earn" are very
+	 * different facts to read off the same line. */
+	underpowered: boolean;
+	/** Runs per side that verdict was decided at; a re-measurement needs more. */
+	recoveryRuns: number | null;
 }
 
 /** One agent's real-work learning curve (only agents with sessions appear). */
@@ -248,6 +255,8 @@ export function gatherStatus(db: WardenDb): StatusData {
 				delta: rule.measured_delta,
 				reason: rule.decided_reason,
 				body: rule.body,
+				underpowered: rule.underpowered === 1,
+				recoveryRuns: rule.recovery_runs,
 			});
 		}
 		const realPoints = realWorkCurveByAgent(db, agent);
@@ -362,10 +371,14 @@ export function formatStatus(data: StatusData): string {
 
 		...section(
 			"Last evictions (max 5 per agent):",
-			data.evictions.map(
-				(r) =>
-					`  [${r.agent} #${r.id}] delta=${r.delta ?? "n/a"} — ${displayText(r.reason ?? "no reason recorded")} — "${displayText(r.body)}"`,
-			),
+			data.evictions.map((r) => {
+				// An underpowered eviction is not a rejection, and the ledger must
+				// not read like one: the effect was there, the evidence was not.
+				const recoverable = r.underpowered
+					? ` [UNDERPOWERED: not falsified, re-measurable at >${r.recoveryRuns ?? "?"} runs/side]`
+					: "";
+				return `  [${r.agent} #${r.id}] delta=${r.delta ?? "n/a"}${recoverable} — ${displayText(r.reason ?? "no reason recorded")} — "${displayText(r.body)}"`;
+			}),
 			"  none",
 		),
 

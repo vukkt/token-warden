@@ -129,6 +129,56 @@ Every published figure is pinned in `test/variance-published.test.ts` against a
 frozen extract of the runs it came from, so the document cannot drift out of
 agreement with the estimators.
 
+### Rules the gate could not resolve are no longer excluded for life
+
+An evicted candidate now records WHY it was evicted. `underpowered` means the
+point estimate cleared the 2x-rent bar and reached at least half the confidence
+margin promotion demands, so only the WIDTH of the measurement stopped it —
+the hypothesis was never actually tested. Everything else (sub-threshold,
+non-positive, regression, environment failure, re-audit) is unchanged and
+still final.
+
+The distiller's trigram dedupe stops suppressing those bodies. A re-proposal is
+queued as a fresh CANDIDATE pointing back at the eviction it re-tries: measured
+from scratch, on its own baseline, never re-banked on the old numbers. It is
+HELD, costing nothing, until an invocation brings more runs per side than the
+measurement that could not resolve it, and it must then clear the bar by 1.5x
+the ordinary margin.
+
+Why this matters: FINDINGS has measured the Type II tail at an order of
+magnitude above the Type I tail since v0.42.0 — a rule genuinely saving 2% of a
+run is evicted 70-78% of the time — while the dedupe made every one of those
+evictions permanent.
+
+**Measured before shipping** (`validation/empirical-calibration.ts --mode
+recovery`, zero tokens, `sql` pool, 20,000 trials/row, three seeds):
+
+| True saving | control | with recovery | difference |
+|---|---|---|---|
+| 0 (false positives) | 10.7% | 10.8% | **+0.08pt** |
+| 10% | 34.1% | 36.5% | +2.46pt |
+| 20% | 69.4% | 78.7% | **+9.30pt** |
+
+A second look cannot be free — total risk is `p + P(zone|H0)·p2` — so this is
+reported as the increase it is: 0.75% relative, buying 13.4% relative power on
+the 20% row, a marginal ratio of 116:1 against the gate's own 6.5:1. The
+equal-depth variant (+0.48pt for less power) and the no-extra-strictness variant
+(+0.50pt) were both measured and rejected; see FINDINGS.md.
+
+`/warden-status` marks such evictions `[UNDERPOWERED: not falsified,
+re-measurable at >N runs/side]`, and `/warden-select` reports any recovery
+attempt it held and the `--runs` value that would release it.
+
+- Migration #18: `rules.underpowered`, `rules.recovery_runs`, `rules.recovers`.
+- `WARDEN_RECOVERY_MARGIN` (0.5) and `WARDEN_RECOVERY_STRICTNESS` (1.5) expose
+  the two tuned parameters; both reject out-of-range values rather than
+  clamping, and both are pinned by tests.
+- Underpowered evictions are also removed from the distiller's negative-feedback
+  block, which told the proposer "measured and rejected, aim at a bigger waste
+  source" — the wrong lesson from a large-but-unresolvable effect, and a
+  contradiction of the dedupe now letting the body through.
+
+
 
 ## v0.43.1 — 2026-08-05
 
