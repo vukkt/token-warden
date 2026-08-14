@@ -22,7 +22,13 @@ vi.mock("../src/bench.js", async (importOriginal) => {
 });
 
 import { runSuite, type TaskSummary } from "../src/bench.js";
-import { decideRule, getRuleById, insertRule, openDb } from "../src/db.js";
+import {
+	decideRule,
+	getRuleById,
+	insertRule,
+	openDb,
+	setRuleUnderpowered,
+} from "../src/db.js";
 import { main, parseSelectArgs } from "../src/select.js";
 
 const runSuiteMock = runSuite as unknown as MockInstance;
@@ -148,6 +154,44 @@ describe("select main() orchestration", () => {
 			"No candidates and no active rules to audit; nothing to do.",
 		);
 		expect(runSuiteMock).not.toHaveBeenCalled();
+	});
+
+	it("holds a recovery attempt whose run budget brings no more evidence", () => {
+		const db = openDb();
+		const parent = insertRule(db, {
+			agent: "sql",
+			body: "Use Grep to locate symbols before reading any file.",
+			contextCost: 10,
+			sourceRun: null,
+			createdAt: "t",
+		});
+		decideRule(db, parent, "evicted", 9000, "uncertain after top-up", "t");
+		setRuleUnderpowered(db, parent, true, 3);
+		const child = insertRule(db, {
+			agent: "sql",
+			body: "Use Grep to locate symbols before reading any files.",
+			contextCost: 10,
+			sourceRun: null,
+			createdAt: "u",
+			recovers: parent,
+		});
+		db.close();
+
+		main({
+			agent: "sql",
+			runs: 3,
+			topUp: 1,
+			uniformTopUp: false,
+			retentionRounds: 2,
+		});
+
+		// Held, and the message says exactly what would release it. Crucially it
+		// cost NOTHING: not one suite pass was spent discovering this.
+		expect(output()).toContain(`[held] rule ${child}`);
+		expect(output()).toContain("needs at least 4");
+		expect(output()).toContain("--runs 4");
+		expect(runSuiteMock).not.toHaveBeenCalled();
+		expect(output()).not.toContain("nothing to do");
 	});
 
 	it("promotes a candidate that confidently clears the 2x-rent bar", () => {

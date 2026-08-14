@@ -2128,7 +2128,14 @@ export function main(args: SelectArgs): void {
 
 		reportHeld(report.held);
 		if (report.decisions.length === 0 && report.aborted === null) {
-			console.log("No candidates and no active rules to audit; nothing to do.");
+			// "Nothing to do" would be wrong when a recovery attempt is queued and
+			// waiting on a run budget: there IS something to do, and the held line
+			// above says what.
+			console.log(
+				report.held.length > 0
+					? "Nothing measured this invocation; the held recovery attempt(s) above are still queued."
+					: "No candidates and no active rules to audit; nothing to do.",
+			);
 			return;
 		}
 		reportDecisions(db, args.agent, report.decisions, weightedSuite);
