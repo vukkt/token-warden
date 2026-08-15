@@ -12,7 +12,7 @@ that it saves more tokens than it costs to carry. Rules that fail are evicted. R
 already passed are re-tested and evicted when they stop paying.
 
 ```text
-  version    0.44.0            tests       1468 across 57 files
+  version    0.44.0            tests       1475 across 58 files
   released   50 versions       coverage    97.09% lines, CI-enforced floor
   built      2026-06 to now    source      44 modules, 16.2k lines
   license    MIT               test code   22.2k lines
@@ -211,7 +211,7 @@ The measurement discipline is the product, so the codebase is held to it.
 
 | | |
 |---|---|
-| **Tests** | 1468 across 57 files. 22.5k lines of test code against 16.3k of source. |
+| **Tests** | 1475 across 58 files. 22.7k lines of test code against 16.3k of source. |
 | **Coverage** | 97.0% lines, 96.2% statements, 97.4% functions, 89.2% branches, behind a ratcheted floor CI fails on. |
 | **Pipeline** | Staged: quality gates test, fixture and coverage, which gate validate, which gates release. Actions SHA-pinned, least-privilege tokens, `npm ci`. |
 | **Types** | Strict TypeScript with `noUncheckedIndexedAccess`. Zero `any`, zero `@ts-ignore`, zero non-null assertions across src and test. |

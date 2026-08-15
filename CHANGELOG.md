@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### The sanitizer's contract is now enforced by construction, not by discipline
+
+`sanitize.ts` opens by calling itself "the single chokepoint every model- or
+environment-derived string must pass through before it is rendered into a
+report, a log line, or a user-facing permission prompt." The contract was
+documented, real, and honoured by `status.ts`, `scope.ts` and `collect.ts` — and
+violated in seven other places. Those violations were found across two audit
+passes by six agents working independently, none of whom could see each other's
+findings. Six independent rediscoveries of one rule is not six mistakes; it is a
+rule that cannot be held by discipline.
+
+The last three are closed here. `select.ts` rendered the rule body raw in the
+SELECTOR'S OWN decision report — the one place a reader looks to see what was
+kept and what was evicted, so a body carrying a newline forged an extra decision
+row exactly where it would be believed. `compress.ts` printed the model's
+rewrite raw on both the dry-run and the queued path.
+
+`test/sanitize-contract.test.ts` now requires every interpolation of a
+model-derived field in `src/` to pass through `displayText` (or `truncateBody`,
+a wrapper over it) at the call site, or to appear in an allowlist **with a
+stated reason**. There are five entries, each naming why the text is not a
+render: prompt bodies that must reach the model verbatim, `distill`'s arguments
+to `logLine` which sanitizes at the sink, `memory.ts` compiling MEMORY.md where
+the body IS the payload the agent loads, and `compress`'s `bornDigest` which is
+persisted rather than printed. The allowlist is the thing a reviewer has to
+argue with — the same device `golden-checks.test.ts` uses for its known-vacuous
+checks. An entry that stops matching a live site fails too: an exemption that no
+longer applies is a licence nobody revoked.
+
+Verified by WATCHING IT FAIL, not merely by passing. Reintroducing the
+`select.ts` violation into real source produces `select.ts:2031 in
+decisionLine() renders ${decision.rule.body} without displayText`. A guard
+nobody has seen fail is not yet a guard — the same standard applied to the
+validation-import guard in v0.44.0.
+
+It caught its own false positive during development: `protect.ts`'s fallback
+string `?? "does not meet the rule body contract"` matched on the word *body*
+inside a string literal rather than a field read, so the matcher now strips
+quoted text before testing.
+
+Deliberately narrow. This is a source-text guard, not a taint tracker: it cannot
+follow a body through a variable, an array, or a helper. It catches the shape
+all seven real violations actually took — a tainted field interpolated directly
+into a rendered string — so a failure is always a real finding rather than noise
+to be silenced.
+
 ## v0.44.0 — 2026-08-14
 
 ### CORRECTION: the retrieval headline was 11.2x and is 3.7x

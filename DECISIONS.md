@@ -557,6 +557,61 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## Unreleased — the sanitizer contract is checked, because six agents proved discipline does not hold it
+
+- **The evidence that a rule needed enforcing.** `sanitize.ts` has always
+  described itself as the single chokepoint for model- and environment-derived
+  text. Two audit passes then found it violated in seven places, and the way
+  they were found is the argument: six agents, each isolated in its own
+  worktree, each unable to see the others' findings, each independently
+  rediscovered the same class. `status.ts`, `scope.ts` and `collect.ts` honoured
+  the contract; `select.ts`, `distill.ts`, `evolve.ts`, `contradict.ts`,
+  `sample-tasks.ts`, `share.ts`, `cost.ts` and `compress.ts` did not. One of
+  them was proven exploitable end to end — a newline in a rejected model reply
+  forged a second timestamped entry in `distill.log`. A rule rediscovered six
+  times independently is not being violated by carelessness; it is a rule with
+  nothing holding it.
+
+- **Why a test rather than a type.** A branded `Displayable` string would be
+  stronger, and it was considered. It was rejected for this change because it
+  touches every signature that carries a rule body — a wide, behaviour-adjacent
+  refactor of the kind this repo has repeatedly found to be where silent wrong
+  numbers enter. The source-text guard buys most of the protection at a fraction
+  of the risk, and it can be replaced by the type later without either being
+  wasted. A lint rule was rejected for a plainer reason: biome does not support
+  custom rules here, so it would mean adding a linter to gate a single
+  invariant.
+
+- **The allowlist carries reasons, not just names.** Five entries, each stating
+  why its site is not a render: prompt bodies that must reach the model verbatim
+  (a sanitized body is a prompt about a DIFFERENT rule), `distill`'s arguments
+  to `logLine` which sanitizes at the sink, `memory.ts` compiling MEMORY.md
+  where the body IS the payload — sanitizing there would silently alter the rule
+  the agent carries, which is worse than the injection it would prevent — and
+  `compress`'s `bornDigest`, persisted for provenance rather than printed. A
+  bare list of exempt files would have been unarguable; a list of claims can be
+  challenged.
+
+- **Stale exemptions fail too.** The guard asserts every allowlist entry still
+  matches a live site. An exemption whose code has moved on is a licence nobody
+  revoked, and this repo has already been bitten by the general shape: a check
+  that reports clean while looking at nothing (knip's `@public` tag hiding ~90
+  lines, `biome check` exiting 0 on warnings, `validation/` sitting outside
+  typecheck).
+
+- **Verified by watching it fail.** Reintroducing the `select.ts` violation into
+  real source produces a precise, actionable failure naming file, line and
+  function. This is the same standard applied to v0.44.0's validation-import
+  guard: a guard verified only by passing today has not been shown to catch
+  anything.
+
+- **Known limits, stated rather than implied.** It is a source-text guard, not a
+  taint tracker: it cannot follow a body through a variable, an array or a
+  helper, and it only knows the field names `body` and `decided_reason` that
+  `sanitize.ts` itself names as model-generated. It catches the shape all seven
+  real violations took. Narrow and always-true beats broad and noisy, because a
+  guard that cries wolf gets silenced and then catches nothing.
+
 ## v0.44.0 — the dogfood window never started, and `main` stays out of the loop
 
 - **The window was not weak, it was inert — and the failure was invisible.**
