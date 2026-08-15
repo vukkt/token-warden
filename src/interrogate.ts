@@ -359,7 +359,7 @@ export function callClaude(
 			last = classifyFailure(result.status, result.stderr, result.error);
 		}
 		if (!last.environmental || attempt === MAX_ATTEMPTS) break;
-		(sleep ?? sleepSync)(backoffMs(attempt));
+		sleep(backoffMs(attempt));
 	}
 	return { ok: false, failure: last };
 }

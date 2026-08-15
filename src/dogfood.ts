@@ -243,12 +243,11 @@ export function gatherDogfood(
 		});
 	}
 
-	const lastRealWorkTs =
-		recorded.reduce<string | null>(
-			(newest, row) =>
-				newest === null || row.lastTs > newest ? row.lastTs : newest,
-			null,
-		) ?? null;
+	const lastRealWorkTs = recorded.reduce<string | null>(
+		(newest, row) =>
+			newest === null || row.lastTs > newest ? row.lastTs : newest,
+		null,
+	);
 	const parsedLast =
 		lastRealWorkTs === null ? Number.NaN : Date.parse(lastRealWorkTs);
 	return {
