@@ -226,7 +226,10 @@ export function runCompress(
 	if (args.dryRun) {
 		return [
 			`Proposed rewrite of rule ${rule.id} (rent ${oldRent} -> ${newRent}):`,
-			`  "${parsed.body}"`,
+			// Model-written, and rendered straight to the terminal. It has passed
+			// `rewriteSchema`, which is the primary defence; this is the rendering
+			// contract every other report already honours.
+			`  "${displayText(parsed.body)}"`,
 			"Dry run: nothing inserted. Re-run without --dry-run to queue it as a candidate.",
 		].join("\n");
 	}
@@ -246,7 +249,7 @@ export function runCompress(
 	});
 	return [
 		`Queued candidate ${id}: compressed variant of rule ${rule.id} (rent ${oldRent} -> ${newRent}).`,
-		`  "${parsed.body}"`,
+		`  "${displayText(parsed.body)}"`,
 		`Run /warden-select ${args.agent} to measure it: the variant is benched as a SWAP`,
 		`(active set with it instead of rule ${rule.id}) and must clear 2x its own rent.`,
 		`If it survives, the redundant original will fail its next re-audits and exit via`,

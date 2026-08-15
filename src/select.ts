@@ -50,6 +50,7 @@ import {
 } from "./memory.js";
 import { blendedDollarsPerToken, priceFor } from "./pricing.js";
 import { assertKnownAgent } from "./registry.js";
+import { displayText } from "./sanitize.js";
 import {
 	confidenceZ,
 	effectiveRent,
@@ -2018,10 +2019,16 @@ function decisionLine(
 		decision.delta !== null
 			? `, ≈$${(decision.delta * dollarsPerToken).toFixed(4)}/run advisory`
 			: "";
+	// The body is model-written. Every other report that prints one
+	// (status.ts, receipt.ts, cost.ts, health.ts) routes it through
+	// `displayText`; this line did not, so a body carrying a newline forged an
+	// extra decision row in the selector's own report — the one place a reader
+	// looks to see what was kept and evicted. The insert-time schema is the
+	// primary defence; this is the rendering contract.
 	return (
 		`  [${decision.kind}] rule ${decision.rule.id} → ${decision.status.toUpperCase()}` +
 		` (delta=${decision.delta ?? "n/a"}, rent=${decision.rule.context_cost}${dollars}` +
-		`${decisionFlags(decision, weightedSuite)}): "${decision.rule.body}"`
+		`${decisionFlags(decision, weightedSuite)}): "${displayText(decision.rule.body)}"`
 	);
 }
 
