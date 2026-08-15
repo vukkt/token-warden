@@ -393,6 +393,21 @@ export function interrogate(
 	let contextTokens = 0;
 	let hops = 0;
 
+	/** Fail closed, carrying the work already paid for. The counters are read at
+	 * call time, so a failure still reports the hops and context it spent. */
+	const failed = (
+		error: string,
+		environmentFailure: boolean,
+	): InterrogationResult => ({
+		question,
+		queries,
+		hops,
+		contextTokens,
+		report: null,
+		error,
+		environmentFailure,
+	});
+
 	// The first query is always the question itself: there is nothing yet to
 	// base a smarter one on, and spending a model call to rephrase a question
 	// before any evidence exists is a round-trip that buys nothing.
@@ -420,15 +435,10 @@ export function interrogate(
 			sleep,
 		);
 		if (!plan.ok) {
-			return {
-				question,
-				queries,
-				hops,
-				contextTokens,
-				report: null,
-				error: `planning call failed: ${plan.failure.reason}`,
-				environmentFailure: plan.failure.environmental,
-			};
+			return failed(
+				`planning call failed: ${plan.failure.reason}`,
+				plan.failure.environmental,
+			);
 		}
 		const parsed = parsePlan(plan.text);
 		if (parsed.kind !== "search") break;
@@ -441,29 +451,16 @@ export function interrogate(
 		sleep,
 	);
 	if (!answer.ok) {
-		return {
-			question,
-			queries,
-			hops,
-			contextTokens,
-			report: null,
-			error: `extraction call failed: ${answer.failure.reason}`,
-			environmentFailure: answer.failure.environmental,
-		};
+		return failed(
+			`extraction call failed: ${answer.failure.reason}`,
+			answer.failure.environmental,
+		);
 	}
 	const facts = parseFacts(answer.text);
 	if (!facts.ok) {
-		return {
-			question,
-			queries,
-			hops,
-			contextTokens,
-			report: null,
-			error: facts.reason,
-			// A process that ran fine but returned unparseable CONTENT is a model
-			// problem, not an environment one.
-			environmentFailure: false,
-		};
+		// A process that ran fine but returned unparseable CONTENT is a model
+		// problem, not an environment one.
+		return failed(facts.reason, false);
 	}
 	return {
 		question,
