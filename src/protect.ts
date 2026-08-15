@@ -22,7 +22,7 @@
  * SECURITY — listed rule bodies are model-generated, so they are rendered
  * through `displayText` and cannot forge a listing row or an ANSI sequence.
  */
-import { runCli } from "./cli.js";
+import { numericFlag, runCli } from "./cli.js";
 import {
 	getRuleById,
 	insertAuthoredRule,
@@ -56,8 +56,8 @@ export function parseProtectArgs(argv: string[]): ProtectArgs {
 		const flag = argv[i];
 		if (flag === "--agent") args.agent = argv[++i] ?? "";
 		else if (flag === "--add") args.add = argv[++i] ?? null;
-		else if (flag === "--protect") args.protect = Number(argv[++i]);
-		else if (flag === "--unprotect") args.unprotect = Number(argv[++i]);
+		else if (flag === "--protect") args.protect = numericFlag(argv[++i]);
+		else if (flag === "--unprotect") args.unprotect = numericFlag(argv[++i]);
 		else if (flag === "--list") args.list = true;
 		else throw new Error(`unknown flag: ${flag}`);
 	}

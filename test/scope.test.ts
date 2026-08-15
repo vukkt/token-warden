@@ -38,6 +38,12 @@ describe("parseScopeArgs", () => {
 		expect(() => parseScopeArgs(["--agent", "sql", "--rule", "1"])).toThrow(
 			/--scope/,
 		);
+		// A blank value used to parse as rule id 0, which cleared the integer
+		// check and failed later as the far less obvious "no rule 0 for agent".
+		expect(() => parseScopeArgs(["--agent", "sql", "--rule", ""])).toThrow(
+			/--rule/,
+		);
+		expect(() => parseScopeArgs(["--agent", "sql", "--rule"])).toThrow(/--rule/);
 	});
 
 	it("accepts --list without a rule and rejects a bad agent", () => {

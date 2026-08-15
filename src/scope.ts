@@ -21,7 +21,7 @@
  * (model-generated) and predicates alike — goes through `displayText`, so a
  * pre-existing row can never forge a listing line either.
  */
-import { runCli } from "./cli.js";
+import { numericFlag, runCli } from "./cli.js";
 import {
 	getRuleById,
 	listRulesByAgent,
@@ -53,7 +53,7 @@ export function parseScopeArgs(argv: string[]): ScopeArgs {
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
 		if (flag === "--agent") args.agent = argv[++i] ?? "";
-		else if (flag === "--rule") args.rule = Number(argv[++i]);
+		else if (flag === "--rule") args.rule = numericFlag(argv[++i]);
 		else if (flag === "--scope") args.scope = argv[++i] ?? null;
 		else if (flag === "--clear") args.clear = true;
 		else if (flag === "--list") args.list = true;
