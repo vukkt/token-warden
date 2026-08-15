@@ -127,32 +127,36 @@ describe("scoreRetrieval", () => {
 		}
 	});
 
-	it("PINS the reported-vs-sent token gap on the shipped suite", () => {
-		// Added 2026-08-14, and deliberately a pin rather than a fix. The tokens
-		// every arm reports are chunk bodies; the prompt is renderContext(), whose
-		// per-chunk citation label is load-bearing and unpriced. Measured 17.6-20.8%
-		// across arms, and the assembled context exceeds the stated budget on ALL
-		// 12 questions in every arm.
-		//
-		// The band is wide on purpose: this must fail if the gap CLOSES (someone
-		// fixed the accounting and owes the knee, the 3.7x headline and the 22%
-		// floor a re-pin) or if it BLOWS OUT, but not merely because a chunk moved.
+	it("reports exactly what it sends, on every arm", () => {
+		// The gap this replaces was pinned on 2026-08-14 and closed on 2026-08-15.
+		// `tokens` summed chunk bodies while the prompt was renderContext(), whose
+		// per-chunk citation label is load-bearing and was unpriced: 17.6-20.8%
+		// across arms. Both now derive from `renderChunk`, so equality here is
+		// structural rather than lucky — but assert it anyway, because that single
+		// source of truth is exactly the kind of thing a later edit splits again.
 		const { questions } = loadSuite(SUITE);
 		for (const strategy of ["full", "bm25", "section"] as const) {
-			let reported = 0;
-			let sent = 0;
-			let overBudget = 0;
 			for (const q of questions) {
 				const r = retrieve(strategy, corpus, index, q.question, 1200);
-				reported += r.tokens;
-				sent += estimateTokens(renderContext(r));
-				if (estimateTokens(renderContext(r)) > 1200) overBudget++;
+				expect(r.tokens).toBe(estimateTokens(renderContext(r)));
 			}
-			expect(sent).toBeGreaterThan(reported);
-			const undercount = (100 * (sent - reported)) / sent;
-			expect(undercount).toBeGreaterThan(15);
-			expect(undercount).toBeLessThan(25);
-			expect(overBudget).toBe(questions.length);
+		}
+	});
+
+	it("treats the budget as a real bound on the assembled context", () => {
+		// The consequence of the old undercount: the packer measured bodies, so
+		// the context it assembled exceeded its stated budget on 12 of 12
+		// questions in BOTH budgeted arms. `full` is exempt by construction - it
+		// ignores the budget, and reporting its cost against the others is the
+		// entire comparison.
+		const { questions } = loadSuite(SUITE);
+		for (const budget of [200, 600, 1200]) {
+			for (const strategy of ["bm25", "section"] as const) {
+				for (const q of questions) {
+					const r = retrieve(strategy, corpus, index, q.question, budget);
+					expect(estimateTokens(renderContext(r))).toBeLessThanOrEqual(budget);
+				}
+			}
 		}
 	});
 });
@@ -204,9 +208,12 @@ describe("runRetrievalBench on the shipped suite", () => {
 
 	it("costs the mega-prompt the whole corpus on every question", () => {
 		const full = reports.find((r) => r.strategy === "full");
-		expect(full?.meanTokens).toBe(
-			corpus.chunks.reduce((a, c) => a + c.tokens, 0),
-		);
+		// The whole corpus AS RENDERED - bodies plus the citation labels the
+		// pipeline actually sends. Strictly more than the sum of bodies, and that
+		// difference is the undercount corrected on 2026-08-15.
+		const bodies = corpus.chunks.reduce((a, c) => a + c.tokens, 0);
+		expect(full?.meanTokens).toBeGreaterThan(bodies);
+		expect(full?.meanTokens).toBe(5648);
 	});
 
 	it("makes retrieval strictly cheaper per question", () => {
@@ -240,9 +247,12 @@ describe("sweepBudgets", () => {
 	});
 
 	it("finds a knee below the corpus size", () => {
-		const k = knee(sweepBudgets(SUITE, [200, 400, 600, 1200]), "section");
+		const k = knee(sweepBudgets(SUITE, [200, 400, 600, 1200, 1400]), "section");
 		expect(k).not.toBeNull();
-		expect(k?.budget).toBeLessThan(4474);
+		// Against the RENDERED corpus, which is what the mega-prompt arm now
+		// costs; comparing a rendered knee to an unrendered corpus size was
+		// mixing two accountings.
+		expect(k?.budget).toBeLessThan(5648);
 	});
 
 	it("reports never when a strategy cannot reach mega-prompt recall", () => {
@@ -254,23 +264,47 @@ describe("sweepBudgets", () => {
 	it("pins the PUBLISHED knee for the bundled suite", () => {
 		// Added 2026-08-13. Nothing pinned this before, which is how the v0.42.0
 		// headline (`section` at 400 tokens, 11.2x) survived to the README while
-		// resting on a rounding hole in `valueAppearsIn`. The corrected knee is
-		// 1,200 tokens/question for BOTH lexical strategies — 3.7x, not 11.2x —
-		// and any change to the scorer, the chunker or the corpus that moves it
-		// must move the published figure in the same commit.
-		const rows = sweepBudgets(SUITE, [200, 400, 600, 800, 1200, 2400]);
+		// resting on a rounding hole in `valueAppearsIn`. Re-pinned 2026-08-15
+		// when the token accounting was corrected to price the assembled prompt
+		// rather than the chunk bodies: the knee moves 1,200 -> 1,400 tokens for
+		// BOTH lexical strategies. Any change to the scorer, the chunker, the
+		// packer or the corpus that moves these must move the published figures
+		// in the same commit.
+		const rows = sweepBudgets(SUITE, [200, 400, 600, 800, 1200, 1400, 2400]);
 		for (const strategy of ["bm25", "section"] as const) {
-			expect(knee(rows, strategy)?.budget).toBe(1200);
+			expect(knee(rows, strategy)?.budget).toBe(1400);
 		}
 		const at = (strategy: string, budget: number): number =>
 			(rows.find((r) => r.strategy === strategy && r.budget === budget)
 				?.recall ?? -1) * 100;
-		// The knee is real: recall is still far from complete an octave below it.
-		expect(Math.round(at("bm25", 200))).toBe(22);
-		expect(Math.round(at("section", 200))).toBe(22);
-		// `section` does not beat `bm25`. The v0.42.0 claim that it did was the
-		// same artifact; below the knee it is briefly WORSE.
-		expect(at("section", 600)).toBeLessThan(at("bm25", 600));
+		// The knee is real: recall is still far from complete well below it. The
+		// floor moved 22% -> 11% because 200 tokens no longer buys 200 tokens of
+		// bodies plus unpriced labels.
+		expect(Math.round(at("bm25", 200))).toBe(11);
+		expect(Math.round(at("section", 200))).toBe(11);
+		// `section` does not beat `bm25`. The v0.42.0 claim that it did was an
+		// artifact of the scorer; with honest pricing the two are indistinguishable
+		// on recall at every swept budget, and `bm25` is marginally cheaper at the
+		// knee (1,280.5 vs 1,307.8 tokens/question), which is the opposite of the
+		// original claim.
+		for (const budget of [200, 400, 600, 800, 1200, 1400]) {
+			expect(at("section", budget)).toBe(at("bm25", budget));
+		}
+	});
+
+	it("pins the PUBLISHED mega-prompt ratio", () => {
+		// The headline: what the whole corpus costs per question, against what the
+		// retrieval pipeline costs at the knee. 11.2x was a scorer artifact; 3.7x
+		// was measured but priced only the chunk bodies. Both sides are now priced
+		// on the assembled prompt, which is the only basis on which the comparison
+		// means anything.
+		const rows = sweepBudgets(SUITE, [200, 400, 600, 800, 1200, 1400, 2400]);
+		const full = rows.find((r) => r.strategy === "full");
+		const kneeRow = knee(rows, "bm25");
+		expect(full?.meanTokens).toBe(5648);
+		expect(kneeRow?.meanTokens).toBeCloseTo(1280.5, 1);
+		const ratio = (full?.meanTokens ?? 0) / (kneeRow?.meanTokens ?? 1);
+		expect(ratio).toBeCloseTo(4.41, 1);
 	});
 });
 

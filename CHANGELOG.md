@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+### CORRECTION: retrieval cost was under-priced by a fifth; the ratio is 4.4x, not 3.7x
+
+`Retrieval.tokens` summed the retrieved chunk BODIES. What the pipeline actually
+sends is `renderContext()`, which prefixes every chunk with
+`[chunkId] — section > path`. That label is not decoration: it is the handle a
+citation must quote, and `extract.ts` rejects any fact whose citation does not
+resolve — so it could not be dropped to close the gap. It was real context that
+nothing priced, by **17.6% to 20.8%** depending on the arm.
+
+The consequence was worse than the reported numbers being low. `underBudget`
+packed against the same unpriced metric, so the assembled context **exceeded its
+stated budget on 12 of 12 questions, in every arm, at every swept budget**. The
+budget was a bound on chunk text, not on context.
+
+Both now derive from a single `renderChunk`, so the packer prices exactly what
+the renderer emits and the two cannot drift apart by editing one of them.
+
+**Fixing it forced a second fix.** Packing against honest costs made recall
+NON-MONOTONE in budget — 78% at 400 tokens falling to 67% at 600 — because the
+packer skipped past a chunk that did not fit and took smaller ones after it, so
+a larger budget could drop a chunk a smaller budget had kept. `sweepBudgets`
+exists to locate a knee, and a curve that can fall as its input rises has no
+well-defined knee: the headline would depend on which budgets happened to be
+sampled.
+
+The packer now takes a prefix and stops. That is forced, not preferred:
+monotone recall requires the selected sets to NEST as the budget grows, and a
+nested family under a fixed score order is exactly the set of prefixes of that
+order — so "monotone AND budget-filling" was never available to choose. The cost
+is paid knowingly: below the knee it leaves room unused and retrieves less (67%
+rather than 78% at 400 tokens). At the knee it is strictly better on both axes,
+reaching 100% recall for 1,281 tokens against 1,393.
+
+Re-pinned, all measured on the bundled suite:
+
+| figure | was | is |
+|---|---|---|
+| knee | 1,200 tok/question | **1,400** |
+| mega-prompt ratio | 3.7x | **4.4x** (`bm25`), 4.3x (`section`) |
+| recall floor at 200 tok | 22% | **11%** |
+| mega-prompt cost | 4,474 tok | **5,648** |
+
+The ratio ROSE because the mega-prompt's own cost was understated by more than
+retrieval's — it carries every chunk, so it carries every label.
+
+The test that pinned the gap was written to fail when the gap CLOSED, and it
+did. It is now two tests: one asserting reported cost equals sent cost on every
+arm, one asserting the budget is a real bound. `test/retrieve.test.ts` also pins
+the nesting property directly, so a future packer that fills better but drops a
+previously-kept chunk fails on the invariant rather than on a moved number.
+
 ### The sanitizer's contract is now enforced by construction, not by discipline
 
 `sanitize.ts` opens by calling itself "the single chokepoint every model- or

@@ -48,7 +48,16 @@ import { extname, join, relative } from "node:path";
  * verdict re-baselined — see DECISIONS.md.
  */
 export function estimateTokens(text: string): number {
-	return Math.ceil(text.length / 4);
+	return tokensForLength(text.length);
+}
+
+/**
+ * The same estimate for a length already counted, so a caller assembling text
+ * incrementally does not have to concatenate it just to price it — and, more
+ * importantly, does not copy the divisor. One divisor, two entry points.
+ */
+export function tokensForLength(chars: number): number {
+	return Math.ceil(chars / 4);
 }
 
 /** A parsed source document, normalized to plain text. */

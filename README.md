@@ -12,10 +12,10 @@ that it saves more tokens than it costs to carry. Rules that fail are evicted. R
 already passed are re-tested and evicted when they stop paying.
 
 ```text
-  version    0.44.0            tests       1475 across 58 files
+  version    0.44.0            tests       1479 across 58 files
   released   50 versions       coverage    97.09% lines, CI-enforced floor
-  built      2026-06 to now    source      44 modules, 16.2k lines
-  license    MIT               test code   22.2k lines
+  built      2026-06 to now    source      44 modules, 16.4k lines
+  license    MIT               test code   22.8k lines
 ```
 
 ---
@@ -133,21 +133,22 @@ with known answers:
   answer recall vs retrieval budget
 
   budget      bm25   section      full
-     200       22%       22%      100%
+     200       11%       11%      100%
      400       67%       67%      100%
-     600       89%       78%      100%
+     600       67%       67%      100%
      800       89%       89%      100%
-   1,200      100%      100%      100%
+   1,200       89%       89%      100%
+   1,400      100%      100%      100%
    2,400      100%      100%      100%
 ```
 
 | Architecture | Cost/question | Answer recall | Doc recall | Verdict |
 |---|---|---|---|---|
-| Mega-prompt (whole corpus) | 4,474 tok | 100% | 100% | Never misses. Pays for everything, every question, forever. |
-| Lexical retrieval (`bm25`) | 1,198 tok | 100% | 100% | **3.7x cheaper**, same answers |
-| Section retrieval | 1,198 tok | 100% | 100% | **3.7x cheaper**, same answers |
+| Mega-prompt (whole corpus) | 5,648 tok | 100% | 100% | Never misses. Pays for everything, every question, forever. |
+| Lexical retrieval (`bm25`) | 1,281 tok | 100% | 100% | **4.4x cheaper**, same answers |
+| Section retrieval | 1,308 tok | 100% | 100% | **4.3x cheaper**, same answers |
 
-The knee is real — recall collapses to 22% at 200 tokens — and everything to the right of
+The knee is real — recall collapses to 11% at 200 tokens — and everything to the right of
 it is context that changed no answer. **A corpus nobody filtered and a rule nobody measured
 are the same mistake at different scales**, which is why this lives here rather than in a
 separate tool.
@@ -166,8 +167,29 @@ separate tool.
 > ratio is 3.7x, the corrected `section`-vs-`bm25` ordering is a tie, and no number in this
 > section had a test holding it in place before now.
 
+> **Second correction, 2026-08-15.** The numbers above are again different, and again the
+> instrument was at fault rather than the retriever. `Retrieval.tokens` summed the chunk
+> *bodies*, but the prompt the pipeline actually sends adds a `[chunkId] — section > path`
+> label to every chunk — the handle a citation has to quote, so it cannot be dropped. Every
+> reported cost was therefore 17.6–20.8% too low, and because the packer bounded the same
+> unpriced number, the assembled context **exceeded its stated budget on all 12 questions in
+> every arm at every budget**. The budget was a bound on chunk text, not on context. Both
+> now derive from one `renderChunk`, so they cannot drift apart again.
+>
+> Fixing it forced a second fix. Packing against honest costs made recall *fall* as budget
+> rose (78% at 400, 67% at 600), because the packer skipped past a chunk that did not fit
+> and took smaller ones later — so a bigger budget could drop a chunk a smaller one kept.
+> The packer now takes a prefix and stops. That is not a preference: monotone recall
+> requires the selected sets to nest, and nested sets under a fixed score order *are*
+> prefixes, so "monotone and budget-filling" was never available to choose. It costs real
+> recall below the knee (67% instead of 78% at 400 tokens) and is strictly better at it.
+>
+> Net: the knee moves 1,200 → **1,400 tokens/question**, the ratio 3.7x → **4.4x**, the
+> 200-token floor 22% → **11%**. The ratio rose because the mega-prompt's own cost was
+> understated by more than retrieval's. Every figure in this section is now pinned in CI.
+
 > A 5-document corpus is small enough that the mega-prompt is a legitimate architecture.
-> Retrieval savings scale with corpus size while retrieval cost does not, so 3.7x is a
+> Retrieval savings scale with corpus size while retrieval cost does not, so 4.4x is a
 > floor, not a headline. The tool prints that caveat with the number.
 
 Three things the pipeline does that are worth naming:
@@ -211,7 +233,7 @@ The measurement discipline is the product, so the codebase is held to it.
 
 | | |
 |---|---|
-| **Tests** | 1475 across 58 files. 22.7k lines of test code against 16.3k of source. |
+| **Tests** | 1479 across 58 files. 22.8k lines of test code against 16.4k of source. |
 | **Coverage** | 97.0% lines, 96.2% statements, 97.4% functions, 89.2% branches, behind a ratcheted floor CI fails on. |
 | **Pipeline** | Staged: quality gates test, fixture and coverage, which gate validate, which gates release. Actions SHA-pinned, least-privilege tokens, `npm ci`. |
 | **Types** | Strict TypeScript with `noUncheckedIndexedAccess`. Zero `any`, zero `@ts-ignore`, zero non-null assertions across src and test. |

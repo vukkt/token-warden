@@ -288,9 +288,10 @@ what remains is running the experiments and recording their results:
   that comparison exists — it would put a priced, versioned, non-reproducible
   service underneath a measurement whose whole value is reproducibility.
 - **A bigger corpus before quoting a bigger ratio.** `--sweep` reports both
-  lexical strategies matching mega-prompt recall at **3.7x** lower cost, on 5
-  documents and 4,474 tokens. That ratio is a floor and is labelled as one in the
-  output, but a floor measured on a toy corpus is still a toy measurement. The
+  lexical strategies matching mega-prompt recall at **4.4x** lower cost, on 5
+  documents rendering to 5,648 tokens. That ratio is a floor and is labelled as
+  one in the output, but a floor measured on a toy corpus is still a toy
+  measurement. The
   retrieval saving scales with corpus size while retrieval cost does not, so the
   number to publish is the one from a corpus large enough that the mega-prompt is
   not a serious option. Blocked on nothing but a corpus.
@@ -303,6 +304,16 @@ what remains is running the experiments and recording their results:
   The knee moves 400 -> 1,200 tokens/question, and the `section`-beats-`bm25`
   ordering was the same artifact — they tie. Regression tests now pin the three
   real false positives AND the knee itself, which nothing did before.
+  **Corrected again 2026-08-15**, this time in the cost accounting rather than
+  the scorer: `Retrieval.tokens` priced chunk bodies while the prompt adds a
+  per-chunk citation label, understating every arm by 17.6-20.8% and letting the
+  assembled context exceed its stated budget on all 12 questions. Fixing it
+  exposed a second defect — the packer skipped past chunks that did not fit, so
+  recall could FALL as budget rose (78% at 400, 67% at 600); it now takes a
+  prefix and stops, because nested selections are the only ones that can be
+  monotone. Knee 1,200 -> 1,400, ratio 3.7x -> 4.4x, floor 22% -> 11%. The ratio
+  rose because the mega-prompt's own cost was understated by more than
+  retrieval's.
 - **End-to-end accuracy has been run ONCE, and its ranking is still open.**
   Corrected 2026-08-13: this entry previously said `--yes` had never been
   executed against a real model. It has — four burns on 2026-07-28, recorded in

@@ -557,6 +557,47 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## Unreleased — the budget now bounds context, and the packer takes a prefix
+
+- **Price what you send, not what you selected.** `Retrieval.tokens` summed
+  chunk bodies while the prompt added a per-chunk `[chunkId] — section > path`
+  label. The label is load-bearing — `extract.ts` rejects a fact whose citation
+  does not resolve — so the gap could not be closed by dropping it. It was
+  17.6-20.8% of real context that no reported cost included, and because
+  `underBudget` bounded the same unpriced number, the budget bounded chunk text
+  rather than context: 12 of 12 questions exceeded it in every arm at every
+  swept budget. `renderChunk` is now the single source both the packer and the
+  renderer use, so this cannot be reintroduced by editing one of them.
+
+- **Why the packer takes a prefix, stated as a proof rather than a preference.**
+  Honest pricing made recall NON-MONOTONE in budget (78% at 400 tokens, 67% at
+  600). `sweepBudgets` exists to locate a knee, and a curve that can fall as its
+  input rises has no well-defined knee — the published ratio would depend on
+  which budgets were sampled. Monotone recall requires the selected sets to NEST
+  as the budget grows. Under a fixed score order, the nested families are
+  exactly the prefixes of that order; any rule that ever skips an item yields
+  two selections neither containing the other. So "monotone AND budget-filling"
+  is not a trade-off that was resolved in favour of monotonicity — it is not
+  available. The cost is paid openly: below the knee the packer leaves room
+  unused and retrieves less (67% rather than 78% at 400). At the knee it is
+  strictly better on both axes, 100% recall for 1,281 tokens against 1,393,
+  because the chunks it skipped were being paid for without carrying answers.
+
+- **The ratio went UP, which is worth stating plainly.** 3.7x -> 4.4x. A
+  correction that makes the headline better invites suspicion, and should: the
+  reason is that the mega-prompt carries every chunk and therefore every
+  unpriced label, so it was understated by more than retrieval was. Both sides
+  are now counted on the same basis, which is the only basis on which a ratio
+  means anything.
+
+- **The old pin was designed to fail when the gap closed, and it did.** It is
+  replaced by two assertions that are true of the fixed system — reported cost
+  equals sent cost on every arm, and the budget is a real bound — plus a direct
+  test of the nesting property. That last one matters most: a future packer that
+  fills the budget better but drops a previously-kept chunk now fails on the
+  INVARIANT rather than on a moved number, which is the difference between a
+  test that explains itself and one that just breaks.
+
 ## Unreleased — the sanitizer contract is checked, because six agents proved discipline does not hold it
 
 - **The evidence that a rule needed enforcing.** `sanitize.ts` has always

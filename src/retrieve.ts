@@ -34,7 +34,7 @@
  * documented next step (ROADMAP), and it should be admitted the same way
  * anything else here is — by measurement.
  */
-import type { Chunk, Corpus } from "./corpus.js";
+import { type Chunk, type Corpus, tokensForLength } from "./corpus.js";
 
 /** BM25 term-frequency saturation. 1.2 is the standard default; above it, term
  * repetition keeps paying, which favors boilerplate-heavy filings. */
@@ -152,48 +152,54 @@ export interface Retrieval {
 	strategy: Strategy;
 	chunks: Chunk[];
 	/**
-	 * Sum of retrieved chunk BODIES. Not the cost of the assembled prompt.
+	 * Cost of the ASSEMBLED PROMPT — every chunk in its rendered form, separators
+	 * included. What `renderContext` emits, priced by the same estimator.
 	 *
-	 * ## Known undercount, measured 2026-08-14 — NOT yet corrected
+	 * ## Corrected 2026-08-15 (previously the sum of chunk bodies)
 	 *
-	 * What the pipeline actually sends is `renderContext(retrieval)`, which
-	 * prefixes every chunk with `[chunkId] — section > path` and joins on a blank
-	 * line. `renderContext` calls that label load-bearing and it is: it is the
-	 * handle a citation must quote, and `extract.ts` rejects any fact whose
-	 * citation does not resolve. So it cannot be dropped to close the gap — it is
-	 * real context that this field does not price.
+	 * This field used to sum `chunk.tokens`, the bare bodies. What the pipeline
+	 * actually sends is `renderContext(retrieval)`, which prefixes every chunk
+	 * with `[chunkId] — section > path` and joins on a blank line. That label is
+	 * load-bearing, not decoration: it is the handle a citation must quote, and
+	 * `extract.ts` rejects any fact whose citation does not resolve. So it could
+	 * not be dropped to close the gap — it is real context that was going
+	 * unpriced, by 17.6% to 20.8% depending on the arm.
 	 *
-	 * Measured on the shipped `benchmarks/finance` suite:
+	 * Two things were wrong as a result, and both are fixed:
 	 *
-	 * | budget | arm     | reported | actually sent | undercount |
-	 * |--------|---------|----------|---------------|------------|
-	 * | 1,200  | full    | 53,688   | 67,776        | 20.8%      |
-	 * | 1,200  | bm25    | 14,373   | 17,494        | 17.8%      |
-	 * | 1,200  | section | 14,373   | 17,448        | 17.6%      |
+	 * 1. Every reported cost understated true spend by roughly a fifth.
+	 * 2. `underBudget` packed against the same unpriced metric, so the assembled
+	 *    context EXCEEDED its stated budget on 12 of 12 questions in every arm at
+	 *    every swept budget. The budget was a bound on chunk bodies, not on
+	 *    context. It is now a real bound.
 	 *
-	 * Two consequences, both real:
-	 *
-	 * 1. Every reported cost — `meanTokens`, `tokensPerAnswer`, the mega-prompt
-	 *    ratio — understates the true spend by roughly a fifth.
-	 * 2. `underBudget` packs against this same unpriced metric, so the assembled
-	 *    context EXCEEDS the stated budget on 12 of 12 questions in every arm at
-	 *    every swept budget. The budget is not a bound; it is a bound on the
-	 *    chunk bodies only.
-	 *
-	 * Left uncorrected DELIBERATELY, because the fix is not a local one. Packing
-	 * against the rendered cost moves the published knee 1,200 -> 1,600, the
-	 * headline 3.7x -> 3.5x and the 200-token floor 22% -> 11%; it also makes
-	 * recall NON-MONOTONE in budget (78% at 400 falling to 67% at 600), which
-	 * breaks the invariant `sweepBudgets` is tested for. That is a correction with
-	 * its own re-pinned numbers and its own CHANGELOG entry, not a cleanup. See
-	 * the report accompanying this pass; `test/retrieve.test.ts` and
-	 * `test/ragbench.test.ts` now pin the gap so it cannot go quiet again.
+	 * `renderChunk` is the single source of truth both the packer and the
+	 * renderer use, so this cannot drift apart again by editing one of them.
 	 */
 	tokens: number;
 	/** Chunks the strategy considered and dropped for budget. Reported because
 	 * a strategy that is constantly truncating is under-budgeted, and that is
 	 * invisible if only the kept set is shown. */
 	dropped: number;
+}
+
+/** Separator between rendered chunks. Part of what is sent, so part of the price. */
+const CHUNK_JOIN = "\n\n";
+
+/**
+ * One chunk's prompt form — the SINGLE source of truth for what the model
+ * receives.
+ *
+ * `renderContext` and `underBudget` must agree exactly: when they were separate
+ * expressions the packer priced the bare body while the renderer added a label,
+ * and the budget silently became a bound on chunk text rather than on context.
+ * Anything added here is priced by the packer in the same commit, by
+ * construction rather than by remembering.
+ */
+function renderChunk(c: Chunk): string {
+	const where =
+		c.sectionPath.length > 0 ? ` — ${c.sectionPath.join(" > ")}` : "";
+	return `[${c.chunkId}]${where}\n${c.text.trim()}`;
 }
 
 /**
@@ -204,6 +210,31 @@ export interface Retrieval {
  * comparison between strategies whose context sizes differ by 15x is not a
  * comparison of retrieval quality. Fixing the budget and varying what fills it
  * is what makes the arms commensurable.
+ *
+ * ## Why this takes a PREFIX and stops, rather than skipping on to fill
+ *
+ * The packer previously kept scanning after a chunk failed to fit, taking any
+ * later chunk small enough for the remaining room. That fills the budget better
+ * — and it made recall NON-MONOTONE in budget: measured on the shipped suite,
+ * bm25 scored 77.8% at 400 tokens and 66.7% at 600. More budget, fewer answers.
+ *
+ * That is not noise, it is the shape of the rule. `sweepBudgets` exists to draw
+ * a budget-versus-recall curve and locate its knee, and a curve that can fall as
+ * its input rises has no well-defined knee — the headline ratio would depend on
+ * which budgets happened to be sampled.
+ *
+ * The choice is forced, not a preference. Monotone recall requires the selected
+ * sets to NEST as the budget grows (that is exactly the invariant
+ * `test/ragbench.test.ts` states: "a violation means the budget packer is
+ * dropping a chunk it previously kept"). A nested family under a fixed score
+ * order is precisely the set of prefixes of that order. Any rule that ever skips
+ * an item produces two selections neither of which contains the other, so
+ * "monotone AND budget-filling" is not available to choose.
+ *
+ * The cost is real and paid knowingly: below the knee this leaves room unused
+ * and retrieves less (66.7% vs 77.8% at 400 tokens). AT the knee it is strictly
+ * better on both axes — 100% recall for 1,281 tokens against 1,393 — because
+ * the chunks it skipped were being paid for without carrying answers.
  */
 function underBudget(
 	scored: ScoredChunk[],
@@ -211,15 +242,22 @@ function underBudget(
 	strategy: Strategy,
 ): Retrieval {
 	const chunks: Chunk[] = [];
-	let tokens = 0;
+	let chars = 0;
 	let dropped = 0;
 	for (const { chunk } of scored) {
-		if (tokens + chunk.tokens <= budgetTokens) {
-			chunks.push(chunk);
-			tokens += chunk.tokens;
-		} else dropped++;
+		// Price what is actually sent, label and separator included. Packing
+		// against the bare body made the budget a bound on chunk text only, and
+		// the assembled context exceeded it on every question in every arm.
+		const add =
+			(chunks.length > 0 ? CHUNK_JOIN.length : 0) + renderChunk(chunk).length;
+		if (tokensForLength(chars + add) > budgetTokens) {
+			dropped = scored.length - chunks.length;
+			break;
+		}
+		chunks.push(chunk);
+		chars += add;
 	}
-	return { strategy, chunks, tokens, dropped };
+	return { strategy, chunks, tokens: tokensForLength(chars), dropped };
 }
 
 /**
@@ -234,10 +272,14 @@ function underBudget(
  */
 export function retrieveFull(corpus: Corpus): Retrieval {
 	const chunks = corpus.chunks;
+	// Priced on the same rendered basis as every other arm. The mega-prompt
+	// ratio is a comparison, so both sides must be counted the same way; the
+	// denominator being cheaper than the numerator by an accounting difference
+	// would flatter retrieval by exactly the size of the discrepancy.
 	return {
 		strategy: "full",
 		chunks,
-		tokens: chunks.reduce((a, c) => a + c.tokens, 0),
+		tokens: tokensForLength(chunks.map(renderChunk).join(CHUNK_JOIN).length),
 		dropped: 0,
 	};
 }
@@ -323,11 +365,5 @@ export function retrieve(
  * that makes an extracted number checkable.
  */
 export function renderContext(retrieval: Retrieval): string {
-	return retrieval.chunks
-		.map((c) => {
-			const where =
-				c.sectionPath.length > 0 ? ` — ${c.sectionPath.join(" > ")}` : "";
-			return `[${c.chunkId}]${where}\n${c.text.trim()}`;
-		})
-		.join("\n\n");
+	return retrieval.chunks.map(renderChunk).join(CHUNK_JOIN);
 }

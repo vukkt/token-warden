@@ -100,7 +100,12 @@ describe("budgeting", () => {
 		const corpus = { root: "/x", documents: [], chunks };
 		const r = retrieveFull(corpus);
 		expect(r.chunks.length).toBe(chunks.length);
-		expect(r.tokens).toBe(chunks.reduce((a, c) => a + c.tokens, 0));
+		// Priced on the assembled prompt, like every other arm - so strictly more
+		// than the bare bodies, because the citation labels are real context. A
+		// ratio whose numerator and denominator were counted differently would
+		// flatter retrieval by exactly the difference.
+		expect(r.tokens).toBe(estimateTokens(renderContext(r)));
+		expect(r.tokens).toBeGreaterThan(chunks.reduce((a, c) => a + c.tokens, 0));
 		expect(r.dropped).toBe(0);
 	});
 });
@@ -127,28 +132,49 @@ describe("retrieveSection", () => {
 	});
 });
 
-describe("Retrieval.tokens undercounts the assembled prompt", () => {
-	// Added 2026-08-14. `tokens` sums chunk BODIES; the pipeline sends
-	// renderContext(), which adds a per-chunk `[chunkId] — path` label that
-	// retrieve.ts itself calls load-bearing (a citation must quote it). The gap
-	// is therefore real context that no reported cost prices, and underBudget
-	// packs against the same unpriced metric. Pinned rather than fixed -- see the
-	// comment on Retrieval.tokens for why the fix moves published numbers.
+describe("Retrieval.tokens prices the assembled prompt", () => {
+	// Gap found and pinned 2026-08-14, closed 2026-08-15. `tokens` summed chunk
+	// BODIES while the pipeline sent renderContext(), which adds a per-chunk
+	// `[chunkId] — path` label that retrieve.ts itself calls load-bearing (a
+	// citation must quote it, and extract.ts rejects facts whose citation does
+	// not resolve). That label was real context nothing priced: 17.6-20.8%.
 	const chunks = chunksOf(
 		"# Item 7\n\n## Liquidity\n\ncash 512.7\n\n## Fuel\n\ndiesel 14.6",
 	);
 	const index = buildIndex(chunks);
 
-	it("reports fewer tokens than the context it actually sends", () => {
+	it("reports exactly the context it sends", () => {
 		// Both a whole-corpus arm and a budgeted one, so this cannot be read as an
-		// artifact of `full`. The budget-violation consequence is pinned against
-		// the real suite in test/ragbench.test.ts.
+		// artifact of `full`.
 		for (const r of [
 			retrieveFull({ root: "", documents: [], chunks }),
 			retrieveBm25(index, "cash diesel", 10_000),
 		]) {
 			expect(r.chunks.length).toBeGreaterThan(0);
-			expect(estimateTokens(renderContext(r))).toBeGreaterThan(r.tokens);
+			expect(r.tokens).toBe(estimateTokens(renderContext(r)));
+		}
+	});
+
+	it("never assembles a context larger than its budget", () => {
+		// The old undercount's real consequence: the packer bounded chunk bodies,
+		// not context, so the budget was not a bound at all.
+		for (const budget of [20, 40, 80, 200]) {
+			const r = retrieveBm25(index, "cash diesel", budget);
+			expect(estimateTokens(renderContext(r))).toBeLessThanOrEqual(budget);
+		}
+	});
+
+	it("keeps every chunk a smaller budget kept", () => {
+		// Monotonicity is why the packer takes a prefix and stops. Nested
+		// selections are the only way recall can be non-decreasing in budget, and
+		// a curve that can fall as its input rises has no well-defined knee.
+		let previous: string[] = [];
+		for (const budget of [20, 40, 80, 200, 1000]) {
+			const ids = retrieveBm25(index, "cash diesel", budget).chunks.map(
+				(c) => c.chunkId,
+			);
+			for (const id of previous) expect(ids).toContain(id);
+			previous = ids;
 		}
 	});
 });
