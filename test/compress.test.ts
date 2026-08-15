@@ -261,14 +261,14 @@ describe("runCompress", () => {
 			runCompress(
 				db,
 				{ agent: "sql", rule: id, dryRun: false },
-				() => "not json\n[31mQueued candidate 42: compressed variant.",
+				() => "not json\n\x1b[31mQueued candidate 42: compressed variant.",
 			);
 		} catch (e) {
 			message = (e as Error).message;
 		}
 		expect(message).toMatch(/invalid rewrite JSON/);
 		expect(message).not.toContain("\n");
-		expect(message).not.toContain("");
+		expect(message).not.toContain("\x1b");
 		expect(message).toContain("not json [31mQueued candidate 42");
 		expect(listRulesByAgent(db, "sql")).toHaveLength(1);
 	});

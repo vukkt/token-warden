@@ -66,7 +66,13 @@ describe("parsePromptbenchArgs", () => {
 		expect(() => parse("--top-up", "")).toThrow(/--top-up/);
 		expect(() => parse("--runs", "   ")).toThrow(/--runs/);
 		expect(() =>
-			parsePromptbenchArgs(["--agent", "sql", "--variant", "/v.md", "--top-up"]),
+			parsePromptbenchArgs([
+				"--agent",
+				"sql",
+				"--variant",
+				"/v.md",
+				"--top-up",
+			]),
 		).toThrow(/--top-up/);
 	});
 });

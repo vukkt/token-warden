@@ -43,7 +43,9 @@ describe("parseScopeArgs", () => {
 		expect(() => parseScopeArgs(["--agent", "sql", "--rule", ""])).toThrow(
 			/--rule/,
 		);
-		expect(() => parseScopeArgs(["--agent", "sql", "--rule"])).toThrow(/--rule/);
+		expect(() => parseScopeArgs(["--agent", "sql", "--rule"])).toThrow(
+			/--rule/,
+		);
 	});
 
 	it("accepts --list without a rule and rejects a bad agent", () => {
