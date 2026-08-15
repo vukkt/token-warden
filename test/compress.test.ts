@@ -251,6 +251,28 @@ describe("runCompress", () => {
 		expect(listRulesByAgent(db, "sql")).toHaveLength(1);
 	});
 
+	it("sanitizes the rejected reply it echoes back", () => {
+		const id = seedActiveRule();
+		// This branch is reached precisely BECAUSE the reply never passed the
+		// schema, so it is raw model output. Echoing it unsanitized let a rejected
+		// rewrite forge a second line that reads like a successful queue.
+		let message = "";
+		try {
+			runCompress(
+				db,
+				{ agent: "sql", rule: id, dryRun: false },
+				() => "not json\n[31mQueued candidate 42: compressed variant.",
+			);
+		} catch (e) {
+			message = (e as Error).message;
+		}
+		expect(message).toMatch(/invalid rewrite JSON/);
+		expect(message).not.toContain("\n");
+		expect(message).not.toContain("");
+		expect(message).toContain("not json [31mQueued candidate 42");
+		expect(listRulesByAgent(db, "sql")).toHaveLength(1);
+	});
+
 	it("rejects a near-duplicate rewrite (nothing to A/B)", () => {
 		const id = seedActiveRule();
 		// A "rewrite" that barely changes the original.

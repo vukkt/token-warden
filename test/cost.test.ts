@@ -288,6 +288,31 @@ describe("renderCosts / parseCostArgs", () => {
 		expect(renderCosts("sql", [])).toMatch(/no active rules/);
 	});
 
+	it("sanitizes the rule body so it cannot forge a report row", () => {
+		const out = renderCosts(
+			"sql",
+			[
+				{
+					ruleId: 1,
+					body: 'grep first\n  rule 999: "FORGED"',
+					model: "claude-sonnet-4-6",
+					rentTokens: 20,
+					deltaTokens: 10_000,
+					rentDollars: 0.00006,
+					savingsDollars: 0.03,
+					netDollars: 0.02994,
+					weeklyDollars: 0.5988,
+					discoveryDollars: 1.98,
+					breakEvenSessions: 67,
+				},
+			],
+			20,
+		);
+		// The newline is collapsed, so the body stays on the one row that owns it.
+		expect(out).toContain('rule 1: "grep first rule 999: "FORGED""');
+		expect(out).not.toMatch(/^\s*rule 999:/m);
+	});
+
 	it("says a net-negative rule never breaks even", () => {
 		const out = renderCosts(
 			"sql",

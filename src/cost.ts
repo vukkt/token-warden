@@ -29,6 +29,7 @@ import {
 import { usd } from "./format.js";
 import { blendedDollarsPerToken, type Price, priceFor } from "./pricing.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
+import { displayText } from "./sanitize.js";
 import { sessionsPerWeek } from "./stats.js";
 
 /** Average weeks per calendar month, for --months → weeks. */
@@ -234,7 +235,12 @@ export function renderCosts(
 				? "never (net ≤ 0)"
 				: `${c.breakEvenSessions} sessions`;
 		return [
-			`  rule ${c.ruleId}: "${c.body}"`,
+			// Rule bodies are model-written. Every other report that prints one
+			// (receipt.ts, status.ts) routes it through `displayText`; this line
+			// did not, so a body carrying a newline forged an extra "rule N: ..."
+			// row in the priced report. Sanitized here too — the insert-time schema
+			// is the primary defence, this is the rendering contract.
+			`  rule ${c.ruleId}: "${displayText(c.body)}"`,
 			`    saves ${usd(c.savingsDollars)}/session, rent ${usd(c.rentDollars)}/session → net ${usd(c.netDollars)}/session`,
 			`    discovery cost ${usd(c.discoveryDollars)} → breaks even in ${be}`,
 		].join("\n");

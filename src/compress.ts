@@ -40,6 +40,7 @@ import {
 	ruleBodySchema,
 	trigramSimilarity,
 } from "./rules.js";
+import { displayText } from "./sanitize.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -195,8 +196,14 @@ export function runCompress(
 	const reply = rewrite(buildCompressPrompt(rule));
 	const parsed = parseRewriteJson(reply);
 	if (parsed === null) {
+		// The reply is echoed to help a human see WHY it was rejected, and this is
+		// the one branch where it never passed `rewriteSchema` — so it is raw model
+		// output with no printable-text guarantee behind it. Sanitize it: a bare
+		// slice lets a rejected rewrite carry a newline and forge a second report
+		// line (a convincing fake "Queued candidate ..."), or an ESC introducer and
+		// repaint the terminal.
 		throw new Error(
-			`model returned invalid rewrite JSON; dropping (never retried). head: ${reply.slice(0, 200)}`,
+			`model returned invalid rewrite JSON; dropping (never retried). head: ${displayText(reply, 200)}`,
 		);
 	}
 	if (parsed.body.length > budget) {
