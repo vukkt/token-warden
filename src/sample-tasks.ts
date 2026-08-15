@@ -195,6 +195,12 @@ export function renderDraft(
 	draft: TaskDraft,
 ): string {
 	const id = `${agent}-draft-${String(index).padStart(2, "0")}`;
+	// The session id is a filename off disk, so it is environment-derived exactly
+	// like the prompt. It is emitted inside an HTML comment: displayText removes
+	// the newline that would end the comment line early, and "-->" is defused
+	// because it would close the comment outright and inject markdown into a file
+	// the user is being invited to commit.
+	const session = displayText(draft.sourceSession, 120).replace(/--+>/g, "->");
 	return [
 		"---",
 		`id: "${id}"`,
@@ -204,7 +210,7 @@ export function renderDraft(
 		"---",
 		"",
 		"<!-- UNVERIFIED DRAFT — NOT part of the golden suite. -->",
-		`<!-- Sampled from real session ${draft.sourceSession}; the prompt is machine-extracted and only`,
+		`<!-- Sampled from real session ${session}; the prompt is machine-extracted and only`,
 		"     best-effort redacted (home paths -> ~, credential-shaped strings -> [REDACTED], addresses",
 		"     -> [EMAIL]). Re-read it for anything private before this file goes anywhere. -->",
 		"<!-- To promote: write a deterministic success_check, delete this banner, and move the file up",

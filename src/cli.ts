@@ -31,17 +31,6 @@ export function isEntrypoint(importMetaUrl: string): boolean {
 }
 
 /**
- * Run a command's main when its module is the entrypoint, applying the shared
- * failure convention: print the message (not the stack) and exit 1.
- *
- * Both existing success conventions are preserved exactly. A `main` that
- * RETURNS A NUMBER is an explicit exit code and is passed to `process.exit`;
- * a `main` that returns void falls through and lets Node exit naturally. That
- * distinction is deliberate rather than tidied away — calling `process.exit(0)`
- * on the void path could truncate buffered stdout on a piped command, which is
- * exactly how a report loses its last lines.
- */
-/**
  * A numeric flag VALUE, with the blank-string hole closed.
  *
  * `Number("")` and `Number(" ")` are both `0`, so a flag written the ordinary
@@ -60,6 +49,17 @@ export function numericFlag(raw: string | undefined): number {
 	return raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
 }
 
+/**
+ * Run a command's main when its module is the entrypoint, applying the shared
+ * failure convention: print the message (not the stack) and exit 1.
+ *
+ * Both existing success conventions are preserved exactly. A `main` that
+ * RETURNS A NUMBER is an explicit exit code and is passed to `process.exit`;
+ * a `main` that returns void falls through and lets Node exit naturally. That
+ * distinction is deliberate rather than tidied away — calling `process.exit(0)`
+ * on the void path could truncate buffered stdout on a piped command, which is
+ * exactly how a report loses its last lines.
+ */
 export function runCli(importMetaUrl: string, run: () => unknown): void {
 	if (!isEntrypoint(importMetaUrl)) return;
 	try {

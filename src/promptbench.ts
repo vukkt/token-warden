@@ -27,7 +27,7 @@ import {
 	runSuite,
 	type TaskSummary,
 } from "./bench.js";
-import { runCli } from "./cli.js";
+import { numericFlag, runCli } from "./cli.js";
 import { formatComparison, reportMetaCost, runComparison } from "./compare.js";
 import {
 	getActiveRules,
@@ -65,11 +65,11 @@ export function parsePromptbenchArgs(argv: string[]): PromptbenchArgs {
 				i++;
 				break;
 			case "--runs":
-				args.runs = Number(value);
+				args.runs = numericFlag(value);
 				i++;
 				break;
 			case "--top-up":
-				args.topUp = Number(value);
+				args.topUp = numericFlag(value);
 				i++;
 				break;
 			case "--task":

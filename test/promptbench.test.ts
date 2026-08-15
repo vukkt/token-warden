@@ -57,6 +57,18 @@ describe("parsePromptbenchArgs", () => {
 			parsePromptbenchArgs(["--agent", "sql", "--variant", "/v.md", "--x"]),
 		).toThrow(/unknown flag/);
 	});
+
+	/** Same blank-value hole as modelbench: an unset shell variable used to
+	 * parse as 0 and pass the `>= 0` check. */
+	it("rejects a blank numeric flag instead of reading it as zero", () => {
+		const parse = (flag: string, raw: string) =>
+			parsePromptbenchArgs(["--agent", "sql", "--variant", "/v.md", flag, raw]);
+		expect(() => parse("--top-up", "")).toThrow(/--top-up/);
+		expect(() => parse("--runs", "   ")).toThrow(/--runs/);
+		expect(() =>
+			parsePromptbenchArgs(["--agent", "sql", "--variant", "/v.md", "--top-up"]),
+		).toThrow(/--top-up/);
+	});
 });
 
 describe("parseAgentDefinition (prompt variants)", () => {

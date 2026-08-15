@@ -27,7 +27,7 @@ import {
 	runSuite,
 	type TaskSummary,
 } from "./bench.js";
-import { runCli } from "./cli.js";
+import { numericFlag, runCli } from "./cli.js";
 import {
 	type Comparison,
 	formatCategoryRegressions,
@@ -78,11 +78,11 @@ export function parseModelbenchArgs(argv: string[]): ModelbenchArgs {
 				i++;
 				break;
 			case "--runs":
-				args.runs = Number(value);
+				args.runs = numericFlag(value);
 				i++;
 				break;
 			case "--top-up":
-				args.topUp = Number(value);
+				args.topUp = numericFlag(value);
 				i++;
 				break;
 			case "--task":

@@ -72,4 +72,20 @@ describe("parseModelbenchArgs", () => {
 			parseModelbenchArgs(["--agent", "sql", "--model", "x", "--bogus"]),
 		).toThrow(/unknown flag/);
 	});
+
+	/** `--top-up "$BUDGET"` with BUDGET unset used to parse as 0 and pass the
+	 * `>= 0` check, silently running the A/B with no top-up pass and reporting
+	 * numbers produced under a policy the user never chose. numericFlag maps a
+	 * blank to NaN so the existing validator fires. */
+	it("rejects a blank numeric flag instead of reading it as zero", () => {
+		const parse = (flag: string, raw: string) =>
+			parseModelbenchArgs(["--agent", "sql", "--model", "x", flag, raw]);
+		expect(() => parse("--top-up", "")).toThrow(/--top-up/);
+		expect(() => parse("--top-up", "   ")).toThrow(/--top-up/);
+		expect(() => parse("--runs", "")).toThrow(/--runs/);
+		// A missing value at the end of argv is the same hole.
+		expect(() =>
+			parseModelbenchArgs(["--agent", "sql", "--model", "x", "--top-up"]),
+		).toThrow(/--top-up/);
+	});
 });

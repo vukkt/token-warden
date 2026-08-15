@@ -31,6 +31,14 @@ describe("parseProtectArgs", () => {
 		expect(() =>
 			parseProtectArgs(["--agent", "sql", "--protect", "x"]),
 		).toThrow(/integer/);
+		// A blank value used to parse as rule id 0, which cleared the integer
+		// check and failed later as the far less obvious "no rule 0 for agent".
+		expect(() => parseProtectArgs(["--agent", "sql", "--protect", ""])).toThrow(
+			/integer/,
+		);
+		expect(() =>
+			parseProtectArgs(["--agent", "sql", "--unprotect", "  "]),
+		).toThrow(/integer/);
 	});
 
 	it("rejects an unknown flag and a blank rule body", () => {

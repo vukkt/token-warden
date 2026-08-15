@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { runCli } from "./cli.js";
 import { getActiveRules, withDb } from "./db.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
+import { displayText } from "./sanitize.js";
 import type { RuleId } from "./types.js";
 
 /**
@@ -207,9 +208,13 @@ export function renderContradictions(
 	if (contradictions.length === 0) {
 		return `${agent}: no rules contradict CLAUDE.md.`;
 	}
+	// Both interpolated strings are untrusted: a rule body is model-generated,
+	// and a CLAUDE.md line is arbitrary file content this module only ever reads.
+	// Neither may forge a report row or repaint the terminal, so both go through
+	// the shared sanitizer — the same treatment scope.ts gives a listing line.
 	const lines = contradictions.map(
 		(c) =>
-			`  rule ${c.ruleId}: "${c.ruleBody}"\n    ${c.reason}\n    CLAUDE.md: "${c.conflictingLine}"`,
+			`  rule ${c.ruleId}: "${displayText(c.ruleBody)}"\n    ${c.reason}\n    CLAUDE.md: "${displayText(c.conflictingLine)}"`,
 	);
 	return [
 		`${agent}: ${contradictions.length} rule(s) may contradict CLAUDE.md (review recommended — not auto-evicted):`,
