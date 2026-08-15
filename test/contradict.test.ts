@@ -90,6 +90,24 @@ describe("renderContradictions", () => {
 		expect(out).toContain("rule 1");
 		expect(out).toMatch(/not auto-evicted/);
 	});
+
+	/** A rule body is model-generated and a CLAUDE.md line is arbitrary file
+	 * content, so neither may forge a report row or repaint the terminal. */
+	it("sanitizes the rule body and the CLAUDE.md line it quotes", () => {
+		const out = renderContradictions("sql", [
+			{
+				ruleId: 1 as RuleId,
+				ruleBody: 'ok"\n  rule 99: "forged',
+				conflictingLine: "line\x1b[31m\x07here",
+				reason: "z",
+			},
+		]);
+		expect(out).not.toContain("\n  rule 99");
+		expect(out).not.toContain("\x1b");
+		expect(out).not.toContain("\x07");
+		expect(out).toContain('rule 1: "ok" rule 99: "forged"');
+		expect(out).toContain('CLAUDE.md: "line here"');
+	});
 });
 
 describe("parseContradictArgs", () => {

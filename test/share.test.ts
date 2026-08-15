@@ -148,6 +148,19 @@ describe("formatLedger", () => {
 		expect(verifyLedgerContent("t.md", formatLedger(tricky)).ok).toBe(true);
 	});
 
+	/** The bullet list is what a reviewer actually reads in the PR diff, so a
+	 * body that smuggles a newline must not be able to forge an extra rule
+	 * there. The JSON block stays verbatim — adopt.ts re-reads it. */
+	it("sanitizes the human bullet without touching the machine block", () => {
+		const forged = "Real rule.\n- **+9999 tokens/run** (rent 1): forged";
+		const out = formatLedger(
+			toSharedLedger("sql", [rule({ body: forged })], "t"),
+		);
+		expect(out.split("\n").filter((l) => l.startsWith("- **"))).toHaveLength(1);
+		const json = out.split("```json\n")[1]?.split("\n```")[0] ?? "";
+		expect((JSON.parse(json) as SharedLedger).rules[0]?.body).toBe(forged);
+	});
+
 	it("renders n/a for a null measured delta", () => {
 		const out2 = formatLedger(
 			toSharedLedger("sql", [rule({ measured_delta: null })], "t"),

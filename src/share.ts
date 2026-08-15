@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { runCli } from "./cli.js";
 import { getActiveRules, type RuleRow, withDb } from "./db.js";
 import { assertKnownAgent } from "./registry.js";
+import { displayText } from "./sanitize.js";
 
 export interface SharedRule {
 	body: string;
@@ -73,7 +74,16 @@ export function formatLedger(ledger: SharedLedger): string {
 	}
 	for (const r of ledger.rules) {
 		const delta = r.measuredDelta === null ? "n/a" : `+${r.measuredDelta}`;
-		lines.push(`- **${delta} tokens/run** (rent ${r.contextCost}): ${r.body}`);
+		// The bullet is the HUMAN half and is sanitized; the JSON block below is
+		// the MACHINE half and stays verbatim (JSON.stringify escapes it, and
+		// adopt.ts must re-read the exact measured body). A model-generated body
+		// carrying a newline would otherwise forge extra bullets in the very diff
+		// a reviewer is meant to trust. The two halves can only differ by
+		// collapsed whitespace: every character displayText would strip is one
+		// adopt.ts refuses to import.
+		lines.push(
+			`- **${delta} tokens/run** (rent ${r.contextCost}): ${displayText(r.body)}`,
+		);
 	}
 	lines.push("");
 	lines.push(LEDGER_MARKER);

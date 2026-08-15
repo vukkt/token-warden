@@ -106,6 +106,21 @@ describe("renderDraft", () => {
 		// It says how to promote it, and that leaving it here is inert.
 		expect(md).toContain("golden-NN.md");
 	});
+
+	/** The session id is a filename off disk. It lands inside an HTML comment,
+	 * so it must not be able to close that comment and inject markdown into a
+	 * file the user is invited to commit. */
+	it("defuses a session id that would escape the provenance comment", () => {
+		const md = renderDraft("sql", 1, {
+			prompt: "Optimize the slow report query.",
+			sourceSession: "evil--><script>x</script>\nid: hijacked",
+		});
+		expect(md).toContain("Sampled from real session evil->");
+		expect(md).not.toContain("-->\x3cscript");
+		expect(md).not.toContain("\nid: hijacked");
+		// The banner is still one intact comment ending where it should.
+		expect(md).toContain("before this file goes anywhere. -->");
+	});
 });
 
 // These prompts come verbatim out of the user's own transcripts, and the
