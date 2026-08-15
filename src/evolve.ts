@@ -47,15 +47,31 @@ import {
 } from "./db.js";
 import { parseClaudeEnvelope } from "./model-call.js";
 import { assertKnownAgent, userAgentsDir } from "./registry.js";
+import { displayText } from "./sanitize.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROPOSE_TIMEOUT_MS = 2 * 60 * 1000;
 
+/**
+ * Append one timestamped diagnostic to evolve.log.
+ *
+ * SECURITY — the message is sanitized HERE rather than at each call site,
+ * because most of what gets logged is text `claude` chose: its stderr, and the
+ * envelope reasons that quote the head of its stdout. Each entry is stamped
+ * with an ISO timestamp, so a raw newline in any of that forges a second entry
+ * indistinguishable from a real one (the same forge proven against distill.ts).
+ * `displayText` collapses it to one line, so hostile text is still reported —
+ * it is the diagnostic — but only ever as data inside one real entry. The cap
+ * is generous: no legitimate message here approaches it.
+ */
 function logLine(message: string): void {
 	try {
 		const logPath = join(dirname(defaultDbPath()), "evolve.log");
 		mkdirSync(dirname(logPath), { recursive: true });
-		appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
+		appendFileSync(
+			logPath,
+			`${new Date().toISOString()} ${displayText(message, 1000)}\n`,
+		);
 	} catch {
 		// Logging must never take evolution down.
 	}

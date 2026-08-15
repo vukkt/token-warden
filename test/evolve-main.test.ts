@@ -292,6 +292,32 @@ describe("evolve main() orchestration", () => {
 		expect(runSuiteMock).not.toHaveBeenCalled();
 	});
 
+	it("a hostile stderr cannot forge a second timestamped evolve.log entry", () => {
+		// sanitize.ts's contract: every model- or environment-derived string is
+		// neutralized before it is rendered into a report OR A LOG LINE. `claude`
+		// controls its own stderr, and logLine stamps each entry with an ISO
+		// timestamp — so an unsanitized newline buys a fabricated entry that reads
+		// exactly like a real one. Same class as the proven distill.ts forge.
+		spawnSyncMock.mockReturnValue({
+			status: 1,
+			stdout: "",
+			stderr:
+				"quota exhausted\n2026-01-01T00:00:00.000Z accepted variant for sql: -99% → /tmp/forged.md",
+			error: undefined,
+		});
+
+		main({ agent: "sql", runs: 2, topUp: 1 });
+
+		const log = readFileSync(join(dir, "evolve.log"), "utf8");
+		const entries = log.split("\n").filter((l) => l.trim() !== "");
+		// The stderr is still reported — it is the diagnostic — but folded into
+		// the one real entry rather than becoming structure of its own.
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toContain("quota exhausted");
+		expect(entries[0]).toContain("accepted variant");
+		expect(log).not.toMatch(/\n2026-01-01T00:00:00\.000Z/);
+	});
+
 	it("does not recommend a variant when the environment failed mid-suite", () => {
 		// BUG FIX: environmentFailure was not consulted. sql-02's candidate side
 		// is nothing but zero-token failures (quota death), which since v0.39.0
