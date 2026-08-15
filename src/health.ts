@@ -37,6 +37,7 @@ import {
 	type RuleRow,
 	withDb,
 } from "./db.js";
+import { formatNumber } from "./format.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
 
@@ -143,7 +144,7 @@ export function renderVariance(agent: string, ranked: TaskVariance[]): string {
 	}
 	const lines = noisy.map(
 		(t) =>
-			`  ${displayText(t.taskId, 60)}: ±${Math.round(t.cv * 100)}% over ${t.n} run(s), mean ${t.mean.toLocaleString("en-US")} tok`,
+			`  ${displayText(t.taskId, 60)}: ±${Math.round(t.cv * 100)}% over ${t.n} run(s), mean ${formatNumber(t.mean)} tok`,
 	);
 	return [
 		`${agent}: ${noisy.length} noisy golden task(s) — variance this size buries modest savings; split them by ADDING quieter task files (frozen tasks are never edited):`,

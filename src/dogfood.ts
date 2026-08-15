@@ -243,12 +243,11 @@ export function gatherDogfood(
 		});
 	}
 
-	const lastRealWorkTs =
-		recorded.reduce<string | null>(
-			(newest, row) =>
-				newest === null || row.lastTs > newest ? row.lastTs : newest,
-			null,
-		) ?? null;
+	const lastRealWorkTs = recorded.reduce<string | null>(
+		(newest, row) =>
+			newest === null || row.lastTs > newest ? row.lastTs : newest,
+		null,
+	);
 	const parsedLast =
 		lastRealWorkTs === null ? Number.NaN : Date.parse(lastRealWorkTs);
 	return {
@@ -412,6 +411,7 @@ function readinessRows(data: DogfoodData): string[] {
 /** Render the whole report from gathered data. Pure — no DB, no clock. */
 export function formatDogfood(data: DogfoodData): string {
 	const action = nextAction(data);
+	const readiness = readinessRows(data);
 	return [
 		"token-warden dogfood window",
 		"",
@@ -426,9 +426,7 @@ export function formatDogfood(data: DogfoodData): string {
 		"  gated on membership, so these sessions can NEVER produce a candidate rule.",
 		"",
 		"Distillation readiness (known agents only):",
-		...(readinessRows(data).length > 0
-			? readinessRows(data)
-			: ["  no known agents configured"]),
+		...(readiness.length > 0 ? readiness : ["  no known agents configured"]),
 		"",
 		`Window progress: ${data.distillableSessions} distillable session(s), ${data.inertSessions} inert session(s).`,
 		"",
