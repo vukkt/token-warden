@@ -557,7 +557,7 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
-## Unreleased — the budget now bounds context, and the packer takes a prefix
+## v0.45.0 — the budget now bounds context, and the packer takes a prefix
 
 - **Price what you send, not what you selected.** `Retrieval.tokens` summed
   chunk bodies while the prompt added a per-chunk `[chunkId] — section > path`
@@ -598,7 +598,7 @@ all fixed) and motivated one algorithm change.
   INVARIANT rather than on a moved number, which is the difference between a
   test that explains itself and one that just breaks.
 
-## Unreleased — the sanitizer contract is checked, because six agents proved discipline does not hold it
+## v0.45.0 — the sanitizer contract is checked, because six agents proved discipline does not hold it
 
 - **The evidence that a rule needed enforcing.** `sanitize.ts` has always
   described itself as the single chokepoint for model- and environment-derived

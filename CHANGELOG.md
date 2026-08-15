@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.45.0 — 2026-08-15
 
 ### CORRECTION: retrieval cost was under-priced by a fifth; the ratio is 4.4x, not 3.7x
 
