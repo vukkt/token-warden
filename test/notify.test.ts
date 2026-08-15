@@ -1,10 +1,8 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdtempSync,
-	readFileSync,
 	rmSync,
-	statSync,
 	utimesSync,
 	writeFileSync,
 } from "node:fs";

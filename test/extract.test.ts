@@ -190,7 +190,9 @@ describe("parseFacts", () => {
 	});
 
 	it("tolerates a markdown fence", () => {
-		const r = parseFacts("```json\n" + JSON.stringify({ facts: [] }) + "\n```");
+		const r = parseFacts(
+			`\`\`\`json\n${JSON.stringify({ facts: [] })}\n\`\`\``,
+		);
 		expect(r.ok).toBe(true);
 	});
 

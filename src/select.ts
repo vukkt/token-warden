@@ -1662,6 +1662,11 @@ function planForCandidate(
 function recoveredParent(db: WardenDb, candidate: RuleRow): RuleRow | null {
 	if (candidate.recovers === null) return null;
 	const parent = getRuleById(db, candidate.recovers);
+	// The explicit form keeps the two null cases visibly distinct - "no such
+	// rule" and "found, but never classed recoverable" - which is the exact
+	// distinction the doc comment above depends on; `parent?.underpowered !== 1`
+	// collapses them.
+	// biome-ignore lint/complexity/useOptionalChain: see above
 	if (!parent || parent.underpowered !== 1) return null;
 	return parent;
 }

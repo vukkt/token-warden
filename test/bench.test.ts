@@ -21,7 +21,6 @@ import {
 	ENV_FAILURE_TOKEN_FLOOR,
 	EnvironmentFailureError,
 	findTranscript,
-	findTranscriptForWorkDir,
 	type GoldenTask,
 	goldenSuiteHash,
 	installAgent,

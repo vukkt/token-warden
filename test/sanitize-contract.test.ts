@@ -41,6 +41,10 @@
  *
  * Zero tokens: no model is involved.
  */
+// The test fixtures here are SAMPLE SOURCE CODE that the guard parses, so their
+// `${...}` sequences are data under test, not accidental un-interpolated
+// templates.
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: fixtures are source text
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
