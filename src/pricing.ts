@@ -65,6 +65,33 @@ export const DEFAULT_MODEL = "sonnet";
  * _CACHE_WRITE/_CACHE_READ (in $/1M tokens) override the looked-up rate; unset
  * cache fields default to the 1.25×/0.1× multipliers of the resolved input.
  */
+/**
+ * Resolve a model id to its rate card, tolerating a dated suffix.
+ *
+ * Released model ids carry a date (`claude-haiku-4-5-20251001`) while the rate
+ * card is keyed on the family (`claude-haiku-4-5`). An exact-match-only lookup
+ * therefore MISSED every dated id and fell through to the Sonnet default, which
+ * priced Haiku at 3x its real input rate and silently overstated every dollar
+ * figure for anyone running it. The failure was invisible because the fallback
+ * is a valid price, not an error — this repo's recurring shape.
+ *
+ * Longest key first, so `claude-sonnet-4-6` is preferred over any shorter key
+ * that also prefixes it. Own-property checks throughout: `DEFAULT_PRICES` is an
+ * object literal, so a model string of `constructor` or `__proto__` would
+ * otherwise resolve through `Object.prototype` to a truthy FUNCTION and NaN
+ * every downstream figure. That string is user-supplied since v0.36.0, when
+ * bring-your-own-agent made the model name whatever someone wrote in a .md file.
+ */
+function resolvePrice(model?: string | null): Price | undefined {
+	if (!model) return undefined;
+	if (Object.hasOwn(DEFAULT_PRICES, model)) return DEFAULT_PRICES[model];
+	const keys = Object.keys(DEFAULT_PRICES).sort((a, b) => b.length - a.length);
+	for (const key of keys) {
+		if (model.startsWith(`${key}-`)) return DEFAULT_PRICES[key];
+	}
+	return undefined;
+}
+
 export function priceFor(model?: string | null): Price {
 	// Own-property check, not a truthiness check. DEFAULT_PRICES is an object
 	// literal, so `DEFAULT_PRICES["constructor"]` (or "toString", "valueOf",
@@ -73,10 +100,7 @@ export function priceFor(model?: string | null): Price {
 	// and leave base.input undefined, NaN-ing every downstream dollar figure.
 	// Reachable since v0.36.0: the model string is whatever a user wrote in a
 	// bring-your-own-agent .md file.
-	const base =
-		model && Object.hasOwn(DEFAULT_PRICES, model)
-			? DEFAULT_PRICES[model]
-			: DEFAULT_PRICES[DEFAULT_MODEL];
+	const base = resolvePrice(model) ?? DEFAULT_PRICES[DEFAULT_MODEL];
 	if (!base) throw new Error("no default price configured");
 	// An override must parse to a finite, non-negative number. Everything else
 	// falls back to the rate card rather than poisoning every downstream figure:

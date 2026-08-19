@@ -232,3 +232,46 @@ describe("blendedDollarsPerToken", () => {
 		expect(blended).toBeLessThan(15 / 1_000_000); // << output rate
 	});
 });
+
+describe("priceFor with dated model ids", () => {
+	// Released ids carry a date; the rate card is keyed on the family. Exact
+	// matching missed every dated id and fell through to the Sonnet default,
+	// pricing Haiku at 3x its real input rate. Invisible, because the fallback
+	// is a valid price rather than an error.
+	it("resolves a dated id to its family rate", () => {
+		expect(priceFor("claude-haiku-4-5-20251001").input).toBe(1);
+		expect(priceFor("claude-haiku-4-5").input).toBe(1);
+	});
+
+	it("does not price Haiku as Sonnet", () => {
+		expect(priceFor("claude-haiku-4-5-20251001").input).not.toBe(
+			priceFor("claude-sonnet-5").input,
+		);
+	});
+
+	it("prefers the longest matching family key", () => {
+		expect(priceFor("claude-sonnet-4-6-20260101").input).toBe(3);
+		expect(priceFor("claude-opus-5-20260101").input).toBe(5);
+	});
+
+	it("still falls back for a genuinely unknown model", () => {
+		expect(priceFor("some-other-vendor-model").input).toBe(
+			priceFor("claude-sonnet-5").input,
+		);
+	});
+
+	it("does not resolve a partial family name by accident", () => {
+		// `claude-haiku-4` is not `claude-haiku-4-5`; a bare prefix must not
+		// match, or a future family would silently inherit an older rate.
+		expect(priceFor("claude-haiku-4").input).toBe(3);
+	});
+
+	it("cannot be walked onto Object.prototype", () => {
+		// The model string is user-supplied since bring-your-own-agent.
+		for (const hostile of ["constructor", "__proto__", "toString", "valueOf"]) {
+			const p = priceFor(hostile);
+			expect(Number.isFinite(p.input)).toBe(true);
+			expect(p.input).toBe(3);
+		}
+	});
+});

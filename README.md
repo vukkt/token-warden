@@ -12,10 +12,10 @@ that it saves more tokens than it costs to carry. Rules that fail are evicted. R
 already passed are re-tested and evicted when they stop paying.
 
 ```text
-  version    0.45.0            tests       1492 across 59 files
+  version    0.45.0            tests       1498 across 59 files
   released   51 versions       coverage    97.19% lines, CI-enforced floor
   built      2026-06 to now    source      45 modules, 16.4k lines
-  license    MIT               test code   22.9k lines
+  license    MIT               test code   23.0k lines
 ```
 
 ---
@@ -96,13 +96,60 @@ verdict at all.
 
 ---
 
-## Economics
+## Economics — what it actually saves, per developer
 
-The two surviving rules save a combined **6,353 tokens per session**. At Claude Sonnet input
-pricing that is **$0.019 per session** — trivial once, material at volume.
+The two surviving `sql` rules save **6,353 tokens per session** gross, **6,298 net** of the
+55 tokens/session they cost to carry. Read from the live ledger, not a projection.
 
-| Deployment | Sessions/week | Per year, 1 agent | Per year, 4 agents |
-|---|---|---|---|
+Priced at the agent's real token mix — which is 90% cache-read, the cheapest tokens there
+are — that is **$0.0051 per session on Sonnet**.
+
+| Sessions/week per dev | Saved per developer, per year |
+|---|---|
+| 10 | **$2.67** |
+| 20 | **$5.34** |
+| 40 | **$10.69** |
+
+On Opus, roughly 1.7x those figures ($8.91/yr at 20 sessions/week). On Haiku, about a
+third ($1.78/yr) — the rules save the same tokens either way, so what changes is only what
+those tokens cost.
+
+### The number that matters more: it has to pay for itself
+
+Finding those two rules cost **415 benchmark runs and 23.4M tokens — $19.13 one-time**.
+Against $5.34/year, a single developer never realistically recovers that:
+
+| Team size | Team saving/year | Payback on the $19 discovery burn |
+|---|---|---|
+| 1 dev | $5 | 186 weeks |
+| 5 devs | $27 | 37 weeks |
+| 20 devs | $107 | 9 weeks |
+| 50 devs | $267 | 4 weeks |
+| 250 devs | $1,336 | under 1 week |
+
+**This is the honest shape of the tool.** Discovery is one-time and shared; the saving is
+per-developer and recurring. A rule measured once is then carried by everyone, forever, at
+no further discovery cost. Below roughly 10 developers the arithmetic does not work on
+token savings alone — what you are buying at that scale is the *refusal*, the fact that a
+rule which does not pay is deleted rather than accumulating.
+
+> **Correction, 2026-08-19.** This section previously reported **$20/developer/year** at 20
+> sessions/week and made no mention of discovery cost at all. Two things were wrong. It
+> priced the saving at the raw **input** rate when the tool itself prices at the blended
+> mix — a 3.7x overstatement, and the blended rate is this project's own stated method
+> (DECISIONS.md: savings are priced at the agent's blended token mix). And it reported gross
+> savings while omitting the one-time burn that produced them, which is the difference
+> between "saves $20/year" and "pays back in three and a half years". It also claimed every
+> row was reproducible with `/warden-cost --project`; it is not, because the two active
+> rules predate the receipts table and that command prices from receipts. All figures above
+> were recomputed from the live ledger through `src/pricing.ts`.
+
+> These are benchmark measurements on a frozen fixture, not observed invoices, and they
+> assume rules of this size survive on your workload — which is the thing the tool measures
+> rather than assumes. Nothing here has yet been measured on real day-to-day work; see
+> *Limitations*.
+
+---|---|---|---|
 | Solo developer | 20 | $20 | $79 |
 | Small team (5x) | 100 | $99 | $396 |
 | Engineering org (50x) | 1,000 | $991 | $3,964 |
@@ -233,7 +280,7 @@ The measurement discipline is the product, so the codebase is held to it.
 
 | | |
 |---|---|
-| **Tests** | 1492 across 59 files. 22.9k lines of test code against 16.4k of source. |
+| **Tests** | 1498 across 59 files. 23.0k lines of test code against 16.4k of source. |
 | **Coverage** | 97.0% lines, 96.2% statements, 97.4% functions, 89.2% branches, behind a ratcheted floor CI fails on. |
 | **Pipeline** | Staged: quality gates test, fixture and coverage, which gate validate, which gates release. Actions SHA-pinned, least-privilege tokens, `npm ci`. |
 | **Types** | Strict TypeScript with `noUncheckedIndexedAccess`. Zero `any`, zero `@ts-ignore`, zero non-null assertions across src and test. |

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### CORRECTION: Haiku was priced as Sonnet, and the README overstated savings 3.7x
+
+Two dollar figures were wrong, found while answering "what does this save per developer".
+
+**`priceFor` missed every dated model id.** The rate card is keyed on the family
+(`claude-haiku-4-5`) but released ids carry a date
+(`claude-haiku-4-5-20251001`), and the lookup was exact-match only. Every dated
+id fell through to the Sonnet default, so Haiku was priced at **3x** its real
+input rate. Invisible in the usual way: the fallback is a valid price, not an
+error. Now resolved by longest-matching family prefix, with the
+own-property checks kept — the model string has been user-supplied since
+bring-your-own-agent, so `constructor` and `__proto__` must not walk onto
+`Object.prototype` and NaN every downstream figure.
+
+**The README's Economics section overstated the saving 3.7x and omitted the
+cost.** It priced savings at the raw input rate while the tool prices at the
+agent's blended token mix — which is 90% cache-read, the cheapest tokens there
+are — and it reported gross savings with no mention of the one-time discovery
+burn that produced them. Corrected from the live ledger: **$5.34 per developer
+per year** at 20 sessions/week on Sonnet, not $20, against a **$19.13** one-time
+discovery cost. A solo developer does not recover that in under three years; a
+20-developer team does in nine weeks, because discovery is one-time and shared
+while the saving is per-developer and recurring.
+
+It also claimed every row was reproducible with `/warden-cost --project`. It is
+not: the two active rules predate the receipts table and that command prices
+from receipts. Stated rather than quietly dropped.
+
 ### One keep-bar, and one way to write a log line
 
 Two duplications where the copies had already started to matter.
