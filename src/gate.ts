@@ -12,16 +12,11 @@
  * error fails OPEN (no output, exit 0 → normal permission flow) and is
  * logged to gate.log next to the DB; the gate must never break a session.
  */
-import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import {
-	approveLatestQuestion,
-	defaultDbPath,
-	insertQuestion,
-	withDb,
-} from "./db.js";
+
+import { approveLatestQuestion, insertQuestion, withDb } from "./db.js";
+import { appendLogLine } from "./logfile.js";
 import { displayText } from "./sanitize.js";
 
 const GATED_TOOL = "SendMessage";
@@ -33,26 +28,8 @@ const NAME_CHARS = 60;
  * hostile teammate message must not bloat the ledger. Applied identically
  * at insert and approve time so the pending-row match still works. */
 const STORED_BODY_CHARS = 2000;
-/** Rotate gate.log past this size, keeping one generation. Every gated message
- * writes a line, so an unrotated log grows without bound in the user's
- * ~/.token-warden directory. */
-const LOG_MAX_BYTES = 1024 * 1024;
-
 function logLine(message: string): void {
-	try {
-		const logPath = join(dirname(defaultDbPath()), "gate.log");
-		mkdirSync(dirname(logPath), { recursive: true });
-		try {
-			if (statSync(logPath).size > LOG_MAX_BYTES) {
-				renameSync(logPath, `${logPath}.1`);
-			}
-		} catch {
-			// No log yet (or rotation raced another hook): just append.
-		}
-		appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
-	} catch {
-		// Logging must never take the gate down.
-	}
+	appendLogLine("gate.log", message);
 }
 
 const payloadSchema = z.looseObject({

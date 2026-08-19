@@ -80,6 +80,7 @@ exactly like `sql` or `backend`.
 | `dogfood.ts` | Dogfood-window diagnostic (`/warden-dogfood`): collection liveness, real-work sessions per agent, which agents are INERT (recorded but outside `knownAgents()`, so never distillable), distance to the p75 trigger, one next action |
 | `gate.ts` | Inter-agent `SendMessage` approval prompt (sanitized, fails open) |
 | `sanitize.ts` | Single presentation-security chokepoint (control/ANSI stripping) |
+| `logfile.ts` | Single log sink: rotate at 1 MiB, sanitize, append. Every `*.log` next to the ledger goes through it |
 | `db.ts` / `types.ts` | SQLite access, versioned migrations, shared types |
 | `rules.ts` / `stats.ts` / `format.ts` / `model-call.ts` / `memory.ts` / `cli.ts` | Shared vocabulary: what a rule is, the estimators and gate constants, output formatting, the `claude -p` envelope, memory-file IO, the CLI entry convention |
 

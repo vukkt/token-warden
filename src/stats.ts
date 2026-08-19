@@ -176,3 +176,24 @@ export function effectiveRent(contextCost: number): number {
 		contextCost + (contextCost * CACHE_CREATE_MULTIPLIER) / sessionsPerWeek()
 	);
 }
+
+/**
+ * The bar a rule's measured saving must clear to be kept: TWICE its effective
+ * rent, in tokens.
+ *
+ * The 2x is the project's founding margin — a rule that merely breaks even is
+ * not worth the context slot or the reader's attention, and doubling leaves
+ * room for the rent estimate itself to be wrong. `effectiveRent` already prices
+ * the cache re-prefill, so this is conservative twice over.
+ *
+ * It lives here because it was written out ten times across `select.ts` and
+ * `power.ts` as a bare `2 * effectiveRent(...)`. Nothing was wrong with any
+ * single copy; the hazard is that the planner (`power.ts`, which tells you how
+ * many runs you need) and the gate (`select.ts`, which decides) have to agree
+ * on the bar EXACTLY. If they ever disagreed, the planner would size a burn
+ * against a threshold the gate does not use, and the failure would be a
+ * plausible-looking run count rather than an error.
+ */
+export function keepBar(contextCost: number): number {
+	return 2 * effectiveRent(contextCost);
+}

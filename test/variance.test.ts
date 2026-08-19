@@ -21,6 +21,7 @@ import {
 } from "../src/select.js";
 import {
 	effectiveRent,
+	keepBar,
 	pooledVariance,
 	recoveryMarginFraction,
 	recoveryStrictness,
@@ -1492,5 +1493,35 @@ describe("recovery gate parameters (published-number pins)", () => {
 		expect(Math.ceil(bar + 6000)).toBe(6028);
 		expect(at(6028)).toBe(true);
 		expect(at(6027)).toBe(false);
+	});
+});
+
+describe("keepBar", () => {
+	// The bar was written out ten times across select.ts and power.ts as a bare
+	// `2 * effectiveRent(...)`. No copy was wrong; the hazard was that the
+	// PLANNER and the GATE have to agree on it exactly, and a drift between them
+	// would have surfaced as a plausible run count rather than an error.
+	//
+	// These assertions deliberately restate the definition rather than calling
+	// keepBar on both sides. Every other keep-bar expectation in the suite is
+	// still spelled `2 * effectiveRent(...)` for the same reason: if the tests
+	// adopted the helper too, a wrong helper would satisfy its own tests.
+	it("is exactly twice the effective rent", () => {
+		for (const cost of [0, 1, 13, 25, 400, 9_999]) {
+			expect(keepBar(cost)).toBe(2 * effectiveRent(cost));
+		}
+	});
+
+	it("is zero only when the rule is free to carry", () => {
+		expect(keepBar(0)).toBe(0);
+		expect(keepBar(1)).toBeGreaterThan(0);
+	});
+
+	it("is strictly harder than the raw context cost", () => {
+		// effectiveRent prices the cache re-prefill on top of the raw cost, so
+		// the bar must exceed 2x the bare number, never fall short of it.
+		for (const cost of [1, 25, 400]) {
+			expect(keepBar(cost)).toBeGreaterThan(2 * cost);
+		}
 	});
 });

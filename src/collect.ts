@@ -6,13 +6,13 @@
  * Every failure path logs to collect.log (next to the DB) and exits 0.
  */
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
+
 import { aggregateToolCosts } from "./attribute.js";
 import {
-	defaultDbPath,
 	getRulesetVersion,
 	openDb,
 	recentRealWorkTotals,
@@ -21,6 +21,7 @@ import {
 	type WardenDb,
 } from "./db.js";
 import { shouldDistill } from "./distill.js";
+import { appendLogLine } from "./logfile.js";
 import { knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
 import { parseTranscriptFile } from "./transcript.js";
@@ -96,16 +97,7 @@ export function hookBudgetMs(
  * transcript-supplied name must not be able to forge a log entry, and an
  * escape sequence must not fire when the user cats the log. */
 function logLine(message: string): void {
-	try {
-		const logPath = join(dirname(defaultDbPath()), "collect.log");
-		mkdirSync(dirname(logPath), { recursive: true });
-		appendFileSync(
-			logPath,
-			`${new Date().toISOString()} ${displayText(message, 2000)}\n`,
-		);
-	} catch {
-		// Logging must never take the hook down.
-	}
+	appendLogLine("collect.log", message, 2000);
 }
 
 /**

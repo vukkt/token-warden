@@ -557,6 +557,44 @@ all fixed) and motivated one algorithm change.
   collection. The benchmark half reuses `runSuite` with a `definitionOverride` and the real
   `assessDelta`, same as the naive-headroom experiment.
 
+## Unreleased — one keep-bar, one log sink
+
+- **Why the keep-bar moved to `stats.ts`.** Ten copies of
+  `2 * effectiveRent(...)` in `src/`, five more in `validation/`. Duplication is
+  usually a style complaint; here it was a correctness one. `power.ts` PLANS a
+  burn — it answers "how many runs per side do you need" — and `select.ts`
+  DECIDES. Those two must use the same threshold or the planner sizes a burn
+  against a bar the gate does not apply, and the symptom is a believable run
+  count, not a crash. That is this repo's whole failure genre.
+
+- **The tests deliberately did NOT adopt it.** Every keep-bar expectation in
+  `test/` still reads `2 * effectiveRent(...)`. A test suite that imports the
+  helper it is checking verifies only self-consistency: a wrong `keepBar` would
+  satisfy its own assertions. The definition is pinned separately, against the
+  expression it replaced.
+
+- **Five log writers, two divergent properties.** `gate`, `collect`, `distill`,
+  `evolve` and `notify` each had a private `logLine`. Only `gate` rotated, so
+  four logs grew unbounded in the user's home directory — `collect.log` worst,
+  since it writes on every session. And only three sanitized, so `gate.log` and
+  `notify.log` were the sixth and seventh instances of the sanitize contract gap
+  that v0.45.0 closed everywhere else. Neither divergence was a decision anyone
+  made; they are what five independent implementations of one idea look like
+  after a year.
+
+- **Why one generation, not a numbered series.** These files are breadcrumbs for
+  someone debugging yesterday's session. The audit trail is the ledger, and it
+  is a database with migrations and receipts. Keeping `.1` only bounds the
+  footprint at two files, which is the property that matters for something
+  running unattended in a user's home directory.
+
+- **On the Stop hook budget.** A previous pass declined to add rotation to
+  `collect.ts` because its brief forbade adding work to the sub-2-second hook.
+  The concern was right to raise and wrong on the facts: rotation costs one
+  `statSync`, and `collect.ts` already stats the transcript on the same path.
+  Recorded because "we decided not to" and "we checked and it was fine" should
+  not look the same to whoever reads this next.
+
 ## v0.45.0 — the budget now bounds context, and the packer takes a prefix
 
 - **Price what you send, not what you selected.** `Retrieval.tokens` summed

@@ -79,7 +79,7 @@ const ALLOWED = new Map<string, string>([
 	],
 	[
 		"distill.ts:distill",
-		"every one of these is an argument to logLine(), which applies displayText at the sink",
+		"every one of these is an argument to logLine(), which delegates to appendLogLine() in logfile.ts - the single sink that sanitizes and rotates for all five log writers",
 	],
 	[
 		"memory.ts:lines",

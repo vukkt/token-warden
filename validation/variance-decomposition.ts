@@ -74,7 +74,7 @@ import {
 } from "../src/power.js";
 import { priceFor } from "../src/pricing.js";
 import { assertKnownAgent } from "../src/registry.js";
-import { confidenceZ, effectiveRent, mean } from "../src/stats.js";
+import { confidenceZ, keepBar, mean } from "../src/stats.js";
 import { mulberry32 } from "./rng.js";
 
 // ---------------------------------------------------------------------------
@@ -550,7 +550,7 @@ export function subsetAtBudget(
 	if (runsPerSide < 2) return null;
 	const targetSaving = effectFraction * mean(noises.map((t) => t.metricMean));
 	const standardError = seAt(runsPerSide, noises);
-	const bar = 2 * effectiveRent(rent);
+	const bar = keepBar(rent);
 	const detectionRatio = (targetSaving - bar) / standardError;
 	return {
 		label,
@@ -765,7 +765,7 @@ export function renderReport(
 	);
 	out.push(
 		`agent ${args.agent} · ${runs.length} usable golden runs · ${groups.length} single-configuration passes` +
-			` · rent ${args.rent} (2x cache-aware bar ~${Math.ceil(2 * effectiveRent(args.rent))} tok) · z=${confidenceZ()}`,
+			` · rent ${args.rent} (2x cache-aware bar ~${Math.ceil(keepBar(args.rent))} tok) · z=${confidenceZ()}`,
 	);
 	if (excluded > 0) {
 		out.push(

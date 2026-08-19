@@ -18,13 +18,7 @@
  *    agent's behavior — the human reviews and applies.
  */
 import { spawnSync } from "node:child_process";
-import {
-	appendFileSync,
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -45,9 +39,9 @@ import {
 	type RuleRow,
 	withDb,
 } from "./db.js";
+import { appendLogLine } from "./logfile.js";
 import { parseClaudeEnvelope } from "./model-call.js";
 import { assertKnownAgent, userAgentsDir } from "./registry.js";
-import { displayText } from "./sanitize.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROPOSE_TIMEOUT_MS = 2 * 60 * 1000;
@@ -65,16 +59,7 @@ const PROPOSE_TIMEOUT_MS = 2 * 60 * 1000;
  * is generous: no legitimate message here approaches it.
  */
 function logLine(message: string): void {
-	try {
-		const logPath = join(dirname(defaultDbPath()), "evolve.log");
-		mkdirSync(dirname(logPath), { recursive: true });
-		appendFileSync(
-			logPath,
-			`${new Date().toISOString()} ${displayText(message, 1000)}\n`,
-		);
-	} catch {
-		// Logging must never take evolution down.
-	}
+	appendLogLine("evolve.log", message);
 }
 
 /** Frontmatter fields that define the agent's identity, permissions, and

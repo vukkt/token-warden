@@ -65,7 +65,7 @@ import {
 } from "../src/select.js";
 import {
 	confidenceZ,
-	effectiveRent,
+	keepBar,
 	recoveryMarginFraction,
 	recoveryStrictness,
 } from "../src/stats.js";
@@ -1028,7 +1028,7 @@ export function main(argv: string[]): number {
 	const agents = args.agent ? [args.agent] : knownAgents();
 	const db = args.dbPath ? openDb(args.dbPath) : openDb();
 	try {
-		const bar = Math.ceil(2 * effectiveRent(args.rent));
+		const bar = Math.ceil(keepBar(args.rent));
 		console.log(
 			"=== token-warden empirical calibration (recorded runs, zero tokens) ===",
 		);

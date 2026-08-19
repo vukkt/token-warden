@@ -13,7 +13,6 @@
  */
 import { spawn } from "node:child_process";
 import {
-	appendFileSync,
 	existsSync,
 	mkdirSync,
 	rmSync,
@@ -29,6 +28,7 @@ import {
 	openDb,
 	type WardenDb,
 } from "./db.js";
+import { appendLogLine } from "./logfile.js";
 import { isValidAgentName, knownAgents } from "./registry.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,13 +39,7 @@ const AUTO_SELECT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 /** Diagnostics for a hook that is otherwise silent by design. Best-effort:
  * a failure to log must never become a failure to start a session. */
 function logLine(message: string): void {
-	try {
-		const logPath = join(dirname(defaultDbPath()), "notify.log");
-		mkdirSync(dirname(logPath), { recursive: true });
-		appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
-	} catch {
-		// Logging must never take the hook down.
-	}
+	appendLogLine("notify.log", message);
 }
 
 /** Marker recording that an auto-select burn was ATTEMPTED, next to the DB. */

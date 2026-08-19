@@ -33,7 +33,7 @@ import {
 } from "./db.js";
 import { formatRounded as fmt } from "./format.js";
 import { assertKnownAgent, knownAgents } from "./registry.js";
-import { confidenceZ, effectiveRent, sampleVariance } from "./stats.js";
+import { confidenceZ, keepBar, sampleVariance } from "./stats.js";
 
 /** One-sided normal quantiles for the planner's two power targets. */
 export const Z_POWER_80 = 0.8416;
@@ -170,7 +170,7 @@ export function minDetectableSaving(
 	rent: number,
 	zPower: number,
 ): number {
-	const bar = 2 * effectiveRent(rent);
+	const bar = keepBar(rent);
 	return bar + (confidenceZ() + zPower) * seAt(runsPerSide, noises);
 }
 
@@ -185,7 +185,7 @@ export function requiredRunsPerSide(
 	rent: number,
 	zPower: number,
 ): number | null {
-	const bar = 2 * effectiveRent(rent);
+	const bar = keepBar(rent);
 	if (targetSaving <= bar + 1e-9) return null;
 	const spread = confidenceZ() + zPower;
 	for (let n = 2; n <= MAX_RUNS; n++) {
@@ -202,7 +202,7 @@ export function powerAt(
 	noises: TaskNoise[],
 	rent: number,
 ): number {
-	const bar = 2 * effectiveRent(rent);
+	const bar = keepBar(rent);
 	const se = seAt(runsPerSide, noises);
 	// Zero measured noise (every recorded replicate of every task identical):
 	// the estimate is exact, so the gate collapses to `delta >= bar` and power
@@ -293,7 +293,7 @@ export function renderPower(
 	if (noises.length < 2) {
 		return `insufficient replicate history for ${agent} (need >= 2 tasks with >= 2 completed active-set runs at one ruleset version) — run /warden-bench --agent ${agent} first`;
 	}
-	const bar = 2 * effectiveRent(rent);
+	const bar = keepBar(rent);
 	const z = confidenceZ();
 	const totalRuns = noises.reduce((acc, t) => acc + t.n, 0);
 	const lines = [`power plan — ${agent}`];
@@ -382,7 +382,7 @@ export function main(argv: string[]): number {
 					agent,
 					tasks: noises.length,
 					rent,
-					bar: 2 * effectiveRent(rent),
+					bar: keepBar(rent),
 					// Insufficient history renders as an empty table rather than an
 					// error: --json is for tooling, and "no rows" is the honest answer.
 					rows:

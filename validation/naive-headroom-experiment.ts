@@ -34,7 +34,7 @@ import {
 } from "../src/bench.js";
 import { insertRule, openDb, type RuleRow } from "../src/db.js";
 import { assessDelta } from "../src/select.js";
-import { effectiveRent } from "../src/stats.js";
+import { keepBar } from "../src/stats.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const AGENT = "sql";
@@ -117,7 +117,7 @@ function main(): void {
 	});
 
 	const assessment = assessDelta(without, withRule, rent);
-	const threshold = Math.round(2 * effectiveRent(rent));
+	const threshold = Math.round(keepBar(rent));
 
 	console.log("\n═══ VERDICT ═══");
 	console.log("per task: without → with");

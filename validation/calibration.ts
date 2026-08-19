@@ -20,7 +20,7 @@
  */
 import { summarizeTask, type TaskSummary } from "../src/bench.js";
 import { assessDelta, verdict } from "../src/select.js";
-import { effectiveRent } from "../src/stats.js";
+import { keepBar } from "../src/stats.js";
 import { mulberry32 } from "./rng.js";
 
 const BASELINE = 60_000; // representative golden-session token cost
@@ -363,7 +363,7 @@ function churnReport(model: NoiseModel): void {
 	const runs = 3;
 	// The retention bar the CS upper bound must clear: 2x the (cache-aware)
 	// effective rent — the exact quantity the production verdict() tests against.
-	const bar = 2 * effectiveRent(RENT);
+	const bar = keepBar(RENT);
 	console.log(
 		`\n=== re-audit churn: one/two-strike vs confidence-sequence · noise model: ${model} · runs=${runs} · bar=${bar.toFixed(1)} tok ===`,
 	);

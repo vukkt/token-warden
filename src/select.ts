@@ -53,7 +53,7 @@ import { assertKnownAgent } from "./registry.js";
 import { displayText } from "./sanitize.js";
 import {
 	confidenceZ,
-	effectiveRent,
+	keepBar,
 	mean,
 	median,
 	pooledVariance,
@@ -92,9 +92,7 @@ export interface VerdictInput {
  * one-time cache re-prefill. */
 export function verdict(rule: VerdictInput): RuleStatus {
 	if (rule.measuredDelta === null || rule.measuredDelta <= 0) return "evicted";
-	return rule.measuredDelta >= 2 * effectiveRent(rule.contextCost)
-		? "active"
-		: "evicted";
+	return rule.measuredDelta >= keepBar(rule.contextCost) ? "active" : "evicted";
 }
 
 export interface ReasonedVerdict {
@@ -124,7 +122,7 @@ export function verdictWithReason(
 	const status = verdict({ measuredDelta: delta, contextCost });
 	// Ceil so the displayed bar never rounds down to equal a sub-threshold delta
 	// (which would read "savings 21 < ... (21)"); an active delta still reads ≥.
-	const bar = Math.ceil(2 * effectiveRent(contextCost));
+	const bar = Math.ceil(keepBar(contextCost));
 	return status === "active"
 		? { status, reason: `savings ${delta} ≥ 2× cache-aware rent (${bar})` }
 		: {
@@ -152,9 +150,7 @@ export function promotionThreshold(
 	scale = 1,
 ): number | null {
 	if (standardError === null) return null;
-	return (
-		2 * effectiveRent(contextCost) + scale * confidenceMultiple * standardError
-	);
+	return keepBar(contextCost) + scale * confidenceMultiple * standardError;
 }
 
 /** Everything the eviction CLASS depends on. Passed explicitly so the policy is
@@ -741,7 +737,7 @@ export function assessDelta(
 		rawSE,
 	);
 
-	const threshold = 2 * effectiveRent(contextCost);
+	const threshold = keepBar(contextCost);
 	const uncertain =
 		!regression &&
 		standardError !== null &&
@@ -905,7 +901,7 @@ export function retentionRounds(
 ): number {
 	const se = assessment.standardError;
 	if (assessment.regression || bankedDelta === null || se === null) return 0;
-	const margin = bankedDelta - 2 * effectiveRent(contextCost);
+	const margin = bankedDelta - keepBar(contextCost);
 	if (margin <= 0) return 0;
 	const threat = (assessment.confidenceMultiple * se) / margin;
 	if (!Number.isFinite(threat)) return 0;

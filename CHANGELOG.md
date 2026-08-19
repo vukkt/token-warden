@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+### One keep-bar, and one way to write a log line
+
+Two duplications where the copies had already started to matter.
+
+**The keep-bar.** `2 * effectiveRent(...)` was written out ten times across
+`select.ts` and `power.ts`, plus five more in `validation/`. No copy was wrong.
+The hazard is that the PLANNER (`power.ts`, which tells you how many runs a
+comparison needs) and the GATE (`select.ts`, which decides) have to agree on the
+bar exactly; a drift between them would have surfaced as a plausible-looking run
+count rather than an error. Now `keepBar()` in `stats.ts`, one definition.
+
+The `test/` sites still spell it `2 * effectiveRent(...)` on purpose. If the
+tests adopted the helper too, a wrong helper would satisfy its own tests — the
+expectations stay independent, and `keepBar` is pinned separately against the
+definition it replaced.
+
+**Log rotation, and log sanitizing.** Five modules had grown their own
+`logLine`, and the copies had diverged on the two things that matter:
+
+- Only `gate.ts` rotated. `collect`, `distill`, `evolve` and `notify` grew
+  without bound in the user's `~/.token-warden` directory, and `collect.log` is
+  the highest-frequency writer of the five — a line every session, whether or
+  not anything happened.
+- `collect`, `distill` and `evolve` flattened the line through `displayText`;
+  `gate` and `notify` did not. Every one of these logs interpolates untrusted
+  text: session ids, paths, transcript-supplied agent names, error strings,
+  model output. A newline in any of them forges a second timestamped entry,
+  which was PROVEN exploitable against `distill.log` before that copy was fixed.
+  So `gate.log` and `notify.log` were the sixth and seventh instances of the
+  same contract gap v0.45.0 closed elsewhere.
+
+`src/logfile.ts` now does mkdir, rotate, sanitize and append in one place, and
+all five delegate to it. Both properties hold by construction rather than by
+five authors remembering them.
+
+Rotation is 1 MiB keeping ONE generation — breadcrumbs, not an audit trail; the
+ledger is the audit trail and it is a database. The `statSync` costs one syscall
+and is safe inside the Stop hook's sub-2-second budget, which `collect.ts`
+already demonstrates by stating the transcript on the same path.
+
+Both guards verified by watching them fail: disabling rotation fails two tests,
+removing the sanitize call fails three.
+
 ## v0.45.0 — 2026-08-15
 
 ### CORRECTION: retrieval cost was under-priced by a fifth; the ratio is 4.4x, not 3.7x

@@ -17,12 +17,12 @@
  * measure; near-identical samples are collapsed before any insert.
  */
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
+
 import {
-	defaultDbPath,
 	getActiveRules,
 	insertRule,
 	listRulesByAgent,
@@ -34,6 +34,7 @@ import {
 	type WardenDb,
 	withDb,
 } from "./db.js";
+import { appendLogLine } from "./logfile.js";
 import {
 	distillModel,
 	MAX_MODEL_REPLY_CHARS,
@@ -47,7 +48,6 @@ import {
 	SIMILARITY_THRESHOLD,
 	trigramSimilarity,
 } from "./rules.js";
-import { displayText } from "./sanitize.js";
 import { digestTranscript } from "./transcript.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -86,16 +86,7 @@ function defaultK(): number {
  * user cats the log. Validated rule bodies are already printable; the
  * unvalidated values around them are the reason this is not optional. */
 function logLine(message: string): void {
-	try {
-		const logPath = join(dirname(defaultDbPath()), "distill.log");
-		mkdirSync(dirname(logPath), { recursive: true });
-		appendFileSync(
-			logPath,
-			`${new Date().toISOString()} ${displayText(message, 2000)}\n`,
-		);
-	} catch {
-		// Logging must never take the distiller down.
-	}
+	appendLogLine("distill.log", message, 2000);
 }
 
 /** Nearest-rank 75th percentile. */

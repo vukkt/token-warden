@@ -38,7 +38,7 @@ import { buildPrompt, parseRulesJson } from "../src/distill.js";
 // outside tsconfig's include and the typecheck cannot see a break like this.
 import { contextCost } from "../src/rules.js";
 import { assessDelta } from "../src/select.js";
-import { effectiveRent } from "../src/stats.js";
+import { keepBar } from "../src/stats.js";
 import { digestTranscript } from "../src/transcript.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -189,7 +189,7 @@ function main(): number {
 	});
 
 	const a = assessDelta(without, withRule, rent);
-	const threshold = Math.round(2 * effectiveRent(rent));
+	const threshold = Math.round(keepBar(rent));
 	console.log("\n=== VERDICT (system-distilled rule) ===");
 	console.log(
 		`mean delta=${a.delta} tok/run  rent=${rent}  threshold(2x cache-aware)=${threshold}  stderr=${a.standardError?.toFixed(0) ?? "n/a"} (${a.standardErrorBasis ?? "—"})`,
