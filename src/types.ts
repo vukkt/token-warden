@@ -25,7 +25,9 @@ export const DOMAIN_AGENTS = ["frontend", "backend", "sql", "testing"] as const;
 declare const BRAND: unique symbol;
 
 /** Attach a compile-time-only nominal tag to a structural type.
- * @public Vocabulary for the in-progress brand adoption; see ROADMAP. */
+ * @public Vocabulary for the in-progress brand adoption. ROADMAP section 3
+ * carries the adoption order; `test/types-adoption.test.ts` pins which brands
+ * are still unadopted, so this comment cannot outlive the plan. */
 export type Brand<T, B extends string> = T & { readonly [BRAND]: B };
 
 /** A known agent (see `registry.ts#knownAgents`), never a task or rule id.
@@ -138,7 +140,6 @@ export interface ParsedRun {
 	 * carry an opaque `agentId`, so this defaults to "main" and callers
 	 * attribute via hook payload or bench flags. */
 	agent: string;
-	sessionId: string | null;
 	inputTokens: number;
 	outputTokens: number;
 	cacheCreation: number;

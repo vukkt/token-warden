@@ -30,6 +30,5 @@
 	],
 	"project": ["src/**/*.ts"],
 	"ignoreBinaries": ["claude", "mkfifo"],
-	"ignoreExportsUsedInFile": true,
-	"tags": ["-@public"]
+	"ignoreExportsUsedInFile": true
 }

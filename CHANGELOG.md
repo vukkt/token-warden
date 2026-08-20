@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+### The punch list, closed
+
+Four items that had each been reported and deferred, plus a correction to one of
+the reports.
+
+**`expectConflict` is no longer inert.** `fin-05` asks whether two sources agree
+and its suite entry claimed it was "scored on whether BOTH sources are cited".
+Nothing read the flag: the row was reached by way of a null expected value and
+scored `accepted.length > 0`, so any single grounded fact passed — including a
+fact about a different metric, and including the exact failure the question
+exists to detect, quoting one source and silently ignoring the other. Conflict
+questions now require citations from two distinct documents, which is decidable
+from `chunkId` alone (`<docId>#<ordinal>`). Verified by watching the old lenient
+rule fail the new tests.
+
+Previous passes left this deliberately, because tightening it moves an
+end-to-end accuracy figure no re-run exists to re-establish. That reasoning was
+sound and is now spent: the figure was measured by a scorer that could not
+detect the thing it claimed to measure, so preserving it preserved nothing. One
+of the twelve July rows should be read as unverified rather than correct.
+
+**`recordReceipt` no longer drops audit rows.** It was `INSERT OR REPLACE` on a
+`(rule_id, decided_at)` primary key, so two decisions on one rule in the same
+millisecond silently overwrote each other — one fewer row than there were
+events, no error, in the table the code itself calls an audit trail. Migrations
+are append-only history, so the collision is resolved at the write instead: the
+timestamp advances by a millisecond until the row lands, preserving ORDER at the
+cost of a few milliseconds of absolute precision. Bounded at eight attempts,
+because an unbounded loop in a write path is worse than the collision it guards.
+
+**`ParsedRun.sessionId` removed.** Accumulated on every line of every transcript
+by the Stop-hook parser, declared, asserted in tests, and read by zero
+production code. It was also the only field in `ParsedRun` carrying no doc
+comment, while every other one states its rationale — which is what an
+incidental addition looks like.
+
+**The brand vocabulary has a plan, and a test that keeps it honest.** Nine of
+the ten nominal brands in `types.ts` are adopted by nothing, and the comment
+pointed at a ROADMAP entry that did not exist. The entry exists now, with an
+adoption order, and `test/types-adoption.test.ts` pins the unadopted set so it
+can shrink freely and only grows by editing the list. They are kept rather than
+deleted because `AbOutcome` documents a live defect — `compare.ts` carries three
+booleans that make eight states representable when six are legal — and deleting
+the type would delete the finding.
+
+**Correction to an earlier report.** That pass attributed the invisibility of
+these types to knip's `tags: ["-@public"]` suppression. That was wrong: knip
+reports unused VALUES, not unused type exports, so removing the tag changes
+nothing here — verified by removing it. The tag was still worth removing, since
+it suppressed repo-wide for a marker used in exactly one file, but the blind
+spot is knip's model, not the config, and only a test closes it.
+
 ### CORRECTION: Haiku was priced as Sonnet, and the README overstated savings 3.7x
 
 Two dollar figures were wrong, found while answering "what does this save per developer".

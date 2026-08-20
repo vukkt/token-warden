@@ -40,7 +40,6 @@ describe("parseTranscript on fixtures", () => {
 		expect(run.completed).toBe(true);
 		expect(run.malformedLines).toBe(1);
 		expect(run.entryCount).toBe(9);
-		expect(run.sessionId).toBe("fix-main-1");
 		expect(run.agent).toBe("main");
 		expect(run.isSidechain).toBe(false);
 		expect(run.agentId).toBeNull();
@@ -79,7 +78,6 @@ describe("parseTranscript edge cases", () => {
 			completed: false,
 			entryCount: 0,
 			malformedLines: 0,
-			sessionId: null,
 			agent: "main",
 		});
 	});

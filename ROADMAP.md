@@ -87,6 +87,30 @@ what remains is running the experiments and recording their results:
 
 ## 3. Engine improvements
 
+- **Adopt the brand vocabulary in `src/types.ts`.** `types.ts` defines nominal
+  brands — `AgentName`, `TaskId`, `RulesetVersion`, `TokenCount`, `UsdAmount`,
+  `ArmRole`, `AbDimension`, `AbOutcome` — and points here for the plan. This is
+  that plan, written down 2026-08-20 after the pointer was found dangling.
+
+  Nine of the ten are adopted by nothing today; only `RuleId` is in real use
+  (`contradict.ts`). They are kept rather than deleted because each encodes a
+  distinction the code currently gets wrong by accident somewhere, and
+  `AbOutcome` in particular documents a live defect: `compare.ts#Comparison`
+  carries `regression` / `environmentFailure` / `uncertain` as three booleans,
+  which makes eight states representable when six are legal (a regression that
+  is also an environment failure is nonsense), and every consumer re-derives the
+  precedence cascade by hand. Deleting the type would delete that finding.
+
+  Adoption order, cheapest first: `TokenCount` and `UsdAmount` at the
+  `pricing.ts` boundary (they encode the rule that a dollar figure must never
+  reach a gate expecting tokens); `AgentName` at `registry.ts#assertKnownAgent`;
+  then `AbOutcome` inside `Comparison`, which is the one with real value and
+  real blast radius. `test/types-adoption.test.ts` pins the unadopted set, so
+  the list can shrink freely and only grows by editing it.
+
+  Not urgent. Brands are compile-time only, so none of this changes a number,
+  which is exactly why it keeps losing to work that does.
+
 - **Extract the shared modules — SHIPPED.** `src/rules.ts` (rule vocabulary),
   `src/model-call.ts` (the `claude -p` envelope), `src/stats.ts` (estimators and
   gate parameters), `src/format.ts` (one name per formatting contract),

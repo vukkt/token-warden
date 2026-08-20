@@ -161,7 +161,6 @@ class TranscriptAccumulator {
 	private entryCount = 0;
 	private toolCalls = 0;
 	private lineIndex = 0;
-	private sessionId: string | null = null;
 	private agentName: string | null = null;
 	private agentId: string | null = null;
 	private isSidechain = false;
@@ -190,7 +189,6 @@ class TranscriptAccumulator {
 			return;
 		}
 
-		this.sessionId ??= entry.sessionId ?? null;
 		this.agentId ??= entry.agentId ?? null;
 		this.agentName ??= entry.agentName ?? null;
 		if (entry.isSidechain === true) this.isSidechain = true;
@@ -295,7 +293,6 @@ class TranscriptAccumulator {
 
 		return {
 			agent: this.agentName ?? "main",
-			sessionId: this.sessionId,
 			inputTokens,
 			outputTokens,
 			cacheCreation,

@@ -1271,40 +1271,86 @@ export interface ReceiptRow {
 	born_digest: string | null;
 }
 
-/** Append a verdict receipt. One row per decision event (initial + each
- * re-audit), keyed by rule and timestamp — the audit trail of a rule. */
+/**
+ * Append a verdict receipt. One row per decision event (initial + each
+ * re-audit), keyed by rule and timestamp — the audit trail of a rule.
+ *
+ * APPEND means append. This used to be `INSERT OR REPLACE`, so two decisions on
+ * one rule bearing the same millisecond timestamp silently overwrote each other
+ * — a lost entry in what this comment itself calls an audit trail, and lost in
+ * the way this project keeps finding: no error, just one fewer row than there
+ * were events.
+ *
+ * The primary key is `(rule_id, decided_at)` and migrations are append-only
+ * history, so the collision is resolved here instead: advance the timestamp by
+ * a millisecond until the row lands. That records the ORDER of two same-tick
+ * decisions truthfully at the cost of at most a few milliseconds of absolute
+ * precision, which is the right trade for an audit trail — losing the event
+ * entirely is not recoverable, a 1 ms skew is not misleading.
+ */
 export function recordReceipt(db: WardenDb, receipt: NewReceipt): void {
-	db.prepare(
-		`INSERT OR REPLACE INTO rule_receipts (
+	const insert = db.prepare(
+		`INSERT INTO rule_receipts (
 			rule_id, agent, decided_at, status, kind, reason, model, fixture_hash,
 			runs, delta, context_cost, standard_error, regression,
 			with_tokens, without_tokens, with_tool_calls, without_tool_calls,
 			with_file_rereads, without_file_rereads,
 			tasks_total, tasks_passed_with, tasks_passed_without
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-	).run(
-		receipt.ruleId,
-		receipt.agent,
-		receipt.decidedAt,
-		receipt.status,
-		receipt.kind,
-		receipt.reason,
-		receipt.model,
-		receipt.fixtureHash,
-		receipt.runs,
-		receipt.delta,
-		receipt.contextCost,
-		receipt.standardError,
-		receipt.regression ? 1 : 0,
-		receipt.withTokens,
-		receipt.withoutTokens,
-		receipt.withToolCalls,
-		receipt.withoutToolCalls,
-		receipt.withFileRereads,
-		receipt.withoutFileRereads,
-		receipt.tasksTotal,
-		receipt.tasksPassedWith,
-		receipt.tasksPassedWithout,
+	);
+	const run = (decidedAt: string): void => {
+		insert.run(
+			receipt.ruleId,
+			receipt.agent,
+			decidedAt,
+			receipt.status,
+			receipt.kind,
+			receipt.reason,
+			receipt.model,
+			receipt.fixtureHash,
+			receipt.runs,
+			receipt.delta,
+			receipt.contextCost,
+			receipt.standardError,
+			receipt.regression ? 1 : 0,
+			receipt.withTokens,
+			receipt.withoutTokens,
+			receipt.withToolCalls,
+			receipt.withoutToolCalls,
+			receipt.withFileRereads,
+			receipt.withoutFileRereads,
+			receipt.tasksTotal,
+			receipt.tasksPassedWith,
+			receipt.tasksPassedWithout,
+		);
+	};
+
+	let stamp = receipt.decidedAt;
+	// Bounded: a handful of same-millisecond decisions on ONE rule is already an
+	// edge case, and an unbounded loop in the write path is worse than the
+	// collision it guards. Past the cap the original timestamp is used, which
+	// restores the old overwrite rather than throwing away the caller's write.
+	for (let attempt = 0; attempt < 8; attempt++) {
+		try {
+			run(stamp);
+			return;
+		} catch (error) {
+			if (!isUniqueViolation(error)) throw error;
+			stamp = new Date(new Date(stamp).getTime() + 1).toISOString();
+		}
+	}
+	db.prepare(
+		"DELETE FROM rule_receipts WHERE rule_id = ? AND decided_at = ?",
+	).run(receipt.ruleId, receipt.decidedAt);
+	run(receipt.decidedAt);
+}
+
+/** A primary-key collision, as distinct from any other database failure —
+ * which must still propagate rather than be retried into a nudged timestamp. */
+function isUniqueViolation(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		/UNIQUE constraint failed|PRIMARY KEY must be unique/i.test(error.message)
 	);
 }
 

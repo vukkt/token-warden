@@ -119,11 +119,12 @@ export interface QuestionResult {
 	 * INVERSELY — see `distractorOnly`. Null when the question is not scorable
 	 * on retrieval alone (conflict questions need both sources judged).
 	 *
-	 * The mechanism is `expect.value === null`, NOT `expectConflict` — nothing
-	 * reads that flag. The conflict question is excluded only because it happens
-	 * to carry a null expected value; a conflict question written with a value
-	 * would be scored like any other. Named because the two read the same from
-	 * outside and are not the same rule.
+	 * The mechanism here is still `expect.value === null` rather than
+	 * `expectConflict`: retrieval scoring asks only "is the answer present", and
+	 * a question with no single expected value has nothing to look for. END-TO-END
+	 * scoring does read `expectConflict` (since 2026-08-20) and requires citations
+	 * from two distinct documents. The two rules read the same from outside and
+	 * are deliberately not the same rule.
 	 */
 	answerBearing: boolean | null;
 	/**
@@ -534,15 +535,29 @@ export function scoreAnswer(
 		return { correct: report.accepted.length === 0, ungrounded };
 	}
 	const expected = question.expect.value;
+	if (question.expectConflict) {
+		// A conflict question asks whether two sources agree, so there is no single
+		// expected value to match — what makes an answer right is that it SURFACED
+		// BOTH sources rather than silently picking one. That is decidable from the
+		// citations alone: `chunkId` is `<docId>#<ordinal>`, so distinct documents
+		// are distinct prefixes.
+		//
+		// Until 2026-08-20 the flag was inert. The branch was reached by way of a
+		// null expected value and scored `accepted.length > 0`, so ANY single
+		// grounded fact passed — including one about an entirely different metric,
+		// and including the exact failure the question exists to detect: quoting
+		// one source and ignoring the other. The suite entry claimed it was
+		// "scored on whether BOTH sources are cited"; nothing read the flag.
+		const sources = new Set(
+			report.accepted.map((f) => f.chunkId.split("#")[0] ?? f.chunkId),
+		);
+		return { correct: sources.size >= 2, ungrounded };
+	}
 	if (expected === null) {
-		// WEAK, and named as such (2026-08-13). This branch is reached by the
-		// CONFLICT question, whose suite entry claims it is "scored on whether BOTH
-		// sources are cited". Nothing reads `expectConflict` — not here, not in
-		// `scoreRetrieval` — so any single grounded fact marks the row correct,
-		// including one about an entirely different metric. It is left as-is rather
-		// than tightened silently, because changing it would move an end-to-end
-		// accuracy figure that no re-run exists to re-establish. Implementing real
-		// conflict scoring is tracked in ROADMAP.
+		// No expected value and not a conflict question: the row is scorable only
+		// on whether anything grounded came back at all. Deliberately weak, and
+		// currently unreached by the bundled suite - every null-valued question in
+		// it is the conflict one.
 		return { correct: report.accepted.length > 0, ungrounded };
 	}
 	return {

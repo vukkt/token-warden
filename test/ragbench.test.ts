@@ -412,6 +412,60 @@ describe("scoreAnswer", () => {
 		groundedness: 1,
 	});
 
+	const citing = (...chunkIds: string[]) => ({
+		accepted: chunkIds.map((chunkId, i) => ({
+			metric: "operating margin",
+			period: "fiscal 2024",
+			value: 14.5 + i,
+			unit: "%",
+			currency: "",
+			chunkId,
+			quote: "q",
+		})),
+		rejected: [],
+		malformed: 0,
+		groundedness: 1,
+	});
+
+	const conflictQuestion = () =>
+		question({
+			expectConflict: true,
+			expect: { value: null, unit: "", period: "fiscal 2024" },
+		});
+
+	it("credits a conflict answer only when BOTH sources are cited", () => {
+		// Implemented 2026-08-20. Until then `expectConflict` was inert: the
+		// branch was reached via a null expected value and scored
+		// `accepted.length > 0`, so one grounded fact passed.
+		expect(
+			scoreAnswer(conflictQuestion(), citing("10k.md#3", "segments.md#1"))
+				.correct,
+		).toBe(true);
+	});
+
+	it("refuses the exact failure the conflict question exists to detect", () => {
+		// Quoting one source and silently ignoring the other. The old scorer
+		// marked this CORRECT, which made the row measure the model's willingness
+		// to emit output rather than its handling of disagreement.
+		expect(scoreAnswer(conflictQuestion(), citing("10k.md#3")).correct).toBe(
+			false,
+		);
+		expect(
+			scoreAnswer(conflictQuestion(), citing("10k.md#3", "10k.md#7")).correct,
+		).toBe(false);
+	});
+
+	it("refuses a conflict answer with nothing grounded", () => {
+		expect(
+			scoreAnswer(conflictQuestion(), {
+				accepted: [],
+				rejected: [],
+				malformed: 0,
+				groundedness: 1,
+			}).correct,
+		).toBe(false);
+	});
+
 	it("credits an answer matching the expected value", () => {
 		expect(scoreAnswer(question(), grounded(4182.6)).correct).toBe(true);
 	});

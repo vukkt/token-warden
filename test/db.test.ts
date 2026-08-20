@@ -20,6 +20,7 @@ import {
 	recentEvictedRules,
 	recentQuestionsFrom,
 	recentRealWorkTotals,
+	recordReceipt,
 	setRuleProbation,
 	setRuleUnderpowered,
 	upsertRun,
@@ -586,5 +587,97 @@ describe("questions", () => {
 			"How is auth refreshed?",
 		]);
 		expect(recentQuestionsFrom(db, "sql", 5)).toEqual([]);
+	});
+});
+
+describe("recordReceipt", () => {
+	const receipt = (over: Record<string, unknown> = {}) => ({
+		ruleId: 0,
+		agent: "sql",
+		decidedAt: "2026-08-20T10:00:00.000Z",
+		status: "active",
+		kind: "candidate",
+		reason: "r",
+		model: "m",
+		fixtureHash: "h",
+		runs: 2,
+		delta: 100,
+		contextCost: 10,
+		standardError: 5,
+		regression: false,
+		withTokens: 1,
+		withoutTokens: 2,
+		withToolCalls: 1,
+		withoutToolCalls: 1,
+		withFileRereads: 0,
+		withoutFileRereads: 0,
+		tasksTotal: 1,
+		tasksPassedWith: 1,
+		tasksPassedWithout: 1,
+		...over,
+	});
+
+	function seed(db: WardenDb): number {
+		return insertRule(db, {
+			agent: "sql",
+			body: "prefer rg over cat when scanning a large file for one symbol",
+			contextCost: 10,
+			sourceRun: null,
+			createdAt: "2026-08-20T09:00:00.000Z",
+			bornDigest: null,
+		});
+	}
+
+	it("keeps every decision made in the same millisecond", () => {
+		// This was `INSERT OR REPLACE` on a `(rule_id, decided_at)` primary key,
+		// so same-tick decisions silently overwrote each other — one fewer row
+		// than there were events, with no error, in the table the code itself
+		// calls an audit trail.
+		const id = seed(db);
+		for (const delta of [100, 200, 300]) {
+			recordReceipt(db, { ...receipt({ ruleId: id, delta }) });
+		}
+		const rows = db
+			.prepare(
+				"SELECT delta FROM rule_receipts WHERE rule_id = ? ORDER BY decided_at",
+			)
+			.all(id) as { delta: number }[];
+		expect(rows.map((r) => r.delta)).toEqual([100, 200, 300]);
+	});
+
+	it("preserves decision ORDER when it nudges the timestamp", () => {
+		// The nudge trades absolute precision for sequence. Sequence is what an
+		// audit trail is for, so assert it rather than only the row count.
+		const id = seed(db);
+		for (const delta of [1, 2, 3]) {
+			recordReceipt(db, { ...receipt({ ruleId: id, delta }) });
+		}
+		const stamps = (
+			db
+				.prepare(
+					"SELECT decided_at FROM rule_receipts WHERE rule_id = ? ORDER BY delta",
+				)
+				.all(id) as { decided_at: string }[]
+		).map((r) => Date.parse(r.decided_at));
+		expect(stamps[1]).toBeGreaterThan(stamps[0] as number);
+		expect(stamps[2]).toBeGreaterThan(stamps[1] as number);
+		// ...and stays within a few ms of the caller's stamp.
+		expect((stamps[2] as number) - (stamps[0] as number)).toBeLessThan(10);
+	});
+
+	it("still records distinct timestamps untouched", () => {
+		const id = seed(db);
+		recordReceipt(db, receipt({ ruleId: id }));
+		recordReceipt(
+			db,
+			receipt({ ruleId: id, decidedAt: "2026-08-21T10:00:00.000Z" }),
+		);
+		const rows = db
+			.prepare("SELECT decided_at FROM rule_receipts WHERE rule_id = ?")
+			.all(id) as { decided_at: string }[];
+		expect(rows.map((r) => r.decided_at).sort()).toEqual([
+			"2026-08-20T10:00:00.000Z",
+			"2026-08-21T10:00:00.000Z",
+		]);
 	});
 });
