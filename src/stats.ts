@@ -58,6 +58,32 @@ export function pooledVariance(vectors: number[][]): number | null {
 	return dof > 0 ? sumSq / dof : null;
 }
 
+/**
+ * Standard normal CDF, via the Abramowitz & Stegun 7.1.26 rational
+ * approximation to erf. Absolute error < 1.5e-7, which is far below anything
+ * the gate can resolve: it is applied to a z built from an SE estimated on
+ * three runs a side, so the sampling error in z dwarfs the approximation error
+ * in Phi by many orders of magnitude.
+ *
+ * Exists so `fdr.ts` can turn the gate's z-statistics into p-values. Deliberately
+ * not a dependency: one closed-form function is cheaper to audit than a
+ * numerics package, and this one is textbook.
+ */
+export function normalCdf(z: number): number {
+	// erf is odd, so fold to the positive half and mirror.
+	const sign = z < 0 ? -1 : 1;
+	const x = Math.abs(z) / Math.SQRT2;
+	const t = 1 / (1 + 0.3275911 * x);
+	const y =
+		1 -
+		((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) *
+			t +
+			0.254829592) *
+			t *
+			Math.exp(-x * x);
+	return 0.5 * (1 + sign * y);
+}
+
 export function median(xs: number[]): number {
 	const s = [...xs].sort((a, b) => a - b);
 	const mid = Math.floor(s.length / 2);

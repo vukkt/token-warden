@@ -161,12 +161,28 @@ rate this project actually cares about: "what fraction of my MEMORY.md is
 noise?" BH is uniformly more powerful than Bonferroni at the same q, and the
 gap widens as the pool grows.
 
-**Why it compounds.** The BH threshold is `(i/m)q`, which *rises* with rank. As
-the candidate pool grows the procedure gets more powerful, not less. A fixed
-per-rule `z=2` has the opposite behaviour: the expected number of false rules in
-memory grows linearly in the number of candidates ever tested. The current gate
-degrades with use. BH is the fix, and "gets better the more you use it" is the
-property the whole project is selling.
+**Why it compounds.** Carefully, because the loose version of this claim is
+false and I wrote it that way first. The BH threshold is `(i/m)q`, which rises
+with RANK but is **capped at `q`** (reached only at `i = m`). So a candidate
+whose p-value exceeds `q` is unreachable at any pool size — the procedure does
+not get unboundedly more generous as `m` grows, and `test/fdr.test.ts` pins
+that cap precisely so nobody re-derives the wrong intuition.
+
+Two true statements survive, and they are the ones that matter:
+
+1. **FDR stays bounded at `q` as the pool grows.** A fixed per-rule `z = 2` has
+   no such bound: the expected number of false rules in memory grows linearly in
+   the number of candidates ever tested. The current gate degrades with use; BH
+   does not. That asymmetry is the whole argument.
+2. **BH's advantage over an FWER correction widens with `m`.** Bonferroni's
+   threshold is `q/m`, which shrinks as the pool grows, while BH's does not. At
+   `m = 20` the two agree on evidence at `p = 0.002`; at `m = 500` Bonferroni
+   finds none of it and BH finds all of it. The measured gaps are `[0, 20, 100]`
+   at `m = [20, 100, 500]`, pinned in the test.
+
+Within a pool, a borderline candidate's fate depends on how its peers measured
+— strong peers push the step-up out far enough to reach it, weak peers do not.
+That is not a defect; it is what controlling a pool-level error rate means.
 
 **What it replaces.** The bare `z=2` promotion margin, which becomes the
 per-candidate p-value input rather than the decision itself.
@@ -244,7 +260,8 @@ And the property the project is selling — *it gets better the more you use it*
 stops being a slogan and becomes four specific claims:
 
 1. More recorded runs -> better shrinkage target -> lower SE. (I)
-2. More candidates -> higher BH threshold -> more power at the same FDR. (II)
+2. More candidates -> FDR still bounded at q, where a fixed z accumulates false
+   rules linearly; and BH's margin over Bonferroni widens with the pool. (II)
 3. More candidates -> larger Successive Halving advantage over uniform. (III)
 4. More surviving rules -> better set under the same context budget. (IV)
 
