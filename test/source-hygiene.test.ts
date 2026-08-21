@@ -61,11 +61,13 @@ describe("source hygiene", () => {
  * ONLY from its own test still looks used. A command absent from `entry` is
  * therefore not merely unchecked; it is checked in a way that reports clean.
  *
- * `src/ragbench.ts` shipped in v0.42.0 as `/warden-ragbench` and was never
- * added, which put its whole subtree — corpus, retrieve, extract, interrogate,
- * 2,271 lines — outside the guard. Adding it immediately surfaced two exports
- * (`isStrategy`, `extractFromStdout`) that are written and tested and called
- * from nowhere.
+ * The guard exists because of `src/ragbench.ts`, which shipped in v0.42.0 as
+ * `/warden-ragbench` and was never added, putting its whole subtree — corpus,
+ * retrieve, extract, interrogate, 2,271 lines — outside the check. Adding it
+ * immediately surfaced two exports (`isStrategy`, `extractFromStdout`) that
+ * were written and tested and called from nowhere. That subtree was removed
+ * wholesale in v1.0.0; the guard it motivated stays, because the failure mode
+ * it catches is a property of the knip config, not of that one module.
  */
 describe("knip sees every command", () => {
 	/**
@@ -99,7 +101,12 @@ describe("knip sees every command", () => {
 
 	it("finds the command modules to check", () => {
 		expect(commandModules.length).toBeGreaterThan(15);
-		expect(commandModules).toContain("src/ragbench.ts");
+		// A canary on the DISCOVERY, not on any one command: if the shim string
+		// is ever reworded, the filter above silently matches nothing and every
+		// `it.each` case below vanishes, leaving a suite that passes while
+		// checking no commands at all. `select.ts` is the gate itself, so it is
+		// the last module that could legitimately stop being a command.
+		expect(commandModules).toContain("src/select.ts");
 	});
 
 	it.each(commandModules)("%s is a knip entry", (module) => {

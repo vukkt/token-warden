@@ -25,10 +25,9 @@
 		"src/scope.ts",
 		"src/health.ts",
 		"src/dogfood.ts",
-		"src/ragbench.ts",
 		"scripts/*.mjs"
 	],
+	"ignoreBinaries": ["mkfifo"],
 	"project": ["src/**/*.ts"],
-	"ignoreBinaries": ["claude", "mkfifo"],
 	"ignoreExportsUsedInFile": true
 }
