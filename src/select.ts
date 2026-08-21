@@ -48,6 +48,7 @@ import {
 	healMemoryDrift,
 	memoryFilePath,
 } from "./memory.js";
+import { moderateVariances } from "./moderate.js";
 import { blendedDollarsPerToken, priceFor } from "./pricing.js";
 import { assertKnownAgent } from "./registry.js";
 import { displayText } from "./sanitize.js";
@@ -56,6 +57,7 @@ import {
 	keepBar,
 	mean,
 	median,
+	moderateVarianceEnabled,
 	pooledVariance,
 	recoveryMarginFraction,
 	recoveryStrictness,
@@ -301,14 +303,56 @@ function taskSavingVariance(pair: SidePair, pooled: PooledVariances): number {
  * `sqrt( (1/K²)·Σᵢ [·] )` — the K² in the old formula is `(Σ 1)²` — so the
  * unweighted path stays bit-identical. `weights` is aligned with `pairs`. Null
  * when no task has ≥2 runs/side. */
+/**
+ * Per-task saving variances with each SIDE's variances moderated across tasks
+ * (Smyth 2004; see `moderate.ts`).
+ *
+ * The two sides are fitted SEPARATELY. A candidate rule changes what the agent
+ * does, so the with-rule and without-rule runs are not draws from one
+ * distribution, and pooling their variances into a single prior would blur a
+ * real difference in noise between the two arms into both of them.
+ *
+ * `sampleVariance` returns null for a side with fewer than two runs; that maps
+ * to 0 here, which `moderateVariances` excludes from the hyperparameter FIT and
+ * then assigns the fitted prior outright. That is deliberately the same rescue
+ * the unmoderated path spells as `?? pooled`, with a fitted scale instead of a
+ * flat pooled one.
+ */
+function moderatedTaskVariances(pairs: SidePair[]): number[] {
+	const withoutVars = pairs.map((p) => sampleVariance(p.without) ?? 0);
+	const withVars = pairs.map((p) => sampleVariance(p.with) ?? 0);
+	const withoutDfs = pairs.map((p) => Math.max(0, p.without.length - 1));
+	const withDfs = pairs.map((p) => Math.max(0, p.with.length - 1));
+
+	const without = moderateVariances(withoutVars, withoutDfs).moderated;
+	const withRule = moderateVariances(withVars, withDfs).moderated;
+
+	return pairs.map(
+		(pair, i) =>
+			(without[i] as number) / pair.without.length +
+			(withRule[i] as number) / pair.with.length,
+	);
+}
+
 function withinTaskSE(pairs: SidePair[], weights: number[]): number | null {
 	if (pairs.length === 0) return null;
 	const pooled = pooledSideVariances(pairs);
 	if (pooled === null) return null;
+	// Off by default: the moderated variance is biased by construction, so it
+	// stays behind a flag until validation/empirical-calibration.ts shows it
+	// does not raise the false-positive rate. Read per call, not frozen at
+	// module load, because the calibration harness sets it at runtime.
+	const moderated = moderateVarianceEnabled()
+		? moderatedTaskVariances(pairs)
+		: null;
 	let sumVar = 0;
 	for (let i = 0; i < pairs.length; i++) {
 		const weight = weights[i] as number;
-		sumVar += weight ** 2 * taskSavingVariance(pairs[i] as SidePair, pooled);
+		const taskVar =
+			moderated === null
+				? taskSavingVariance(pairs[i] as SidePair, pooled)
+				: (moderated[i] as number);
+		sumVar += weight ** 2 * taskVar;
 	}
 	return Math.sqrt(sumVar / sum(weights) ** 2);
 }

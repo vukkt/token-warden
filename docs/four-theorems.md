@@ -178,6 +178,26 @@ inside a calibrated gate must be re-calibrated rather than assumed safe. If it
 raises the false-positive rate the way robust-SE did in v0.30.0, it does not
 ship. The theorem earns it a trial, not a slot.
 
+> **MEASURED, AND REJECTED.** It took the trial and lost. On the recorded `sql`
+> pool the false-positive rate did not fall (8.9% -> 9.2%) and power fell at
+> every effect size, by 5.4 points at a 20% saving with non-overlapping
+> intervals. Full numbers in [FINDINGS.md](../FINDINGS.md).
+>
+> The reason is not the one to guess. Moderation IS a better variance estimator
+> here — it more than halves log-MSE even at 3 tasks — but it is fitted on
+> `log s^2` and is therefore biased on the natural scale, running 1.84x high at
+> df=1. The gate compares `delta - bar` to `z * SE`, so a 1.84x variance is a
+> 1.35x wider band and directly fewer promotions.
+>
+> The general lesson, which outlives this feature: **minimising estimation error
+> and maximising decision quality are different objectives.** Moderation
+> minimises squared error in log space, which is right if you want to *know*
+> sigma^2. The gate does not want to know sigma^2; it wants a band that is the
+> width it claims to be, which needs unbiasedness on the natural scale.
+>
+> `src/moderate.ts` stays, behind `WARDEN_MODERATE_VARIANCE=1`, default off. The
+> negative result is only trustworthy because the implementation is correct.
+
 ### II. Benjamini-Hochberg — the decision
 
 **Theorem** (Benjamini & Hochberg 1995). Order p-values `p_(1) <= ... <= p_(m)`,

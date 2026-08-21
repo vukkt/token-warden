@@ -1518,3 +1518,95 @@ Reproduce (no tokens, needs a database with `sql` golden replicates):
 npx tsx validation/empirical-calibration.ts --agent sql --mode recovery \
   --trials 20000 --runs 2 --recovery-runs 4
 ```
+
+## Variance moderation (2026-08): a better estimator that makes the gate worse
+
+The v1.0.0 spec ([docs/four-theorems.md](docs/four-theorems.md)) proposed
+empirical-Bayes variance moderation (Smyth 2004, the moderated t behind limma)
+as theorem I: replace each task's raw sample variance -- 2 degrees of freedom at
+runs=3, wildly unstable -- with a posterior blend of its own variance and a
+prior fitted across the suite.
+
+It was implemented ([src/moderate.ts](src/moderate.ts)), unit-tested against
+closed forms, put behind `WARDEN_MODERATE_VARIANCE=1` default-off, and measured.
+**It does not ship.** This is the fourth principled-looking statistical
+improvement this project has vetoed on measurement, after robust-SE (v0.30.0),
+confidence sequences (v0.36.0), and weighted suites pre-t-correction (v0.37.0).
+
+### The measurement
+
+`validation/empirical-calibration.ts`, agent `sql`, 3 tasks, runs=2/side, 3,000
+trials, seed 42, identical pools both sides.
+
+| | baseline | moderated |
+| --- | --- | --- |
+| FP (permutation A/A) | 8.9% [7.9, 10.0] | 9.2% [8.2, 10.3] |
+| FP (bootstrap, injected 0) | 10.7% | 10.8% |
+| power @ 2% saving | 15.4% | 14.5% |
+| power @ 5% | 21.3% | 21.1% |
+| power @ 10% | 34.9% | 33.6% |
+| power @ 20% | 69.4% [67.7, 71.0] | **64.0% [62.3, 65.7]** |
+
+False positives did not fall. Power fell at every effect size, and at 20% the
+intervals do not overlap. Strictly worse on both axes the gate cares about.
+
+### Why -- and it is not the reason we first assumed
+
+The obvious explanation is that the suites are too small to fit a prior: limma
+borrows strength across thousands of genes, and a golden suite has 3 to 8 tasks.
+That explanation is **wrong**, and a sweep says so. Moderation is a better
+estimator of the per-task variance at every size tested, including the smallest:
+
+| tasks | df | raw log-MSE | moderated log-MSE | ratio |
+| --- | --- | --- | --- | --- |
+| 3 | 1 | 6.53 | 3.13 | 0.48 |
+| 8 | 2 | 1.96 | 0.62 | 0.32 |
+| 50 | 2 | 1.98 | 0.37 | 0.19 |
+
+So the estimator is genuinely better and the decisions are genuinely worse. The
+mechanism is a bias the log-scale fit introduces on the natural scale:
+
+| df (runs) | tasks | mean raw / true | mean moderated / true | SE inflation |
+| --- | --- | --- | --- | --- |
+| 1 (runs=2) | 3 | 1.013 | 1.838 | **1.347x** |
+| 1 | 8 | 1.017 | 1.300 | 1.131x |
+| 2 (runs=3) | 8 | 1.014 | 1.097 | 1.040x |
+| 4 (runs=5) | 8 | 1.014 | 1.044 | 1.014x |
+
+The raw sample variance is unbiased for sigma^2 on the natural scale (1.013).
+The moderated variance is not: it is a posterior mean fitted to `log s^2`, and
+at low degrees of freedom it runs 1.3-1.8x high. The gate compares
+`delta - bar` against `z * SE`, so a 1.84x variance is a 1.35x wider band and
+directly fewer promotions. That is the lost power, quantitatively.
+
+False positives did not fall in step because the pipeline gets a second look:
+a wider band pushes more trials into `uncertain`, which spends a top-up pass
+that resolves many of them back into promotions.
+
+### The general lesson
+
+**Minimising estimation error and maximising decision quality are different
+objectives, and optimising the first can hurt the second.** Moderation minimises
+squared error in log space, which is the right loss if you want to *know*
+sigma^2. The gate does not want to know sigma^2; it wants a band that is the
+width it claims to be, which requires being unbiased on the natural scale. Those
+two goals point in different directions at low df.
+
+The inflation vanishes as degrees of freedom grow (1.014x at runs=5, 8 tasks),
+so moderation is roughly harmless at higher run counts -- and roughly pointless
+there too, since a variance on 4+ df is already stable. There is no run count at
+which it clearly pays.
+
+`src/moderate.ts` and its tests are kept: the implementation is correct, the
+special functions are verified against closed forms, and the negative result is
+only trustworthy because the implementation is right. The flag stays default-off
+and the gate is unchanged.
+
+### Correction to the spec this came from
+
+docs/four-theorems.md originally specified James-Stein shrinkage of the per-task
+SAVINGS. That is a no-op for this gate: `theta_JS = xbar + c*(x - xbar)` implies
+`mean(theta_JS) = xbar`, so shrinkage toward the grand mean preserves the grand
+mean, and `withinTaskSE` reads variances rather than means. Variance moderation
+was the corrected target. It has now also been rejected -- on evidence rather
+than on algebra.

@@ -197,6 +197,23 @@ export function recoveryStrictness(): number {
  * *harder*, never easier, and answers the "you bust the cache on every change"
  * critique by pricing the bust in rather than ignoring it.
  */
+/**
+ * Whether the gate moderates its per-task variance estimates across tasks
+ * (`moderate.ts`) instead of using each task's raw sample variance.
+ *
+ * DEFAULT OFF. The moderated variance is biased by construction, and this
+ * repository does not put a biased estimator in the verdict path on the
+ * strength of a theorem -- robust-SE looked just as principled in v0.30.0 and
+ * the calibration harness measured it raising the false-positive rate from ~3%
+ * to ~7%. It ships only if `validation/empirical-calibration.ts` says it helps.
+ *
+ * Read PER CALL so the calibration harness can A/B it at runtime; a
+ * module-level const would silently ignore the flag.
+ */
+export function moderateVarianceEnabled(): boolean {
+	return process.env.WARDEN_MODERATE_VARIANCE === "1";
+}
+
 export function effectiveRent(contextCost: number): number {
 	return (
 		contextCost + (contextCost * CACHE_CREATE_MULTIPLIER) / sessionsPerWeek()
