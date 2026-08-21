@@ -201,10 +201,30 @@ dead after one pass. Uniform allocation spends the same tokens confirming a
 clear loser as resolving a close call.
 
 **Relationship to Neyman.** v0.24.0 already allocates *within* a candidate,
-across tasks, by variance. Successive Halving allocates *across* candidates. They
-compose cleanly and neither touches the verdict — which is exactly why this is
-the safest of the four to ship. It cannot change what a rule's verdict is, only
-how many tokens were spent reaching it.
+across tasks, by variance. Successive Halving allocates *across* candidates.
+They compose cleanly.
+
+**Correction to an earlier draft of this document.** I first wrote that Halving
+"cannot change what a rule's verdict is, only how many tokens were spent
+reaching it." That is false, and worth stating plainly because it was the
+argument for shipping it first. A candidate eliminated in round 1 is measured
+at shallower depth than uniform allocation would have given it, so its verdict
+genuinely can differ.
+
+The accurate claim is directional, and it is still the reason this ships first:
+
+- Halving can never **promote** something uniform allocation would not have.
+  Survivors finish with strictly more runs than uniform buys them, so the
+  winner's evidence is better and the promotion gate is untouched.
+- It can produce a **false negative** — a good rule unlucky in round 1 gets cut
+  before it can prove itself. `test/halving.test.ts` pins this rather than
+  hiding it: under heavy noise the true best arm is demonstrably eliminated.
+
+That asymmetry never loosens the gate, and the false-negative case already has
+machinery waiting. An early-eliminated candidate is exactly the `underpowered`
+eviction class from migration #16 — evidence never reached the bar, as opposed
+to the rule being measured and falsified — and those keep their `recovers`
+lineage for a second, deeper look.
 
 **Why not SPRT.** A sequential probability ratio test is the obvious alternative
 and it is the wrong one here, for the reason in section 1: Wald optimality is
