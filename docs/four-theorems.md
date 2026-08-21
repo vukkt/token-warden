@@ -89,12 +89,21 @@ individually justified — most were written to answer a specific critique — a
 each is genuinely harmless because none of them can evict a rule. But ten
 commands that produce advice nobody acts on are ten commands of surface area,
 ten sets of tests, and ten things to explain. They are the accumulated residue
-of answering critics one at a time. `attribute`, `cohort` and `contradict` are
-the three with real signal; the rest go.
+of answering critics one at a time.
 
-**22 commands -> 4.** `/warden-status`, `/warden-select`, `/warden-receipt`,
-`/warden-power`. That is enough to see state, spend measurement, read the
-evidence for a verdict, and plan a burn.
+**22 commands -> 6** (as executed): `/warden-status` to see state,
+`/warden-power` to plan a burn, `/warden-bench` to measure, `/warden-select` to
+decide, plus `/warden-receipt` for the evidence behind a verdict and
+`/warden-cost` for the dollar lens.
+
+An earlier draft of this section proposed keeping `attribute`, `cohort` and
+`contradict` as "the three with real signal", and also proposed 4 commands —
+two claims that cannot both hold. The cull resolved it toward the smaller
+surface: all three are advisory, none can evict a rule, and a diagnostic nobody
+acts on is indistinguishable from one that does not exist. `attribute` was the
+one genuine exception and it was **split** rather than deleted — its
+classification half feeds the Stop hook and `status.ts` reads the result, so
+that half survives as `tool-cost.ts` while the report command goes.
 
 ## 3. The four theorems
 
@@ -103,42 +112,71 @@ with a proof I did not invent. They compose into the same four-stage loop, one
 theorem per stage.
 
 ```
-  estimate            decide            spend             pack
-  James-Stein   ->    Benjamini-   ->   Successive   ->   submodular
-  shrinkage           Hochberg         Halving           greedy / knapsack
-  (cuts SE)           (controls FDR)   (cuts burn)       (cuts redundancy)
+  estimate            decide             spend             pack
+  variance      ->    Benjamini-   ->    Successive  ->    submodular
+  moderation          Hochberg           Halving           knapsack
+  (stabilises SE)     (controls FDR)     (cuts burn)       (cuts redundancy)
 ```
 
-### I. James-Stein shrinkage — the estimator
+### I. Empirical-Bayes variance moderation — the estimator
 
-**Theorem** (Stein 1956; James & Stein 1961). For `X ~ N(theta, sigma^2 I_p)`
-with `p >= 3`, the estimator
+**This section originally specified James-Stein shrinkage. That was wrong, and
+the correction is more interesting than the original plan.**
+
+James-Stein shrinks the per-task savings toward their pooled mean:
+`theta_JS = xbar + c*(x - xbar)`. Take the mean of both sides — `mean(theta_JS)
+= xbar`. Shrinkage toward the grand mean *preserves the grand mean exactly*.
+The verdict reads the suite mean, and `withinTaskSE` reads per-task
+**variances**, so shrinking the per-task means changes neither number. Shipped
+as specified, it would have been a no-op with a famous name on it.
+
+The defect it was reaching for is real, but it is one level down. At the default
+`runs=3`, each task's variance is a sample variance on **2 degrees of freedom**
+— an estimate whose own relative standard deviation is around 100%. That
+instability flows straight into `z * SE`: a task that happens to look quiet
+makes the band too narrow and promotes on noise; one that happens to look loud
+makes it too wide and misses a real rule. It is a plausible mechanism for the
+gap between the ~2-3% synthetic false-positive rate and the 8.8% measured on
+recorded runs.
+
+**Theorem** (Smyth, *Statistical Applications in Genetics and Molecular
+Biology*, 2004 — the moderated t behind limma). Model
+`s_i^2 | sigma_i^2 ~ sigma_i^2 chisq(d_i)/d_i` with a scaled-inverse-chi-square
+prior `1/sigma_i^2 ~ chisq(d_0)/(d_0 s_0^2)`. The posterior mean is closed form:
 
 ```
-  theta_JS = xbar + (1 - (p-3) sigma^2 / ||x - xbar||^2)_+ (x - xbar)
+  s~_i^2 = (d_0 * s_0^2 + d_i * s_i^2) / (d_0 + d_i)
 ```
 
-has strictly lower total mean squared error than the MLE `x`, **for every
-theta**. The MLE is inadmissible.
+carrying `d_i + d_0` degrees of freedom instead of `d_i`. The hyperparameters
+`d_0` and `s_0^2` are estimated from the data by matching the first two moments
+of `log s_i^2`, so nothing is hand-tuned.
 
-**Why it fits.** The gate estimates a per-task saving for each of N golden tasks
-from 3 runs a side. These are exactly `p` noisy estimates of `p` related means
-with few samples each — the textbook Stein setting. Tasks in a suite are not
-independent draws from nowhere; they share an agent, a fixture and a difficulty
-scale, so the pooled mean is a genuinely informative shrinkage target.
+**Why it fits.** Many tasks, few replicates each, unstable per-task variances —
+this is precisely the setting the moderated t was designed for. And it
+*generalises what the code already does*: `select.ts` borrows the pooled
+variance when a side cannot estimate its own (`sampleVariance(...) ?? pooled`),
+an all-or-nothing switch between total trust and total dismissal. Moderation is
+the principled continuum between those two, with the blend weight fitted rather
+than assumed.
 
-**What it replaces.** `weightedMean` over raw per-task savings. The suite mean
-is unchanged in expectation; what shrinks is the *variance* of the per-task
-components that feed `withinTaskSE`. This is the first change in the project's
-history that attacks SE rather than the threshold.
+**What it replaces.** `taskSavingVariance`'s raw `sampleVariance(...) ?? pooled`.
 
-**Honest limits.** JS dominates in *total* MSE across the p tasks, not
-necessarily for any single task. The gate aggregates across tasks, which is the
-case where the guarantee applies — but the positive-part estimator is biased,
-and a biased estimator inside a calibrated gate must be re-calibrated, not
-assumed safe. That is what stage 4 of the plan is for. If shrinkage raises the
-false-positive rate the way robust-SE did in v0.30.0, it does not ship. The
-theorem earns it a trial, not a slot.
+**Honest limits, and a correction to section 1's framing.** Nothing here makes
+the *true* standard error smaller. The `SE ~5,500` against a `bar ~54` is a
+property of the benchmark, and only more runs or quieter golden tasks move it.
+What moderation buys is a **correctly calibrated decision at the same run
+count** — a stabler variance estimate, hence a band that is the width it claims
+to be. Expect it to show up as a lower false-positive rate, not as more
+promotions. Section 1's claim that this theorem "attacks SE, the term nothing
+has attacked yet" is therefore too strong: it attacks the *estimate* of SE, not
+SE itself. That is still the first change in the project's history aimed at the
+estimator rather than the threshold, which was the real point.
+
+The moderated variance is also *biased* by construction, and a biased estimator
+inside a calibrated gate must be re-calibrated rather than assumed safe. If it
+raises the false-positive rate the way robust-SE did in v0.30.0, it does not
+ship. The theorem earns it a trial, not a slot.
 
 ### II. Benjamini-Hochberg — the decision
 
@@ -271,7 +309,7 @@ enters the knapsack — but the kept set is chosen jointly.
 
 | Weakness (measured, documented) | Theorem | Mechanism |
 | --- | --- | --- |
-| SE ~5,500 vs bar ~54 (v0.36.0) | James-Stein | Lower per-task MSE -> lower SE |
+| Per-task variance on 2 df is unstable (runs=3) | Variance moderation | Lower variance MSE -> honestly-sized band |
 | FP 8.8% empirical, no multiplicity control (v0.35.0) | Benjamini-Hochberg | FDR bounded at q as the pool grows |
 | $19.13 discovery vs $5.34/yr savings | Successive Halving | Budget concentrates on live candidates |
 | Redundant rules each pass a per-item bar | Submodular knapsack | Kept set chosen jointly under budget |
@@ -279,7 +317,7 @@ enters the knapsack — but the kept set is chosen jointly.
 And the property the project is selling — *it gets better the more you use it* —
 stops being a slogan and becomes four specific claims:
 
-1. More recorded runs -> better shrinkage target -> lower SE. (I)
+1. More golden tasks -> a better-fitted prior -> stabler variances. (I)
 2. More candidates -> FDR still bounded at q, where a fixed z accumulates false
    rules linearly; and BH's margin over Bonferroni widens with the pool. (II)
 3. More candidates -> larger Successive Halving advantage over uniform. (III)
@@ -295,7 +333,7 @@ The repo's own discipline, which has vetoed two of its own features
 - **Calibration is the gate.** Every one of these runs through
   `validation/empirical-calibration.ts` against recorded runs before it enters
   the verdict path. If the false-positive rate rises, the feature is held on its
-  branch regardless of how good the theorem is. James-Stein is biased and
+  branch regardless of how good the theorem is. The moderated variance is biased and
   submodularity is assumed; both are exactly the kind of thing that looks
   correct and calibrates badly.
 - **Successive Halving ships first** — it cannot change a verdict, so it is
@@ -309,8 +347,8 @@ The repo's own discipline, which has vetoed two of its own features
 If this works, the pitch is one paragraph:
 
 > Agent memory is charged rent. A rule stays only if it provably saves more
-> tokens than it costs. Stein shrinkage makes the measurement precise enough to
-> be affordable, Benjamini-Hochberg keeps the surviving set honest as it grows,
+> tokens than it costs. Empirical-Bayes moderation makes the measurement
+> trustworthy at an affordable run count, Benjamini-Hochberg keeps the surviving set honest as it grows,
 > Successive Halving spends the measurement budget where the uncertainty is, and
 > a submodular knapsack picks the set that fits the context window. Four
 > theorems, one loop, and the loop gets cheaper every time you run it.
