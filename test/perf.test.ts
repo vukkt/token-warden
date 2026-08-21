@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { aggregateToolCosts } from "../src/attribute.js";
 import {
 	type NewRun,
 	openDb,
@@ -11,6 +10,7 @@ import {
 	upsertRun,
 	type WardenDb,
 } from "../src/db.js";
+import { aggregateToolCosts } from "../src/tool-cost.js";
 import { parseTranscript } from "../src/transcript.js";
 import type { RawToolEvent } from "../src/types.js";
 

@@ -70,10 +70,6 @@ const SANITIZER = /\bdisplayText\s*\(|\btruncateBody\s*\(/;
  */
 const ALLOWED = new Map<string, string>([
 	[
-		"compress.ts:buildCompressPrompt",
-		"prompt text sent to the model; the body must reach it verbatim or the rewrite is of a different rule",
-	],
-	[
 		"distill.ts:buildPrompt",
 		"prompt text sent to the model; banked and evicted bodies must reach it verbatim",
 	],
@@ -84,10 +80,6 @@ const ALLOWED = new Map<string, string>([
 	[
 		"memory.ts:lines",
 		"compiles MEMORY.md, where the body IS the payload the agent loads; insert-time ruleBodySchema is the defence, and sanitizing here would silently alter the rule the agent carries",
-	],
-	[
-		"compress.ts:runCompress",
-		"bornDigest is persisted to the ledger, not rendered; provenance must record the original body verbatim",
 	],
 ]);
 
@@ -109,8 +101,8 @@ function findUnsanitizedRenders(source: string, file: string): Finding[] {
 	let inBlockComment = false;
 	source.split("\n").forEach((raw, i) => {
 		const line = raw;
-		// Comments describe violations as often as they commit them (protect.ts
-		// documents the MEMORY.md render in prose); never flag one.
+		// Comments describe violations as often as they commit them (memory.ts
+		// documents its own MEMORY.md render in prose); never flag one.
 		if (inBlockComment) {
 			if (line.includes("*/")) inBlockComment = false;
 			return;
@@ -145,7 +137,10 @@ describe("sanitize.ts rendering contract", () => {
 	const files = readdirSync(srcDir).filter((f) => f.endsWith(".ts"));
 
 	it("finds source files to audit at all", () => {
-		expect(files.length).toBeGreaterThan(30);
+		// A canary against an empty scan, not a size target. v1.0.0 cut src/
+		// from 45 modules to 24, so this tracks the real count; it exists only
+		// so a broken readdir cannot make the whole audit pass vacuously.
+		expect(files.length).toBeGreaterThanOrEqual(20);
 	});
 
 	it("every model-derived interpolation is sanitized or explicitly exempt", () => {

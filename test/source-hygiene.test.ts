@@ -100,7 +100,11 @@ describe("knip sees every command", () => {
 		.map((f) => `src/${f}`);
 
 	it("finds the command modules to check", () => {
-		expect(commandModules.length).toBeGreaterThan(15);
+		// v1.0.0 cut the command surface from 22 to 6; five of those carry the
+		// shared shim (bench.ts is run directly by /warden-bench and has none).
+		// The floor is a canary against an empty scan, so it tracks the real
+		// count rather than a comfortable margin above it.
+		expect(commandModules.length).toBeGreaterThanOrEqual(5);
 		// A canary on the DISCOVERY, not on any one command: if the shim string
 		// is ever reworded, the filter above silently matches nothing and every
 		// `it.each` case below vanishes, leaving a suite that passes while

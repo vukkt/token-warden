@@ -656,42 +656,6 @@ export function recentEvictedRules(
 		.all(agent, limit);
 }
 
-/** Insert a human-authored, protected rule directly as active. The author
- * vouches for it, so it bypasses the candidate token-gate, is compiled into
- * memory immediately, and is exempt from token-based eviction (a behavioral
- * rule's value is not measured in tokens). `decided_at` is set so it sorts in
- * the re-audit ordering even though it is never an audit target. */
-export function insertAuthoredRule(db: WardenDb, rule: NewRule): number {
-	const row = db
-		.prepare<unknown[], { id: number }>(
-			`INSERT INTO rules
-				(agent, body, status, context_cost, source_run, created_at, decided_at, decided_reason, protected)
-			 VALUES (?, ?, 'active', ?, NULL, ?, ?, 'authored: protected behavioral rule (not token-gated)', 1)
-			 RETURNING id`,
-		)
-		.get(
-			rule.agent,
-			rule.body,
-			rule.contextCost,
-			rule.createdAt,
-			rule.createdAt,
-		);
-	return requireRow(row, "insertAuthoredRule").id;
-}
-
-/** Toggle a rule's protected flag. Protecting an evicted rule reactivates it
- * (the human is overriding the token verdict); unprotecting returns it to the
- * token-gated pool as an active rule. */
-export function setRuleProtected(
-	db: WardenDb,
-	id: number,
-	isProtected: boolean,
-): void {
-	db.prepare(
-		"UPDATE rules SET protected = ?, status = 'active' WHERE id = ?",
-	).run(isProtected ? 1 : 0, id);
-}
-
 export function listRulesByAgent(db: WardenDb, agent: string): RuleRow[] {
 	return db
 		.prepare<unknown[], RuleRow>(
@@ -983,33 +947,6 @@ export function lastMeasurementTs(db: WardenDb): string | null {
 	return row?.ts ?? null;
 }
 
-export interface GoldenTaskTotal {
-	taskHash: string;
-	total: number;
-	ts: string;
-}
-
-/**
- * Per-run totals of completed plain active-set golden runs, newest first
- * within each task — the raw material for the per-task variance ranking in
- * /warden-health. Only config='active' runs count: candidate/audit passes
- * carry a different rule set and would inflate a task's apparent noise.
- */
-export function goldenTaskTotals(
-	db: WardenDb,
-	agent: string,
-): GoldenTaskTotal[] {
-	return db
-		.prepare<unknown[], GoldenTaskTotal>(
-			`SELECT task_hash AS taskHash, ${RUN_TOTAL_TOKENS_SQL} AS total, ts
-			 FROM runs
-			 WHERE agent = ? AND task_hash IS NOT NULL AND completed = 1
-				AND config = 'active'
-			 ORDER BY task_hash ASC, ts DESC`,
-		)
-		.all(agent);
-}
-
 export interface GoldenReplicateRun {
 	taskHash: string;
 	rulesetVersion: number;
@@ -1060,41 +997,6 @@ export function recentRealWorkTotals(
 		)
 		.all(agent, excludeRunId, limit)
 		.map((row) => row.total);
-}
-
-/** One agent's real-work footprint in the ledger, whether or not that agent is
- * still (or ever was) a known agent. */
-export interface RealWorkAgentSummary {
-	agent: string;
-	/** Every real-work row, completed or not. */
-	sessions: number;
-	/** Completed rows only — the population the distiller's trigger reads. */
-	completed: number;
-	firstTs: string;
-	lastTs: string;
-	tokens: number;
-}
-
-/**
- * Real-work sessions grouped by agent, busiest last-seen first.
- *
- * Deliberately NOT filtered to `knownAgents()`: the whole point is to surface
- * the agents that ARE recorded but cannot be distilled from ('main', an
- * ad-hoc subagent type), which a known-agent-only query would hide.
- */
-export function realWorkByAgent(db: WardenDb): RealWorkAgentSummary[] {
-	return db
-		.prepare<unknown[], RealWorkAgentSummary>(
-			`SELECT agent,
-				COUNT(*) AS sessions,
-				COALESCE(SUM(completed = 1), 0) AS completed,
-				MIN(ts) AS firstTs,
-				MAX(ts) AS lastTs,
-				COALESCE(SUM(${RUN_TOTAL_TOKENS_SQL}), 0) AS tokens
-			 FROM runs WHERE task_hash IS NULL
-			 GROUP BY agent ORDER BY lastTs DESC, agent ASC`,
-		)
-		.all();
 }
 
 export interface ProjectUsage {

@@ -10,8 +10,6 @@ import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
-
-import { aggregateToolCosts } from "./attribute.js";
 import {
 	getRulesetVersion,
 	openDb,
@@ -24,6 +22,7 @@ import { shouldDistill } from "./distill.js";
 import { appendLogLine } from "./logfile.js";
 import { knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
+import { aggregateToolCosts } from "./tool-cost.js";
 import { parseTranscriptFile } from "./transcript.js";
 
 /** A session is flagged anomalous when its total tokens reach this multiple
@@ -322,7 +321,7 @@ export async function main(): Promise<void> {
 		);
 
 		// Attribute this session's tool/skill/MCP footprint for the
-		// /warden-attribute breakdown. Pure aggregation over already-parsed
+		// status dashboard's rollup. Pure aggregation over already-parsed
 		// data; recorded in the same fail-open block as the run.
 		recordToolCosts(db, runId, aggregateToolCosts(parsed.toolEvents));
 
