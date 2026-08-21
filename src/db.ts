@@ -344,7 +344,14 @@ function requireRow<T>(row: T | undefined, what: string): T {
 /** Which rule configuration produced a run: 'real' for collected work
  * sessions, 'active' for plain active-set golden runs (the only kind that
  * feeds baselines and learning curves), 'candidate'/'audit' for selector
- * measurement runs. */
+ * measurement runs.
+ *
+ * 'modelbench' and 'promptbench' are LEGACY: the A/B comparison commands that
+ * wrote them were removed in v1.0.0, so nothing produces these values any
+ * more. They stay in the union because rows carrying them still exist in every
+ * database that ever ran those commands, and a stored value that the type
+ * cannot express is a lie about what a read can return. The `runs` table is
+ * append-only history; history does not get retyped because the writer left. */
 export type RunConfig =
 	| "real"
 	| "active"
