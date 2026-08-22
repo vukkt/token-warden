@@ -12,7 +12,7 @@ theorems that make the measurement affordable, or the results — including the 
 the wrong way.
 
 ```text
-  version    1.0.0             tests       1030 across 41 files
+  version    1.0.0             tests       1036 across 41 files
   license    MIT               coverage    96.1% lines, CI-enforced floor
   source     28 modules        commands    6
              10.5k lines       built       2026-06 to 2026-08
@@ -182,7 +182,7 @@ The measurement discipline is the product, so the codebase is held to it.
 
 | | |
 |---|---|
-| **Tests** | 1030 across 41 files. 16.5k lines of test against 10.5k of source. |
+| **Tests** | 1036 across 41 files. 16.5k lines of test against 10.5k of source. |
 | **Coverage** | 96.1% lines, 94.9% statements, 96.7% functions, 89.2% branches, behind a floor CI fails on. |
 | **Pipeline** | Staged: quality gates test, fixture and coverage, which gate validate, which gates release. Actions SHA-pinned, `npm ci`. |
 | **Types** | Strict TypeScript with `noUncheckedIndexedAccess`. Zero `any`, zero `@ts-ignore`, zero non-null assertions. |
