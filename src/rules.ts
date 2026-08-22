@@ -44,8 +44,8 @@ export function trigramSimilarity(a: string, b: string): number {
 
 /** Shortest and longest acceptable rule body, in characters. The floor keeps
  * a truncated fragment from becoming a rule; the ceiling bounds rent. */
-export const MIN_RULE_BODY_CHARS = 10;
-export const MAX_RULE_BODY_CHARS = 200;
+const MIN_RULE_BODY_CHARS = 10;
+const MAX_RULE_BODY_CHARS = 200;
 
 /**
  * Code-point ranges (inclusive) a rule body must never contain.

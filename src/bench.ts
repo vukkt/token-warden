@@ -61,7 +61,7 @@ const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 /** Two same-config runs differing by more than this fraction of their mean
  * get a variance warning in the output (LLM variance is real). Shared with
  * /warden-health's per-task variance ranking so "noisy" means one thing. */
-export const VARIANCE_WARN_RATIO = 0.25;
+const VARIANCE_WARN_RATIO = 0.25;
 /** A failed run below this token count is an environment failure (quota
  * exhaustion, API error, crash) rather than a rule-caused regression: the
  * cheapest genuine golden run observed is ~34k tokens, and even a rule-broken
@@ -71,10 +71,10 @@ export const ENV_FAILURE_TOKEN_FLOOR = 1_000;
 /** Consecutive environment failures that abort a suite pass early. A single
  * broken run (claude crash, vanished transcript) must not abort the suite;
  * the real quota deaths ran 46 and 72 consecutive zero-token failures. */
-export const ENV_FAILURE_STREAK = 4;
+const ENV_FAILURE_STREAK = 4;
 /** Minimum environment-failure count before a pass-level majority check can
  * trip, so 1-2 transient crashes in a small pass never abort. */
-export const ENV_FAILURE_MIN_COUNT = 3;
+const ENV_FAILURE_MIN_COUNT = 3;
 
 export interface BenchArgs {
 	agent: string;
@@ -195,7 +195,7 @@ function hasControlChar(value: string): boolean {
  * is user- or model-authored, and a reviewer reading the file must see the same
  * bytes bash will run. Anyone pointing that variable at untrusted content is
  * granting code execution regardless; see SECURITY.md. */
-export function assertSafeSuccessCheck(value: string, source: string): void {
+function assertSafeSuccessCheck(value: string, source: string): void {
 	if (value.length > MAX_TASK_FIELD_CHARS) {
 		throw new Error(
 			`${source}: "success_check" exceeds ${MAX_TASK_FIELD_CHARS} characters`,
@@ -214,7 +214,7 @@ export function assertSafeSuccessCheck(value: string, source: string): void {
  * let a suite file change the child's permission mode and defeat the scoped
  * `acceptEdits` invocation the whole benchmark depends on. Reject it at the
  * parse chokepoint rather than trusting argv ordering. */
-export function assertSafePrompt(value: string, source: string): void {
+function assertSafePrompt(value: string, source: string): void {
 	if (value.length > MAX_TASK_FIELD_CHARS) {
 		throw new Error(
 			`${source}: "prompt" exceeds ${MAX_TASK_FIELD_CHARS} characters`,
@@ -735,7 +735,7 @@ export interface BenchSpawnOptions {
 	env?: NodeJS.ProcessEnv;
 }
 
-export type SpawnFn = (
+type SpawnFn = (
 	command: string,
 	args: string[],
 	options: BenchSpawnOptions,
@@ -762,7 +762,7 @@ export interface RunOnceDeps {
 	now: () => string;
 }
 
-export const defaultRunOnceDeps: RunOnceDeps = {
+const defaultRunOnceDeps: RunOnceDeps = {
 	spawn: (command, args, options) => spawnSync(command, args, options),
 	makeWorkDir: (task) => {
 		// Installed here rather than at import time: only a real run creates a
@@ -1269,7 +1269,7 @@ export function metaCost(
 	return { benchTokens, realWorkTokens, ratio, warn: ratio > 0.1 };
 }
 
-export function realWorkTokensLast7Days(db: WardenDb): number {
+function realWorkTokensLast7Days(db: WardenDb): number {
 	const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 	const row = db
 		.prepare<unknown[], { total: number }>(

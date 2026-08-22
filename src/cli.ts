@@ -23,7 +23,7 @@
 import { pathToFileURL } from "node:url";
 
 /** True when this module is the process entrypoint rather than an import. */
-export function isEntrypoint(importMetaUrl: string): boolean {
+function isEntrypoint(importMetaUrl: string): boolean {
 	return (
 		process.argv[1] !== undefined &&
 		importMetaUrl === pathToFileURL(process.argv[1]).href

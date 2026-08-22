@@ -62,7 +62,7 @@ export const MIN_PRIOR_RUNS = 5;
 const MAX_EVICTED_FEEDBACK = 8;
 /** Rolling window of most recent runs used for the p75. Exported for the same
  * reason as MIN_PRIOR_RUNS. */
-export const ROLLING_WINDOW = 50;
+const ROLLING_WINDOW = 50;
 const MAX_DIGEST_CHARS = 8000;
 const DISTILL_TIMEOUT_MS = 2 * 60 * 1000;
 /** Hard ceiling on samples per distillation and on candidates inserted per

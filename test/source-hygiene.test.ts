@@ -126,3 +126,103 @@ describe("knip sees every command", () => {
 		).toContain(module);
 	});
 });
+
+/**
+ * MODULE BOUNDARIES ARE HONEST: nothing is `export`ed that nothing can use.
+ *
+ * knip does not catch this class. Its `ignoreExportsUsedInFile: true` suppresses
+ * any export that is also referenced inside its declaring file, which is exactly
+ * what an internal type or constant looks like -- so 21 gratuitous `export`
+ * keywords accumulated invisibly through v1.0.0 and were removed by hand.
+ *
+ * The rule applied there, and enforced here, has two escape hatches because a
+ * bare "is it referenced elsewhere" check gets this wrong:
+ *
+ *  1. Referenced anywhere outside its own file -- genuinely public.
+ *  2. A TYPE appearing in an EXPORTED signature in its own file -- a caller
+ *     receives or supplies this shape, so it must stay nameable even if no
+ *     current call site spells it out. Un-exporting these would save seven
+ *     characters and cost the caller the ability to name what it is handed.
+ *
+ *     This hatch is deliberately restricted to types. Applied to values it
+ *     exempts EVERYTHING, because `export const X = ...` trivially contains its
+ *     own name -- which is exactly how the first version of this guard passed
+ *     while a re-added gratuitous export sat in front of it. A guard is not
+ *     trusted here until it has been watched to fail.
+ *
+ * Anything else is decoration, and decoration on a module boundary is a lie
+ * about what the module offers.
+ */
+describe("exports are reachable", () => {
+	const srcFiles = readdirSync(join(repoRoot, "src")).filter((f) =>
+		f.endsWith(".ts"),
+	);
+	const sources = new Map(
+		srcFiles.map((f) => [f, readFileSync(join(repoRoot, "src", f), "utf8")]),
+	);
+
+	/** Every file that could legitimately reference a src export. */
+	const consumers: string[] = [];
+	for (const dir of ["src", "test", "validation"]) {
+		let entries: string[] = [];
+		try {
+			entries = readdirSync(join(repoRoot, dir));
+		} catch {
+			continue; // validation/ is optional in a trimmed checkout
+		}
+		for (const f of entries) {
+			if (f.endsWith(".ts")) {
+				consumers.push(readFileSync(join(repoRoot, dir, f), "utf8"));
+			}
+		}
+	}
+
+	it("finds source files to audit at all", () => {
+		expect(srcFiles.length).toBeGreaterThanOrEqual(20);
+		expect(consumers.length).toBeGreaterThanOrEqual(50);
+	});
+
+	it("exports nothing that only its own file can see", () => {
+		const gratuitous: string[] = [];
+
+		for (const [file, source] of sources) {
+			const own = source;
+			// Exported signatures, for escape hatch 2: the head of every exported
+			// function up to its return type, plus exported const declarations.
+			const signatures = [
+				...(own.match(
+					/^export (?:async )?function \w+[\s\S]*?\)\s*:\s*[^{]+/gm,
+				) ?? []),
+				...(own.match(/^export const \w+[^=]*=/gm) ?? []),
+			].join("\n");
+
+			const declared =
+				own.match(
+					/^export (?:async function |function |const |interface |type |class )(\w+)/gm,
+				) ?? [];
+
+			for (const decl of declared) {
+				const name = decl.split(/\s+/).pop() as string;
+				const word = new RegExp(`\\b${name}\\b`);
+				const isType = /\b(?:interface|type)\b/.test(decl);
+
+				const usedElsewhere = consumers.some((c) => c !== own && word.test(c));
+				if (usedElsewhere) continue;
+				// Hatch 2 is TYPES ONLY. Applied to values it exempts everything,
+				// because `export const X = ...` trivially contains its own name --
+				// which is exactly how the first version of this guard passed while a
+				// deliberately re-added gratuitous export sat in front of it.
+				if (isType && word.test(signatures)) continue;
+
+				gratuitous.push(`src/${file}: ${name}`);
+			}
+		}
+
+		expect(
+			gratuitous,
+			"these are exported but nothing outside their own file can reach them, " +
+				"and they appear in no exported signature. Drop the `export`, or " +
+				"give them a caller.",
+		).toEqual([]);
+	});
+});

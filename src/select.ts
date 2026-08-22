@@ -74,12 +74,12 @@ export type RuleStatus = "active" | "evicted";
 /** Why a rule was measured: a pending candidate seeking promotion, or an
  * active rule being re-audited for continued worth. The two differ only in
  * how the measurement is framed and how an uncertain verdict resolves. */
-export type DecisionKind = "candidate" | "re-audit";
+type DecisionKind = "candidate" | "re-audit";
 
 /** Which variance a standard error was built from. "within-task" is the
  * correct fixed-suite estimator; "between-task" is the legacy runs=1
  * fallback — surfaced so a verdict's confidence basis is auditable. */
-export type StandardErrorBasis = "within-task" | "between-task";
+type StandardErrorBasis = "within-task" | "between-task";
 
 export interface VerdictInput {
 	measuredDelta: number | null;
@@ -988,7 +988,7 @@ interface Decision {
 
 /** Details of an invocation-stopping environment failure: which rule was
  * being measured when the pass died, and how dead the pass was. */
-export interface EnvironmentAbort {
+interface EnvironmentAbort {
 	ruleId: number;
 	kind: DecisionKind;
 	/** The measurement pass that died. */
@@ -1002,7 +1002,7 @@ export interface EnvironmentAbort {
 /** A recovery attempt that was NOT measured this invocation because the run
  * budget would not have improved on the measurement that failed to resolve it.
  * It stays queued; nothing is decided and no tokens are spent. */
-export interface HeldCandidate {
+interface HeldCandidate {
 	rule: RuleRow;
 	/** The underpowered eviction this candidate re-tries. */
 	recovers: number;

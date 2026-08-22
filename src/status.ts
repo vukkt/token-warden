@@ -162,7 +162,7 @@ function learningCurve(db: WardenDb, agent: string): CurvePoint[] {
  * ------------------------------------------------------------------ */
 
 /** One row of the per-agent summary table. */
-export interface AgentSummary {
+interface AgentSummary {
 	agent: string;
 	runs: RunCounts;
 	rules: RuleCounts;
@@ -170,14 +170,14 @@ export interface AgentSummary {
 }
 
 /** One agent's golden-run learning curve (only agents with history appear). */
-export interface AgentCurve {
+interface AgentCurve {
 	agent: string;
 	rulesetVersion: number;
 	points: CurvePoint[];
 }
 
 /** An active rule as the ledger shows it. */
-export interface ActiveRuleEntry {
+interface ActiveRuleEntry {
 	agent: string;
 	id: number;
 	delta: number | null;
@@ -187,7 +187,7 @@ export interface ActiveRuleEntry {
 }
 
 /** An evicted rule as the ledger shows it. */
-export interface EvictionEntry {
+interface EvictionEntry {
 	agent: string;
 	id: number;
 	delta: number | null;
@@ -203,7 +203,7 @@ export interface EvictionEntry {
 }
 
 /** One agent's real-work learning curve (only agents with sessions appear). */
-export interface AgentRealWork {
+interface AgentRealWork {
 	agent: string;
 	points: RealWorkPoint[];
 }
