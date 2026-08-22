@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { benjaminiHochberg, gatePValue } from "../src/fdr.js";
+import {
+	benjaminiHochberg,
+	gatePValue,
+	lordAlpha,
+	lordDecisions,
+} from "../src/fdr.js";
 
 /** Deterministic LCG (Numerical Recipes constants) so the Monte-Carlo checks
  * below are reproducible: a flaky statistical test is worse than none. */
@@ -328,5 +333,139 @@ describe("BH controls the false discovery rate (Monte Carlo)", () => {
 		// The uncorrected rule blows well past the nominal rate on the same data
 		// -- this is the number the whole module exists to fix.
 		expect(rawFdr).toBeGreaterThan(0.05);
+	});
+});
+
+describe("lordAlpha (online FDR over the decision stream)", () => {
+	const ALPHA = 0.1;
+
+	it("starts at gamma_1 * W_0", () => {
+		// gamma_1 = 1/zeta(1.6) ~ 0.43749, W_0 = alpha/2.
+		expect(lordAlpha([], ALPHA)).toBeCloseTo(0.437490165774 * (ALPHA / 2), 9);
+	});
+
+	it("re-derives its normaliser -- the memoised zeta constant cannot drift", () => {
+		let sum = 0;
+		const N = 2_000_000;
+		for (let j = 1; j <= N; j++) sum += j ** -1.6;
+		sum += N ** -0.6 / 0.6 - 0.5 * N ** -1.6;
+		// alpha_1 = gamma_1 * W_0 = (1/zeta) * alpha/2, so zeta = alpha/(2*alpha_1).
+		const impliedZeta = ALPHA / (2 * lordAlpha([], ALPHA));
+		expect(impliedZeta).toBeCloseTo(sum, 6);
+	});
+
+	it("tightens monotonically while nothing is rejected", () => {
+		let previous = Number.POSITIVE_INFINITY;
+		const history: boolean[] = [];
+		for (let i = 0; i < 40; i++) {
+			const a = lordAlpha(history, ALPHA);
+			expect(a).toBeLessThan(previous);
+			previous = a;
+			history.push(false);
+		}
+	});
+
+	it("earns wealth back on a rejection", () => {
+		const barren = Array.from({ length: 10 }, () => false);
+		const withHit = [...barren.slice(0, 9), true];
+		expect(lordAlpha(withHit, ALPHA)).toBeGreaterThan(lordAlpha(barren, ALPHA));
+	});
+
+	it("repays the first rejection less than later ones", () => {
+		// The first rejection returns alpha - W_0; later ones return alpha. An
+		// implementation that collapses the two cases inflates the threshold.
+		const first = [true, false, false, false];
+		const second = [true, false, false, true];
+		const gainFromFirst =
+			lordAlpha(first, ALPHA) - lordAlpha([false, false, false, false], ALPHA);
+		const gainFromSecond = lordAlpha(second, ALPHA) - lordAlpha(first, ALPHA);
+		expect(gainFromSecond).toBeGreaterThan(gainFromFirst);
+	});
+
+	it("never returns a negative or non-finite threshold", () => {
+		const rand = lcg(5150);
+		for (let trial = 0; trial < 200; trial++) {
+			const history = Array.from({ length: 50 }, () => rand() < 0.3);
+			const a = lordAlpha(history, ALPHA);
+			expect(Number.isFinite(a)).toBe(true);
+			expect(a).toBeGreaterThanOrEqual(0);
+		}
+	});
+
+	/**
+	 * THE GUARANTEE, and the reason this module exists alongside BH.
+	 *
+	 * A stream of candidates arrives indefinitely. LORD++ must hold FDR at
+	 * alpha over the WHOLE stream. A fixed per-candidate threshold does not --
+	 * and neither does re-running BH on each invocation's three candidates,
+	 * which is what the gate would do if BH were the only procedure.
+	 */
+	it("holds FDR over a long stream where fixed-alpha and per-batch BH do not", () => {
+		const rand = lcg(31337);
+		const normal = gaussian(rand);
+		const STREAM = 900; // 300 invocations of 3 candidates
+		const TRIALS = 60;
+		const TRUE_RATE = 0.15; // 15% of candidates are real rules
+
+		let lordFdr = 0;
+		let fixedFdr = 0;
+		let batchBhFdr = 0;
+		for (let trial = 0; trial < TRIALS; trial++) {
+			const isReal: boolean[] = [];
+			const pValues: number[] = [];
+			for (let i = 0; i < STREAM; i++) {
+				const real = rand() < TRUE_RATE;
+				isReal.push(real);
+				pValues.push(gatePValue(normal() + (real ? 3 : 0), 0, 1));
+			}
+
+			const lord = lordDecisions(pValues, 0.1);
+			const fixed = pValues.map((p) => p <= 0.1);
+
+			// BH applied per invocation of 3, the way the gate would use it.
+			const batch: boolean[] = new Array(STREAM).fill(false);
+			for (let start = 0; start < STREAM; start += 3) {
+				const slice = pValues
+					.slice(start, start + 3)
+					.map((p, k) => ({ item: start + k, pValue: p }));
+				for (const idx of benjaminiHochberg(slice, 0.1).rejected) {
+					batch[idx] = true;
+				}
+			}
+
+			const fdp = (decisions: boolean[]) => {
+				const rejected = decisions.filter(Boolean).length;
+				if (rejected === 0) return 0;
+				const false_ = decisions.filter((d, i) => d && !isReal[i]).length;
+				return false_ / rejected;
+			};
+			lordFdr += fdp(lord);
+			fixedFdr += fdp(fixed);
+			batchBhFdr += fdp(batch);
+		}
+		lordFdr /= TRIALS;
+		fixedFdr /= TRIALS;
+		batchBhFdr /= TRIALS;
+
+		// LORD holds the line over the whole stream.
+		expect(lordFdr).toBeLessThanOrEqual(0.1);
+		// Neither alternative does, which is the entire argument.
+		expect(fixedFdr).toBeGreaterThan(0.1);
+		expect(batchBhFdr).toBeGreaterThan(0.1);
+		expect(lordFdr).toBeLessThan(batchBhFdr);
+	});
+
+	it("still makes discoveries -- it is not merely conservative", () => {
+		const rand = lcg(8080);
+		const normal = gaussian(rand);
+		const pValues: number[] = [];
+		let realCount = 0;
+		for (let i = 0; i < 600; i++) {
+			const real = rand() < 0.3;
+			if (real) realCount++;
+			pValues.push(gatePValue(normal() + (real ? 4 : 0), 0, 1));
+		}
+		const found = lordDecisions(pValues, 0.1).filter(Boolean).length;
+		expect(found).toBeGreaterThan(realCount * 0.3);
 	});
 });

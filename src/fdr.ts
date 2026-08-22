@@ -142,3 +142,128 @@ export function benjaminiHochberg<T>(
 			k === 0 ? null : ((ordered[k - 1] as FdrCandidate<T>).pValue ?? null),
 	};
 }
+
+// ---------------------------------------------------------------------------
+// Online FDR over the decision stream
+// ---------------------------------------------------------------------------
+
+/**
+ * WHY BENJAMINI-HOCHBERG IS NOT ENOUGH HERE, which corrects the commit that
+ * introduced it.
+ *
+ * BH controls FDR over a FIXED pool, decided all at once. That commit claimed it
+ * fixes junk rules accumulating as more candidates are measured. It does not.
+ * `MAX_CANDIDATES_PER_INVOCATION` is 3, so BH over one invocation is barely
+ * distinguishable from a per-candidate threshold, and the accumulation the claim
+ * describes happens ACROSS invocations -- one distiller run at a time, week
+ * after week, with no end. That is a stream, and a fixed-pool procedure has
+ * nothing to say about it.
+ *
+ * Applying BH afresh to each invocation's three candidates controls FDR within
+ * each invocation and NOT across them: run it 100 times at q = 0.1 and the
+ * expected count of false rules still grows linearly, exactly the failure mode
+ * BH was brought in to fix.
+ *
+ * THE THEOREM (Javanmard & Montanari 2018; Ramdas, Zrnic, Wainwright & Jordan
+ * 2017 -- the LORD++ formulation). Hypotheses arrive one at a time, and each
+ * must be decided before the next is seen. Maintain an "alpha-wealth". Test
+ * `t` is rejected when `p_t <= alpha_t`, where
+ *
+ *     alpha_t = gamma_t * W_0
+ *             + (alpha - W_0) * gamma_{t - tau_1}
+ *             + alpha * sum_{j >= 2} gamma_{t - tau_j}
+ *
+ * with `tau_1 < tau_2 < ...` the indices of past rejections, `gamma` a
+ * non-negative sequence summing to 1, and `W_0 < alpha` the initial wealth.
+ * This controls `FDR <= alpha` over the WHOLE stream, for any length, under
+ * independent p-values.
+ *
+ * The mechanism is an honest economy rather than a trick: each test spends
+ * wealth, and each REJECTION earns wealth back. A run of discoveries buys the
+ * budget for more; a run of nulls tightens the threshold until the evidence
+ * improves. That is the "gets better the more you use it" property with a proof
+ * under it instead of a slogan, and it is the exact shape of this project's
+ * usage -- candidates distilled from real work, indefinitely.
+ *
+ * NO NEW STATE IS NEEDED. `rule_receipts` already records one row per decision
+ * with its status, which IS the stream history. The caller passes that history
+ * in; this function stays pure.
+ */
+
+/** Decay exponent of the gamma sequence, `gamma_j proportional to j^-1.6`. The
+ * standard default in the online-FDR literature and the `onlineFDR` package:
+ * light enough that late arrivals keep a usable threshold, heavy enough to sum. */
+const GAMMA_EXPONENT = 1.6;
+
+/** `zeta(1.6)`, the normaliser making `sum_j gamma_j = 1`. Computed once and
+ * memoised; a test re-derives it by summation so the constant cannot drift. */
+let gammaNormaliser: number | null = null;
+
+function normaliser(): number {
+	if (gammaNormaliser !== null) return gammaNormaliser;
+	const N = 200_000;
+	let sum = 0;
+	for (let j = 1; j <= N; j++) sum += j ** -GAMMA_EXPONENT;
+	// Euler-Maclaurin tail so a finite sum still lands on the true zeta:
+	// the integral from N to infinity, less half the final term.
+	sum +=
+		N ** (1 - GAMMA_EXPONENT) / (GAMMA_EXPONENT - 1) -
+		0.5 * N ** -GAMMA_EXPONENT;
+	gammaNormaliser = sum;
+	return sum;
+}
+
+/** `gamma_j` for j >= 1; zero for j <= 0 so the shifted terms in the LORD sum
+ * can be written without index guards at every call site. */
+function gamma(j: number): number {
+	if (j <= 0) return 0;
+	return j ** -GAMMA_EXPONENT / normaliser();
+}
+
+/**
+ * The significance threshold LORD++ allows for the NEXT decision in the stream.
+ *
+ * `history[i]` is whether decision `i` (oldest first) was a rejection -- for
+ * this project, whether that candidate was promoted. The next test is index
+ * `history.length + 1`.
+ *
+ * `alpha` is the FDR level to hold over the whole stream. Initial wealth is
+ * `alpha / 2`, the conventional choice: it leaves half the budget in reserve so
+ * an unlucky opening run of nulls cannot bankrupt the procedure.
+ */
+export function lordAlpha(history: readonly boolean[], alpha: number): number {
+	const t = history.length + 1;
+	const w0 = alpha / 2;
+
+	let value = gamma(t) * w0;
+	let rejectionsSeen = 0;
+	for (let i = 0; i < history.length; i++) {
+		if (!history[i]) continue;
+		rejectionsSeen += 1;
+		// History is 0-indexed; rejection times in the theorem are 1-indexed.
+		const tau = i + 1;
+		// The FIRST rejection repays only `alpha - W_0`; every later one repays
+		// the full `alpha`. Collapsing these into one case is the usual way this
+		// procedure is implemented slightly wrong, and it inflates the threshold.
+		value += (rejectionsSeen === 1 ? alpha - w0 : alpha) * gamma(t - tau);
+	}
+	return value;
+}
+
+/**
+ * Run LORD++ across a stream of p-values, returning the decision for each.
+ *
+ * Provided because the procedure is only meaningful as a sequence -- a caller
+ * that re-derived it per decision would be re-implementing the wealth
+ * bookkeeping, which is where the errors live.
+ */
+export function lordDecisions(
+	pValues: readonly number[],
+	alpha: number,
+): boolean[] {
+	const history: boolean[] = [];
+	for (const p of pValues) {
+		history.push(p <= lordAlpha(history, alpha));
+	}
+	return history;
+}

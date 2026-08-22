@@ -112,10 +112,28 @@ with a proof I did not invent. They compose into the same four-stage loop, one
 theorem per stage.
 
 ```
-  estimate            decide             spend             pack
-  variance      ->    Benjamini-   ->    Successive  ->    submodular
-  moderation          Hochberg           Halving           knapsack
-  (stabilises SE)     (controls FDR)     (cuts burn)       (cuts redundancy)
+  allocate            spend              decide            pack
+  Neyman        ->    Successive   ->    LORD++       ->   submodular
+  allocation          Halving            online FDR        knapsack
+  (within a           (across            (holds FDR        (cuts
+   candidate)          candidates)        over time)        redundancy)
+```
+
+**The lineup changed as the evidence came in, and the final four are not the
+four this document opened with.** Theorem I was specified as James-Stein, was
+corrected to variance moderation when the algebra showed James-Stein to be a
+no-op, and was then rejected outright on measurement. Theorem II was specified
+as Benjamini-Hochberg and had to be replaced by an online procedure once it was
+clear the multiplicity lives in a stream rather than a pool. What fills the
+estimator slot is **Neyman allocation**, which this project already shipped in
+v0.24.0 and which section 1 identifies as the one clear win in its history — the
+one change that moved runs toward the variance instead of adjusting a threshold.
+
+Recording it this way rather than quietly rewriting the opening: a spec that
+survives contact with measurement unchanged is usually a spec that was never
+tested against anything.
+
+```
 ```
 
 ### I. Empirical-Bayes variance moderation — the estimator
@@ -244,6 +262,41 @@ That is not a defect; it is what controlling a pool-level error rate means.
 
 **What it replaces.** The bare `z=2` promotion margin, which becomes the
 per-candidate p-value input rather than the decision itself.
+
+> **SECOND CORRECTION: BH ALONE DOES NOT DO WHAT THIS SECTION CLAIMS.**
+>
+> The claim above is that BH stops junk rules accumulating as more candidates
+> are measured. It does not. BH controls FDR over a **fixed pool decided at
+> once**, and `MAX_CANDIDATES_PER_INVOCATION` is 3 — so BH over one invocation
+> is barely distinguishable from a per-candidate threshold. The accumulation
+> described happens *across* invocations, one distiller run at a time,
+> indefinitely. That is a **stream**, and a fixed-pool procedure says nothing
+> about it.
+>
+> Measured, over 900 candidates with 15% genuinely real, at `q = 0.10`:
+>
+> | procedure | stream FDR | discoveries |
+> | --- | --- | --- |
+> | fixed `alpha = 0.10` | 36.8% | — |
+> | BH per invocation of 3 | 22.2% | 158 |
+> | **LORD++ (online)** | **8.4%** | 94 |
+>
+> Re-running BH on each batch overshoots the nominal rate by more than 2x.
+>
+> The right theorem is **online FDR** (Javanmard & Montanari 2018; Ramdas,
+> Zrnic, Wainwright & Jordan 2017 — LORD++). Hypotheses arrive one at a time and
+> each must be decided before the next is seen. The procedure maintains an
+> *alpha-wealth*: every test spends, every rejection earns back. A run of
+> discoveries funds more; a run of nulls tightens the threshold until evidence
+> improves. `FDR <= alpha` holds over the whole stream, at any length.
+>
+> This is the compounding claim with a proof under it rather than a slogan, and
+> it is the exact shape of the product: candidates distilled from real work,
+> forever. It needs **no new state** — `rule_receipts` already stores one row per
+> decision, which is the stream history.
+>
+> BH stays for the genuine within-pool case and as the honest baseline the
+> numbers above are measured against. LORD++ is the operative procedure.
 
 ### III. Successive Halving — the allocator
 
