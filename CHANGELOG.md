@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Deleted the agent-teams approval gate
+
+`src/gate.ts` and its 569 lines of test are removed, with both `SendMessage`
+hook registrations, the four `questions` accessors in `db.ts`, the distiller's
+question section and the status dashboard's cross-agent panel.
+
+It was the last off-thesis feature: a PreToolUse/PostToolUse permission prompt
+for inter-agent messages, which has nothing to do with charging rent on memory
+rules. It was NOT purely decorative -- `distill.ts` read `recentQuestionsFrom`
+as a signal that an agent's memory was missing knowledge it kept asking peers
+for, which is a genuine rule-proposal input.
+
+What settled it was the ledger. The feature requires
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`, and in 2.5 months it recorded four
+questions, all from agents named `lead` and `scout`. Neither is a known agent,
+so neither has a golden suite, so neither can distil -- the signal has never
+once reached a distiller.
+
+The `questions` TABLE stays. Migrations are append-only history, and a table
+with rows in it does not get dropped because its writer was removed; the schema
+comment now marks it legacy.
+
+Removing the distiller's question section changes the prompt the model sees when
+proposing rules. That is a real behavioural change to rule proposal, not a pure
+refactor, and it is why this is a changelog entry rather than a tidy-up.
+
+src 9.7k -> 9.4k lines, 25 -> 24 modules, 950 -> 917 tests.
+
 ### Deleted the two rejected theorem modules
 
 `src/fdr.ts` and `src/moderate.ts` are removed, with their tests and their

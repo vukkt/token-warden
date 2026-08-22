@@ -50,7 +50,7 @@ describe("buildPrompt", () => {
 	} as unknown as RunRow;
 
 	it("forbids false-economy rules (the burn's rule-3 lesson)", () => {
-		const prompt = buildPrompt(run, "USER: do x\nTOOL Bash {}", []);
+		const prompt = buildPrompt(run, "USER: do x\nTOOL Bash {}");
 		// A rule that trades completion/thoroughness for tokens must be ruled out.
 		expect(prompt).toMatch(/SAME-RESULT/);
 		expect(prompt).toMatch(
@@ -59,21 +59,16 @@ describe("buildPrompt", () => {
 	});
 
 	it("includes the waste stats and the action trace", () => {
-		const prompt = buildPrompt(run, "TOOL Read {}", []);
+		const prompt = buildPrompt(run, "TOOL Read {}");
 		expect(prompt).toContain("total tokens processed: 30000");
 		expect(prompt).toContain("TOOL Read");
 	});
 
 	it("feeds banked rules back in, telling the model not to repeat them", () => {
-		const prompt = buildPrompt(
-			run,
-			"TOOL Read {}",
-			[],
-			[
-				"Grep before reading whole files.",
-				"State a one-line plan before editing.",
-			],
-		);
+		const prompt = buildPrompt(run, "TOOL Read {}", [
+			"Grep before reading whole files.",
+			"State a one-line plan before editing.",
+		]);
 		expect(prompt).toMatch(/ALREADY follows these proven/);
 		expect(prompt).toMatch(/do NOT repeat/i);
 		expect(prompt).toContain("- Grep before reading whole files.");
@@ -81,7 +76,7 @@ describe("buildPrompt", () => {
 	});
 
 	it("omits the proven-rules section when the agent has none yet", () => {
-		expect(buildPrompt(run, "TOOL Read {}", [], [])).not.toMatch(
+		expect(buildPrompt(run, "TOOL Read {}", [])).not.toMatch(
 			/ALREADY follows these proven/,
 		);
 	});
@@ -90,7 +85,6 @@ describe("buildPrompt", () => {
 		const prompt = buildPrompt(
 			run,
 			"TOOL Read {}",
-			[],
 			[],
 			[
 				{
@@ -123,13 +117,11 @@ describe("buildPrompt", () => {
 			measured_delta: i,
 			decided_reason: "sub-threshold",
 		}));
-		const prompt = buildPrompt(run, "TOOL Read {}", [], [], many);
+		const prompt = buildPrompt(run, "TOOL Read {}", [], many);
 		expect(prompt).toContain("Evicted rule number 7.");
 		expect(prompt).not.toContain("Evicted rule number 8.");
 
-		expect(buildPrompt(run, "TOOL Read {}", [], [], [])).not.toMatch(
-			/REJECTED/,
-		);
+		expect(buildPrompt(run, "TOOL Read {}", [], [])).not.toMatch(/REJECTED/);
 	});
 });
 

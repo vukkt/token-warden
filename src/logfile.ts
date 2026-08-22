@@ -3,7 +3,8 @@
  *
  * Five modules had grown their own `logLine` — `gate`, `collect`, `distill`,
  * `evolve`, `notify` — and the copies had diverged on the two things that
- * matter rather than on anything cosmetic:
+ * matter rather than on anything cosmetic. (`gate` and `evolve` have since been
+ * deleted; the history is kept because it is why this module exists.)
  *
  * - **Rotation.** Only `gate.ts` capped its file. The other four grew without
  *   bound in the user's `~/.token-warden` directory, and `collect.log` is the

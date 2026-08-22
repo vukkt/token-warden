@@ -29,8 +29,6 @@ import {
 	type ProjectCurvePoint,
 	type ProjectUsage,
 	projectUsage,
-	type QuestionCount,
-	questionCounts,
 	type RealWorkPoint,
 	RUN_TOTAL_TOKENS_SQL,
 	realWorkCurveByAgent,
@@ -218,7 +216,6 @@ export interface StatusData {
 	projectCurves: ProjectCurvePoint[];
 	projects: ProjectUsage[];
 	toolCosts: ToolCostRollup[];
-	questions: QuestionCount[];
 }
 
 /** Read every figure the report needs. SELECT-only: see the module invariant. */
@@ -279,7 +276,6 @@ export function gatherStatus(db: WardenDb): StatusData {
 		projectCurves: realWorkCurveByProject(db, PROJECT_LIMIT),
 		projects: projectUsage(db, PROJECT_LIMIT),
 		toolCosts: toolCostRollup(db, { limit: TOOL_COST_LIMIT }),
-		questions: questionCounts(db),
 	};
 }
 
@@ -419,15 +415,6 @@ export function formatStatus(data: StatusData): string {
 				return `  ${displayText(c.kind, 12).padEnd(7)} ${displayText(where, 40).padEnd(40)} ≈${fmt(estTokens)} tok (${c.calls} call(s), ${c.sessions} session(s))`;
 			}),
 			"  none recorded yet",
-		),
-
-		...section(
-			"Cross-agent questions (high volume = that agent's memory is missing something):",
-			data.questions.map(
-				(count) =>
-					`  ${displayText(count.from_agent, 60)}: asked ${count.asked}, approved ${count.approved}`,
-			),
-			"  none recorded",
 		),
 	].join("\n");
 }

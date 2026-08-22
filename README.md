@@ -11,10 +11,10 @@ That is the whole idea. Everything below is either the loop that enforces it, th
 theorems that survived measurement, or the record of the three that did not.
 
 ```text
-  version    1.0.0             tests        950 across 37 files
-  license    MIT               coverage    95.8% lines, CI-enforced floor
-  source     25 modules        commands    6
-              9.7k lines       built       2026-06 to 2026-08
+  version    1.0.0             tests        917 across 35 files
+  license    MIT               coverage    95.7% lines, CI-enforced floor
+  source     24 modules        commands    6
+              9.4k lines       built       2026-06 to 2026-08
 ```
 
 ---
@@ -195,8 +195,8 @@ The measurement discipline is the product, so the codebase is held to it.
 
 | | |
 |---|---|
-| **Tests** | 950 across 37 files. 15.6k lines of test against 9.7k of source. |
-| **Coverage** | 95.8% lines, 94.7% statements, 96.4% functions, 89.1% branches, behind a floor CI fails on. |
+| **Tests** | 917 across 35 files. 15.0k lines of test against 9.4k of source. |
+| **Coverage** | 95.7% lines, 94.6% statements, 96.5% functions, 89.1% branches, behind a floor CI fails on. |
 | **Pipeline** | Staged: quality gates test, fixture and coverage, which gate validate, which gates release. Actions SHA-pinned, `npm ci`. |
 | **Types** | Strict TypeScript with `noUncheckedIndexedAccess`. Zero `any`, zero `@ts-ignore`, zero non-null assertions. |
 | **Data** | SQLite, 16 versioned migrations applied transactionally under `BEGIN IMMEDIATE`. |

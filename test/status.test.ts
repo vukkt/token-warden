@@ -70,7 +70,6 @@ function emptyData(over: Partial<StatusData> = {}): StatusData {
 		projectCurves: [],
 		projects: [],
 		toolCosts: [],
-		questions: [],
 		...over,
 	};
 }
@@ -337,7 +336,7 @@ describe("formatStatus (pure — no DB)", () => {
 		);
 	});
 
-	it("renders the real-work, project, tool-cost and question sections", () => {
+	it("renders the real-work, project and tool-cost sections", () => {
 		const out = formatStatus(
 			emptyData({
 				realWork: [
@@ -378,7 +377,6 @@ describe("formatStatus (pure — no DB)", () => {
 						resultChars: 100,
 					},
 				],
-				questions: [{ from_agent: "sql", asked: 7, approved: 3 }],
 			}),
 		);
 		expect(out).toContain(
@@ -395,7 +393,6 @@ describe("formatStatus (pure — no DB)", () => {
 		expect(out).toContain("builtin Read");
 		expect(out).toContain("github/list_prs");
 		expect(out).toContain("≈200 tok (10 call(s), 2 session(s))");
-		expect(out).toContain("sql: asked 7, approved 3");
 	});
 
 	it("shows every empty-section placeholder on wholly empty data", () => {
@@ -448,7 +445,6 @@ describe("formatStatus (pure — no DB)", () => {
 						resultChars: 1,
 					},
 				],
-				questions: [{ from_agent: hostile, asked: 1, approved: 0 }],
 			}),
 		);
 		expect(out).not.toContain("\x1b");

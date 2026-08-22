@@ -30,7 +30,6 @@ import {
 	type RuleRow,
 	type RunRow,
 	recentEvictedRules,
-	recentQuestionsFrom,
 	type WardenDb,
 	withDb,
 } from "./db.js";
@@ -261,20 +260,11 @@ export interface EvictedFeedback {
 export function buildPrompt(
 	run: RunRow,
 	digest: string,
-	recentQuestions: string[] = [],
 	activeRules: string[] = [],
 	evictedRules: EvictedFeedback[] = [],
 ): string {
 	const total =
 		run.input_tokens + run.output_tokens + run.cache_creation + run.cache_read;
-	const questionSection =
-		recentQuestions.length > 0
-			? [
-					"Questions this agent recently had to ask other agents (a sign its own knowledge or approach has gaps):",
-					...recentQuestions.map((q) => `- ${q}`),
-					"",
-				]
-			: [];
 	// Self-reinforcing loop: feed the rules this agent has ALREADY proven (banked
 	// after surviving the benchmark) back in, so each new proposal builds on
 	// what worked instead of re-proposing covered ground.
@@ -313,7 +303,6 @@ export function buildPrompt(
 		`- files read two or more times: ${run.file_rereads}`,
 		`- task completed: ${run.completed === 1 ? "yes" : "no"}`,
 		"",
-		...questionSection,
 		...provenSection,
 		...evictedSection,
 		"Action trace (truncated):",
@@ -410,7 +399,6 @@ export function distill(args: DistillArgs): void {
 		const prompt = buildPrompt(
 			run,
 			digest,
-			recentQuestionsFrom(db, run.agent, 5),
 			getActiveRules(db, run.agent).map((r) => r.body),
 			recentEvictedRules(db, run.agent, MAX_EVICTED_FEEDBACK),
 		);

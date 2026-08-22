@@ -50,7 +50,6 @@ output) overwrites the agent's `MEMORY.md`, which the agent reads next session.
 | --- | --- | --- |
 | `Stop` / `SubagentStop` hooks | `hooks/hooks.json` -> `src/collect.ts` | Record session cost; trigger distillation |
 | `SessionStart` hook | `src/notify.ts` | One-line nudge when candidates are pending (silent otherwise) |
-| `PreToolUse` hook (`SendMessage`) | `src/gate.ts` | Inter-agent approval gate (fails open) |
 | 6 slash commands | `commands/*.md` | `/warden-status`, `/warden-power`, `/warden-bench`, `/warden-select`, `/warden-receipt`, `/warden-cost` |
 | 4 bundled subagents | `agents/{frontend,backend,sql,testing}.md` | The only agents with golden suites, so the only ones whose rules can be measured |
 
@@ -75,7 +74,6 @@ exactly like `sql` or `backend`.
 | `cost.ts` / `pricing.ts` | The dollar lens. Advisory only — the keep/evict gate is denominated in TOKENS and never reads a price |
 | `tool-cost.ts` | Classify tool/skill/MCP calls and roll up their footprint. Written by the Stop hook, read by the status dashboard |
 | `status.ts` / `notify.ts` | Status dashboard and the SessionStart pending-candidate nudge |
-| `gate.ts` | Inter-agent `SendMessage` approval prompt (sanitized, fails open) |
 | `sanitize.ts` | Single presentation-security chokepoint (control/ANSI stripping) |
 | `logfile.ts` | Single log sink: rotate at 1 MiB, sanitize, append. Every `*.log` next to the ledger goes through it |
 | `db.ts` / `types.ts` | SQLite access, versioned migrations, shared types |
@@ -115,7 +113,7 @@ reordered, only appended.
 | `rules` | Candidate / active / evicted rules: body, status, `context_cost` (rent), `measured_delta`, source run |
 | `baselines` | The frozen `run1_tokens` per task: the permanent denominator of every savings claim |
 | `ruleset_versions` | Per-agent ruleset version counter (bumped on each compile) |
-| `questions` | Cross-agent questions, fed to the distiller as a memory-gap signal |
+| `questions` | LEGACY. Written by the agent-teams approval gate, removed post-v1.0.0. No code reads or writes it; the table stays because migrations are append-only history |
 | `tool_costs` | Per-session tool/skill/MCP footprint (real-work sessions only) |
 | `rule_receipts` | Immutable evidence snapshot at every keep/evict decision (the audit trail) |
 

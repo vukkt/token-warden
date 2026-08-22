@@ -10,7 +10,6 @@ import {
 	getRulesetVersion,
 	getRunBySession,
 	goldenReplicateRuns,
-	insertQuestion,
 	insertRule,
 	listCandidates,
 	MIGRATION_COUNT,
@@ -18,7 +17,6 @@ import {
 	oldestDecidedActiveRule,
 	openDb,
 	recentEvictedRules,
-	recentQuestionsFrom,
 	recentRealWorkTotals,
 	recordReceipt,
 	setRuleProbation,
@@ -294,12 +292,6 @@ describe("RETURNING guards", () => {
 			/bumpRulesetVersion/,
 		);
 	});
-
-	it("insertQuestion throws rather than returning a bogus question id", () => {
-		expect(() => insertQuestion(emptyDb, "a", "b", "body", "t")).toThrow(
-			/insertQuestion/,
-		);
-	});
 });
 
 describe("recentRealWorkTotals", () => {
@@ -570,23 +562,6 @@ describe("rule queue ordering", () => {
 			{ agent: "sql", pending: 2 },
 			{ agent: "backend", pending: 1 },
 		]);
-	});
-});
-
-describe("questions", () => {
-	it("recentQuestionsFrom returns newest question bodies first, capped", () => {
-		insertQuestion(db, "frontend", "backend", "How is auth refreshed?", "t1");
-		insertQuestion(db, "frontend", "sql", "Which index covers orders?", "t2");
-		insertQuestion(db, "backend", "sql", "Not from frontend.", "t3");
-
-		expect(recentQuestionsFrom(db, "frontend", 1)).toEqual([
-			"Which index covers orders?",
-		]);
-		expect(recentQuestionsFrom(db, "frontend", 5)).toEqual([
-			"Which index covers orders?",
-			"How is auth refreshed?",
-		]);
-		expect(recentQuestionsFrom(db, "sql", 5)).toEqual([]);
 	});
 });
 
