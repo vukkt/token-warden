@@ -144,9 +144,16 @@ function summarise(
 	trials: number,
 	trueSaving: number,
 	rent: number,
+	overlap: number,
 ): ArmResult {
 	const kept = discoveries / trials;
 	const realKept = trueDiscoveries / trials;
+	// Geometric decay of the marginal saving: sum_{j=0}^{k-1} overlap^j.
+	// At overlap = 1 this is exactly k, the additive model.
+	const jointSaving =
+		overlap >= 1
+			? realKept * trueSaving
+			: trueSaving * ((1 - overlap ** realKept) / (1 - overlap));
 	return {
 		label,
 		falseDiscoveryProportion:
@@ -154,8 +161,8 @@ function summarise(
 		discoveries: kept,
 		trueDiscoveries: realKept,
 		missedReal: missedReal / trials,
-		// Real rules pay their measured saving; EVERY kept rule pays rent.
-		netTokensPerRun: realKept * trueSaving - kept * rent,
+		// Real rules pay their JOINT saving; EVERY kept rule pays rent.
+		netTokensPerRun: jointSaving - kept * rent,
 	};
 }
 
@@ -170,6 +177,23 @@ export function runStreams(
 		trueRate: number;
 		saving: number;
 		seed: number;
+		/**
+		 * How much the j-th kept real rule still saves, relative to the one
+		 * before it: joint saving is `s * (1 - overlap^k) / (1 - overlap)`.
+		 *
+		 * 1.0 is ADDITIVE -- every real rule saves in full, forever. That is the
+		 * model this harness started with, and it is wrong in a direction that
+		 * flatters permissiveness: it is what makes "keep everything" look
+		 * optimal. Real rules overlap (theorem IV's whole premise), so the
+		 * marginal saving of the k-th decays. Below 1 the sum converges and the
+		 * net-token optimum becomes finite.
+		 */
+		overlap?: number;
+		/** Confidence multiple for the fixed arm. Omitted means the shipped
+		 * `confidenceZ()`; supplied lets a sweep find where the net-token
+		 * optimum actually sits, including below the 1.0 floor that
+		 * `confidenceZ` refuses from the environment. */
+		fixedZ?: number;
 	},
 ): ArmResult[] {
 	const lordFdp: number[] = [];
@@ -224,6 +248,7 @@ export function runStreams(
 				arrival.without,
 				arrival.withRule,
 				options.rent,
+				options.fixedZ,
 			);
 			const fixedKeep = promotedAt(fixedAssessment, options.rent);
 			if (fixedKeep) {
@@ -250,9 +275,13 @@ export function runStreams(
 		) / groups.length;
 	const trueSaving = pooledMean * options.saving;
 
+	const fixedLabel =
+		options.fixedZ === undefined
+			? "fixed z=2 (shipped)"
+			: `fixed z=${options.fixedZ}`;
 	return [
 		summarise(
-			"fixed z=2 (shipped)",
+			fixedLabel,
 			fixedFdp,
 			fixedFound,
 			fixedTrue,
@@ -260,6 +289,7 @@ export function runStreams(
 			options.trials,
 			trueSaving,
 			options.rent,
+			options.overlap ?? 1,
 		),
 		summarise(
 			"LORD++ online FDR",
@@ -270,6 +300,7 @@ export function runStreams(
 			options.trials,
 			trueSaving,
 			options.rent,
+			options.overlap ?? 1,
 		),
 	];
 }
@@ -300,6 +331,9 @@ function main(argv: string[]): number {
 	const trueRate = flag("--true-rate", 0.2);
 	const saving = flag("--saving", 0.1);
 	const seed = flag("--seed", 42);
+	const overlap = flag("--overlap", 1);
+	const fixedZAt = argv.indexOf("--fixed-z");
+	const fixedZ = fixedZAt >= 0 ? numericFlag(argv[fixedZAt + 1]) : undefined;
 
 	const db = openDb(dbPath);
 	const groups = groupReplicates(goldenReplicateRuns(db, agent), runs * 2);
@@ -327,6 +361,8 @@ function main(argv: string[]): number {
 		trueRate,
 		saving,
 		seed,
+		overlap,
+		...(fixedZ !== undefined && Number.isFinite(fixedZ) ? { fixedZ } : {}),
 	});
 
 	console.log(

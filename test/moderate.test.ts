@@ -159,6 +159,28 @@ describe("moderateVariances", () => {
 		expect(out.priorVariance).toBeCloseTo(7 * Math.exp(0.5772156649015329), 6);
 	});
 
+	/**
+	 * The degenerate-variance rescue on the FINITE-prior path.
+	 *
+	 * The zero-variance test above does not reach it: variances [0,4,9,16,25]
+	 * are homogeneous enough on the log scale that the fitted prior comes back
+	 * INFINITE, and the infinite-prior branch handles the task first. Reaching
+	 * the finite branch needs a genuinely heterogeneous suite (excess log-spread
+	 * above trigamma(d/2)) that ALSO contains a task with no usable variance.
+	 */
+	it("gives a degenerate task the fitted prior when the prior is finite", () => {
+		const out = moderateVariances(
+			[0, 1, 100, 10_000, 1_000_000],
+			[2, 2, 2, 2, 2],
+		);
+		expect(Number.isFinite(out.priorDf)).toBe(true);
+		expect(out.moderated[0]).toBeCloseTo(out.priorVariance, 9);
+		expect(out.moderatedDf[0]).toBeCloseTo(out.priorDf, 9);
+		// The tasks that CAN estimate their own variance still blend rather than
+		// being replaced outright.
+		expect(out.moderated[4]).not.toBeCloseTo(out.priorVariance, 6);
+	});
+
 	it("leaves a suite of wildly different scales largely alone", () => {
 		// Genuinely heterogeneous tasks carry real signal about their own
 		// noise, so the fitted prior should be weak and shrinkage mild.
