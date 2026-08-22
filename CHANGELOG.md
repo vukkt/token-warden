@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## v1.1.0 — 2026-08-22
+
+Four deletions and one bug fix. The plugin is now two theorems, six commands and
+24 modules; every algorithm in the tree is one that survived measurement.
+
+**Why MINOR and not MAJOR, given that this removes surfaces.** Three things went
+that a user could in principle have touched: two default-off environment flags
+(`WARDEN_MODERATE_VARIANCE`, `WARDEN_ONLINE_FDR`, plus `WARDEN_FDR_ALPHA`), the
+two `SendMessage` hook registrations, and a panel of `/warden-status`. All three
+were inert in practice -- the flags shipped default-off for a single release and
+were documented as rejected on measurement, and the hooks never fire without
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`. The contract that actually defines this
+plugin is unchanged: the six commands, the DB schema (no migration added or
+edited), the compiled `MEMORY.md` format, and the keep/evict gate all behave
+exactly as in v1.0.0.
 
 ### Deleted the agent-teams approval gate
 
@@ -100,7 +114,7 @@ and the second never landed on disk because of an escaping mismatch.
 
 src 10.5k -> 9.7k lines, 28 -> 25 modules, 1036 -> 950 tests.
 
-## v1.0.0
+## v1.0.0 — 2026-08-22
 
 The plugin is reduced to its thesis, and the mathematics that thesis depends on
 is made explicit, implemented, and MEASURED. Two of the four theorems were
@@ -190,7 +204,7 @@ parameters it was measured under.
 - README rewritten around the theorems; an orphaned economics table still
   showing the retracted $20/developer/year figures was removed.
 
-## Unreleased
+
 
 ### The punch list, closed
 
