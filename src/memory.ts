@@ -29,7 +29,9 @@ import {
 	type RuleRow,
 	type WardenDb,
 } from "./db.js";
+import { packRules } from "./knapsack.js";
 import { displayText } from "./sanitize.js";
+import { memoryContextBudget } from "./stats.js";
 
 /** Compile rule bodies into the MEMORY.md injected into the agent's prompt.
  * Overwritten wholesale by the selector — never hand-edited (invariant #2). A
@@ -91,9 +93,59 @@ function memorySafeRules(rules: RuleRow[]): RuleRow[] {
 	}));
 }
 
+/**
+ * Trim an active rule set to fit a context budget, by the submodular knapsack
+ * (`knapsack.ts`).
+ *
+ * UNSET BY DEFAULT, and when unset this returns the rules untouched — so every
+ * existing installation compiles byte-identical memory. That default is not
+ * timidity: a budget is a claim about how much context an agent can spend on
+ * memory, and only the operator knows it.
+ *
+ * When a budget IS set, this is the counterweight to a permissive gate. The
+ * v1.0.0 stream calibration found false positives ~191x cheaper than false
+ * negatives *while context is free*, and concluded "permissive at the gate,
+ * strict at the packer" — the whole force of which depends on a packer actually
+ * existing. Admission asks whether a rule pays its own rent; this asks which
+ * rules to carry when the window will not hold them all.
+ *
+ * Protected rules are FORCED in, which is where that constraint belongs: it is
+ * a statement about the solution set, not about a rule's individual merit.
+ *
+ * The similarity function is left at the independent default, so this is
+ * currently an ordinary 0/1 knapsack. Real pairwise rule overlap has never been
+ * measured, and inventing a redundancy structure the data does not support
+ * would be exactly the kind of unmeasured claim this project exists to refuse.
+ */
+function packToBudget(rules: RuleRow[]): RuleRow[] {
+	const budget = memoryContextBudget();
+	if (budget === null) return rules;
+
+	const { chosen } = packRules(
+		rules.map((rule) => ({
+			id: String(rule.id),
+			contextCost: rule.context_cost,
+			// A rule with no recorded delta (authored, or migrated from before
+			// receipts) contributes no measured saving, so the knapsack ranks it
+			// last rather than guessing on its behalf.
+			saving: rule.measured_delta ?? 0,
+			forced: rule.protected === 1,
+		})),
+		budget,
+	);
+
+	// Preserve the caller's ordering rather than greedy's selection order: the
+	// compiled file is read by a human as often as by an agent, and a memory
+	// file that reshuffles itself on every recompile is a diff nobody can review.
+	const keep = new Set(chosen);
+	return rules.filter((rule) => keep.has(String(rule.id)));
+}
+
 /** The exact bytes the agent's MEMORY.md should hold for a rule set. */
 function compiledMemoryFor(db: WardenDb, agent: string): string {
-	return compileMemoryMd(memorySafeRules(getActiveRules(db, agent)));
+	return compileMemoryMd(
+		packToBudget(memorySafeRules(getActiveRules(db, agent))),
+	);
 }
 
 /**

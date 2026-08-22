@@ -297,6 +297,27 @@ export function onlineFdrAlpha(): number {
 	return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.1;
 }
 
+/**
+ * Token budget the compiled MEMORY.md may occupy, or null for unbounded.
+ *
+ * NULL BY DEFAULT: only the operator knows how much of an agent's context
+ * window is reasonable to spend on memory, and guessing on their behalf would
+ * silently drop rules they measured and paid for. Set
+ * `WARDEN_CONTEXT_BUDGET=<tokens>` to enable the knapsack packer in
+ * `memory.ts`.
+ *
+ * Rejects zero, negative and non-numeric values rather than clamping — a budget
+ * of 0 would compile an empty memory file, which is a far worse failure than
+ * ignoring a typo. Blank must mean ABSENT rather than zero, the same trap
+ * `recoveryMarginFraction` documents.
+ */
+export function memoryContextBudget(): number | null {
+	const set = process.env.WARDEN_CONTEXT_BUDGET?.trim();
+	if (!set) return null;
+	const raw = Number(set);
+	return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
 export function effectiveRent(contextCost: number): number {
 	return (
 		contextCost + (contextCost * CACHE_CREATE_MULTIPLIER) / sessionsPerWeek()

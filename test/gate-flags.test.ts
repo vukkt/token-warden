@@ -15,6 +15,7 @@ import type { TaskSummary } from "../src/bench.js";
 import { summarizeTask } from "../src/bench.js";
 import { assessDelta } from "../src/select.js";
 import {
+	memoryContextBudget,
 	moderateVarianceEnabled,
 	onlineFdrAlpha,
 	onlineFdrEnabled,
@@ -169,5 +170,29 @@ describe("assessDelta with variance moderation enabled", () => {
 		// One run a side leaves nothing to moderate; the gate must stand down
 		// rather than invent a band from a fitted prior.
 		expect(assessDelta(one, two, 25).standardError).toBeNull();
+	});
+});
+
+describe("WARDEN_CONTEXT_BUDGET", () => {
+	afterEach(() => {
+		delete process.env.WARDEN_CONTEXT_BUDGET;
+	});
+
+	it("is null unless set to a positive number", () => {
+		expect(memoryContextBudget()).toBeNull();
+		// Zero is REJECTED rather than clamped: a budget of 0 would compile an
+		// empty MEMORY.md, silently discarding every rule the operator paid to
+		// measure. That is a far worse failure than ignoring a typo. Blank must
+		// mean ABSENT rather than zero -- Number("") is 0, the trap
+		// recoveryMarginFraction documents.
+		for (const bad of ["0", "-100", "abc", "", "   "]) {
+			process.env.WARDEN_CONTEXT_BUDGET = bad;
+			expect(memoryContextBudget()).toBeNull();
+		}
+	});
+
+	it("reads a positive budget", () => {
+		process.env.WARDEN_CONTEXT_BUDGET = "500";
+		expect(memoryContextBudget()).toBe(500);
 	});
 });

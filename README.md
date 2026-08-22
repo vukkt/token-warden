@@ -222,10 +222,12 @@ Stated plainly, because the project's only real claim is that it does not overst
   waste is the open question, and it is still open.
 - **Only work routed through a measurable agent can be learned from.** Distillation is gated
   on the agent having a golden suite, so main-thread sessions never produce a candidate.
-- **The packer is implemented but not yet wired.** `src/knapsack.ts` is correct and its bound
-  is verified, but the similarity function that would let it detect near-duplicate rules
-  needs a measurement of real pairwise rule overlap that nobody has run. Until then it
-  degrades to an ordinary knapsack, which is the honest default.
+- **The packer runs as an ordinary knapsack, not a submodular one.** `src/knapsack.ts` is
+  wired into memory compilation behind `WARDEN_CONTEXT_BUDGET` (unset = unbounded, and
+  byte-identical to before). But the similarity function that would let it detect
+  near-duplicate rules needs a measurement of real pairwise rule overlap that nobody has
+  run, so it defaults to assuming rules are independent. Inventing a redundancy structure
+  the data does not support is exactly the unmeasured claim this project exists to refuse.
 - **The gate-loosening result rests on one agent's replicate pool** — `sql`, three tasks, two
   runs a side. The direction is robust across nine parameter cells; the exact optimum is not.
 - The rule-compression experiment is **closed as unconfirmable**, not as a win: three token

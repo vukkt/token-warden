@@ -556,6 +556,102 @@ describe("selectForAgent", () => {
 		expect(memory).toContain("Prefer Glob over find.");
 	});
 
+	/**
+	 * The knapsack packer, end to end through the real compile path.
+	 *
+	 * v1.0.0 loosened the admission gate on the finding that false positives are
+	 * ~191x cheaper than false negatives WHILE CONTEXT IS FREE. The packer is the
+	 * counterweight for when it is not, so it needs a behavioural test rather
+	 * than only the unit tests on knapsack.ts.
+	 */
+	describe("context budget", () => {
+		function seedActive(body: string, cost: number, delta: number): number {
+			const id = insertRule(db, {
+				agent,
+				body,
+				contextCost: cost,
+				sourceRun: null,
+				createdAt: new Date().toISOString(),
+			});
+			decideRule(db, id, "active", delta, "earned", new Date().toISOString());
+			return id;
+		}
+
+		afterEach(() => {
+			delete process.env.WARDEN_CONTEXT_BUDGET;
+		});
+
+		it("compiles every active rule when no budget is set", () => {
+			seedActive("Rule A: grep before reading.", 30, 9000);
+			seedActive("Rule B: prefer Glob over find.", 30, 8000);
+			seedActive("Rule C: batch independent reads.", 30, 7000);
+
+			compileActiveMemory(db, agent);
+			const memory = readFileSync(memoryFilePath(agent), "utf8");
+			expect(memory.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(
+				3,
+			);
+		});
+
+		it("keeps the highest-saving rules that fit and drops the rest", () => {
+			seedActive("Rule A: grep before reading.", 30, 9000);
+			seedActive("Rule B: prefer Glob over find.", 30, 8000);
+			seedActive("Rule C: batch independent reads.", 30, 7000);
+
+			// Room for two of the three 30-token rules.
+			process.env.WARDEN_CONTEXT_BUDGET = "60";
+			compileActiveMemory(db, agent);
+
+			const memory = readFileSync(memoryFilePath(agent), "utf8");
+			expect(memory).toContain("Rule A");
+			expect(memory).toContain("Rule B");
+			expect(memory).not.toContain("Rule C");
+		});
+
+		it("forces a protected rule in even when its saving is worst", () => {
+			const cheap = seedActive("Rule A: grep before reading.", 30, 9000);
+			expect(cheap).toBeGreaterThan(0);
+			const poor = seedActive("Rule P: always state a plan.", 30, 1);
+			db.prepare("UPDATE rules SET protected = 1 WHERE id = ?").run(poor);
+
+			process.env.WARDEN_CONTEXT_BUDGET = "30";
+			compileActiveMemory(db, agent);
+
+			// One slot, and the protected rule takes it despite being worth ~nothing
+			// on tokens -- protection is a claim about the solution set, not about
+			// a rule's individual merit.
+			const memory = readFileSync(memoryFilePath(agent), "utf8");
+			expect(memory).toContain("Rule P");
+			expect(memory).not.toContain("Rule A");
+		});
+
+		it("preserves ledger order rather than emitting greedy's selection order", () => {
+			seedActive("Rule A: cheapest to carry.", 10, 100);
+			seedActive("Rule B: the big winner.", 40, 9000);
+			seedActive("Rule C: middling.", 20, 500);
+
+			const bulletsOf = () =>
+				readFileSync(memoryFilePath(agent), "utf8")
+					.split("\n")
+					.filter((l) => l.startsWith("- "));
+
+			// The ledger's own order is getActiveRules' ORDER BY measured_delta
+			// DESC, id ASC -- deliberately NOT asserted as a literal here, so this
+			// keeps testing preservation if that ordering is ever revised.
+			compileActiveMemory(db, agent);
+			const unbudgeted = bulletsOf();
+
+			// A budget that fits everything must change nothing at all: same rules,
+			// same order. Greedy would have emitted them by density (B, C, A), and
+			// a memory file that reshuffles on every recompile is a diff nobody
+			// can review.
+			process.env.WARDEN_CONTEXT_BUDGET = "70";
+			compileActiveMemory(db, agent);
+			expect(bulletsOf()).toEqual(unbudgeted);
+			expect(unbudgeted).toHaveLength(3);
+		});
+	});
+
 	it("rolls back the whole verdict when the receipt write fails", () => {
 		// The probation flag, the verdict and the receipt are one fact about a
 		// rule: a partial write is the inconsistency the receipt ledger exists to
