@@ -1705,3 +1705,69 @@ applied it at the wrong stage.
 LORD++ were both correct, both tested, and both measured what they claimed --
 they were simply answering a question this project should not be asking. The
 result is the artifact worth keeping; the code was not.
+
+## Successive Halving (2026-08): a theorem with no room to work
+
+Theorem III of the v1.0.0 spec was Successive Halving (Karnin, Koren & Somekh
+2013): split a measurement budget into `ceil(log_eta n)` rounds, divide each
+round's share among survivors, keep the best `1/eta`. Best-arm identification at
+`O(H_2 log n)` against `O(n * H_1)` for uniform allocation.
+
+It was implemented, tested, and **never wired**. Measuring what it would buy
+before restructuring the gate around it is what closed the question.
+
+### `n` is capped at 3, and the theorem needs `n` large
+
+`selectForAgent` calls `listCandidates(db, agent, MAX_CANDIDATES_PER_INVOCATION)`
+with the cap at 3. The advantage over uniform allocation at that size:
+
+| candidates | budget (run-units/side) | winner depth | uniform depth | gain |
+| --- | --- | --- | --- | --- |
+| 3 | 9 (today's default: 3 x 3 runs) | 3 | 3 | **none** |
+| 3 | 12 | 5 | 4 | +1 |
+| 3 | 18 | 7 | 6 | +1 |
+| 3 | 24 | 10 | 8 | +2 |
+| 8 | 24 | 7 | 3 | +4 (2.3x) |
+| 16 | 64 | 15 | 4 | +11 (3.8x) |
+
+At the configuration this plugin actually runs -- three candidates, three runs a
+side -- **the gain is exactly zero**. The schedule `[[3,1],[2,2]]` gives the
+winner the same 3 runs uniform does, having spent 7 of the 9 units to get there.
+
+Screening MORE candidates for the same spend is the other framing, and it is
+almost as thin: a budget of 9 stretches to 4 candidates, not 8. One extra
+candidate per invocation, with the winner's evidence unchanged.
+
+### What it would have cost
+
+Wiring it means restructuring the selector from "decide each candidate fully, in
+sequence" to "interleave rounds across candidates" -- on `select.ts`, the
+highest-consequence path in the repository. And it introduces false negatives by
+construction: a good rule that measures badly in round 1 is cut before it can
+prove itself, which the module's own tests demonstrated rather than hid.
+
+A substantial change to the gate, for zero measured gain at the operating point.
+`src/halving.ts` and its 22 tests are deleted.
+
+### It is worth reviving if the cap ever rises
+
+The theorem is not wrong; it has no room to work here. Above roughly eight
+candidates per invocation the advantage reaches 2.3x and keeps growing. If
+`MAX_CANDIDATES_PER_INVOCATION` is ever raised -- because discovery throughput
+becomes the binding constraint rather than discovery cost -- this is the right
+tool and the git history has a correct, tested implementation of it.
+
+### A bug it surfaced on the way out
+
+The measurement that killed it also found the module was wrong. When a round
+could not afford one run per surviving arm, `halvingSchedule` skipped EMITTING
+that round but still narrowed the field, so `halvingSchedule(7, 9)` returned a
+plan over 2 arms with five discarded on no measurement at all -- and
+`halvingSchedule(3, 5)` did the same at the realistic pool size. All twelve
+existing tests passed throughout; the closest one checked that every emitted
+round was well-formed, and never that the emitted rounds covered the arms given.
+
+It was fixed and pinned with two regression tests (verified to fail against the
+old implementation) in the commit before this one, so the deleted implementation
+is a correct one. A negative result about a broken implementation would not have
+been a result.

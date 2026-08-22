@@ -31,16 +31,46 @@ it now compares the shipped confidence multiple against any other via
 `--compare-z`, on identical draws. Verified still reproducing the decision it
 justified (z=1.5 nets 8,845 tok/run against z=2's 8,191 at overlap 0.5).
 
-**Three theorems remain**, and the docs say three rather than four: Neyman
-allocation (`select.ts`, shipped v0.24.0), Successive Halving (`halving.ts`,
-implemented but not wired), and the submodular knapsack (`knapsack.ts`, wired
-into memory compilation behind `WARDEN_CONTEXT_BUDGET`).
+**Two theorems remain**, and the docs say two rather than four: Neyman
+allocation (`select.ts`, shipped v0.24.0) and the submodular knapsack
+(`knapsack.ts`, wired into memory compilation behind `WARDEN_CONTEXT_BUDGET`).
 
 Coverage floor re-baselined again for the same composition reason: deleting two
 well-covered pure modules moved global lines 96.07 -> 95.86, so that floor goes
 96 -> 95. Nothing became less tested.
 
-src 10.5k -> 9.9k lines, 28 -> 26 modules, 1036 -> 970 tests.
+### Deleted Successive Halving too, for having no room to work
+
+`src/halving.ts` is removed after measuring what wiring it would buy. At
+`MAX_CANDIDATES_PER_INVOCATION = 3` and the default three runs a side, the
+schedule gives the winner the SAME 3 runs uniform allocation does -- zero gain,
+in exchange for restructuring the selector from "decide each candidate in
+sequence" to "interleave rounds across candidates" and accepting false negatives
+by construction. Its advantage only reaches 2.3x above roughly eight candidates,
+which this plugin never produces.
+
+Measuring it first surfaced a real defect, fixed and pinned in its own commit
+before the deletion: when a round could not afford one run per surviving arm,
+`halvingSchedule` skipped emitting that round but still narrowed the field, so
+`halvingSchedule(7, 9)` planned over 2 arms with five discarded on no
+measurement -- and `halvingSchedule(3, 5)` did the same at the realistic pool
+size. All twelve existing tests passed throughout, because the closest one
+checked that every emitted round was well-formed and never that the emitted
+rounds covered the arms it was given. A negative result about a broken
+implementation would not have been a result.
+
+### Dropped 21 gratuitous exports and guarded against their return
+
+50 declarations were exported while nothing outside their own file could reach
+them; knip could not see any of it, because `ignoreExportsUsedInFile` suppresses
+exactly the case of an internal helper. 29 were restored -- a type appearing in
+an exported signature must stay nameable -- and 21 dropped. 291 -> 270 exports.
+
+The guard added for it took three attempts and only counts because the third was
+watched to FAIL: the first exempted every value by matching its own declaration,
+and the second never landed on disk because of an escaping mismatch.
+
+src 10.5k -> 9.7k lines, 28 -> 25 modules, 1036 -> 950 tests.
 
 ## v1.0.0
 

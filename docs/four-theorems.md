@@ -112,14 +112,14 @@ Each attacks a measured, documented weakness. Each is a named published result
 with a proof I did not invent.
 
 ```
-  allocate            spend              pack
-  Neyman        ->    Successive   ->    submodular
-  allocation          Halving            knapsack
-  (within a           (across            (cuts
-   candidate)          candidates)        redundancy)
+  allocate      ->    pack
+  Neyman              submodular
+  allocation          knapsack
+  (within a           (cuts
+   candidate)          redundancy)
 ```
 
-**THIS SECTION OPENED WITH FOUR AND ENDS WITH THREE.** The lineup is recorded as
+**THIS SECTION OPENED WITH FOUR AND ENDS WITH TWO.** The lineup is recorded as
 it actually went rather than quietly rewritten, because the failures are the
 most informative thing here.
 
@@ -130,10 +130,10 @@ most informative thing here.
 | decide | Benjamini-Hochberg | **wrong object** — controls a pool, the multiplicity is a stream |
 | decide (retry) | LORD++ online FDR | **implemented, measured, rejected** |
 | allocate | Neyman allocation | shipped in v0.24.0, still the one clear win |
-| spend | Successive Halving | implemented, not yet wired |
+| spend | Successive Halving | **implemented, measured, rejected** -- zero gain at n=3 |
 | pack | submodular knapsack | implemented and wired behind a context budget |
 
-The two rejected modules were **deleted from the tree** after the fact. Keeping
+The three rejected modules were **deleted from the tree** after the fact. Keeping
 correct-but-unused code was itself the bloat this rework existed to remove, and
 the results they produced live on in FINDINGS.md, which is where a result
 belongs. The sections below are kept as the record of what was tried and why it
@@ -339,7 +339,7 @@ per-candidate p-value input rather than the decision itself.
 > `src/fdr.ts` was then DELETED. It answered a question this project should not
 > be asking, and the answer is preserved in FINDINGS.md.
 
-### III. Successive Halving — the allocator (`src/halving.ts`)
+### III. Successive Halving — REMOVED (`src/halving.ts`, deleted)
 
 **Theorem** (Karnin, Koren & Somekh 2013; Jamieson & Talwalkar 2016). Given a
 budget `B` over `n` arms, halving the surviving set each round and splitting the

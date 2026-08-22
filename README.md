@@ -7,15 +7,14 @@
 **Agent memory is charged rent. A rule stays only if it proves, on a frozen benchmark, that
 it saves more tokens than it costs to carry.**
 
-That is the whole idea. Everything below is either the loop that enforces it, the three
-theorems that make the measurement affordable, or the results — including the two theorems
-that were implemented, measured, and thrown away.
+That is the whole idea. Everything below is either the loop that enforces it, the two
+theorems that survived measurement, or the record of the three that did not.
 
 ```text
-  version    1.0.0             tests        970 across 38 files
-  license    MIT               coverage    95.9% lines, CI-enforced floor
-  source     26 modules        commands    6
-              9.9k lines       built       2026-06 to 2026-08
+  version    1.0.0             tests        950 across 37 files
+  license    MIT               coverage    95.8% lines, CI-enforced floor
+  source     25 modules        commands    6
+              9.7k lines       built       2026-06 to 2026-08
 ```
 
 ---
@@ -58,38 +57,37 @@ Six commands, and that is the entire surface:
 
 ---
 
-## Three theorems
+## Two theorems, and three that did not survive
 
 The hard part is not the loop. It is that the measurement is expensive and noisy: the
 standard error on a suite runs around **5,500 tokens** against a bar around **54**. A
 signal-to-noise ratio of 1:100 is what every design decision here is really about.
 
-Three published results carry the weight. Each is a small pure module whose guarantee is
-*checked in tests*, not cited in a comment.
+Four proven results were proposed for that problem. All four were implemented and measured
+against the recorded data. **Two earned their place:**
 
 | stage | theorem | what it buys |
 |---|---|---|
 | **allocate** | Neyman (1934), optimal stratified allocation | spends runs where the variance is, not uniformly |
-| **spend** | Successive Halving — Karnin, Koren & Somekh (2013) | budget concentrates geometrically on live candidates |
 | **pack** | submodular greedy under a knapsack — Khuller, Moss & Naor (1999) | stops near-duplicate rules each passing a per-item bar |
 
 The knapsack's `(1-1/e)/2` bound is verified against brute-force optima over 800 random
-instances. Successive Halving's schedule is proven never to exceed its budget, and its
-false-negative risk is pinned by a test that *demonstrates* the true best arm being
-eliminated under heavy noise rather than hiding it.
+instances rather than cited in a comment.
 
-**It started as four.** The fourth slot — false-discovery control — was implemented twice,
-measured twice, and rejected twice. Full derivations and every correction along the way:
-**[docs/four-theorems.md](docs/four-theorems.md)**.
+**The other three were deleted, and that is the more useful half of this project.** A
+codebase that ships four proven algorithms proves it can copy from a paper. One that
+implements four, measures them against its own data, and keeps the two that pay has done
+the thing it claims to do for memory rules — to itself. Full derivations and every
+correction: **[docs/four-theorems.md](docs/four-theorems.md)**.
 
 ---
 
 ## What the measurements said
 
-This is the part worth reading. **Two of the four proposed theorems were implemented,
-measured, rejected, and then deleted from the tree** — and the one gate change that shipped
-goes the opposite way from five versions of prior work. The code is gone; the evidence is
-not, which is the right way round.
+This is the part worth reading. **Three of the four proposed theorems were implemented,
+measured, rejected, and deleted** — and the one gate change that shipped goes the opposite
+way from five versions of prior work. The code is gone; the evidence is not, which is the
+right way round.
 
 **Variance moderation (Smyth 2004) was rejected.** Replacing each task's
 2-degree-of-freedom sample variance with an empirical-Bayes posterior is a strictly better
@@ -130,9 +128,20 @@ The design the evidence supports is the inverse of what was built: **permissive 
 strict at the packer.** Scarcity logic belongs where the scarcity actually is — the context
 window — not at the admission test.
 
-Both modules were then deleted. A correct implementation was needed to make the negative
-result trustworthy; once the result was recorded, correct-but-unused code is exactly the
-bloat this release existed to remove.
+**Successive Halving was rejected for having no room to work.** It is correct and it is
+the right tool at scale — above ~8 candidates its advantage reaches 2.3x. But
+`MAX_CANDIDATES_PER_INVOCATION` is 3, and at three candidates with three runs a side the
+schedule gives the winner **exactly the same evidence uniform allocation does**. Zero gain,
+in exchange for restructuring the gate and accepting false negatives.
+
+Measuring it also found it was *wrong*: when a round could not afford one run per arm it
+skipped that round while still narrowing the field, so seven arms became a plan over two
+with five discarded on no measurement at all. Twelve tests passed throughout. It was fixed
+and pinned before being deleted — a negative result about a broken implementation is not a
+result.
+
+All three deletions follow the same rule: a correct implementation is what makes a negative
+result trustworthy, and once the result is recorded the code has no further job.
 
 All of it, with the sweeps: **[FINDINGS.md](FINDINGS.md)**.
 
@@ -186,8 +195,8 @@ The measurement discipline is the product, so the codebase is held to it.
 
 | | |
 |---|---|
-| **Tests** | 970 across 38 files. 15.7k lines of test against 9.9k of source. |
-| **Coverage** | 95.9% lines, 94.7% statements, 96.5% functions, 89.1% branches, behind a floor CI fails on. |
+| **Tests** | 950 across 37 files. 15.6k lines of test against 9.7k of source. |
+| **Coverage** | 95.8% lines, 94.7% statements, 96.4% functions, 89.1% branches, behind a floor CI fails on. |
 | **Pipeline** | Staged: quality gates test, fixture and coverage, which gate validate, which gates release. Actions SHA-pinned, `npm ci`. |
 | **Types** | Strict TypeScript with `noUncheckedIndexedAccess`. Zero `any`, zero `@ts-ignore`, zero non-null assertions. |
 | **Data** | SQLite, 16 versioned migrations applied transactionally under `BEGIN IMMEDIATE`. |
@@ -207,10 +216,10 @@ Four decisions that show the standard better than the metrics do:
   nothing, for 2.2 extra passes — because a one-sided budget cannot cut an error that sums
   both sides. Placing them by Neyman allocation, the house style everywhere else in this
   codebase, was actively worse than spreading them evenly.
-- **It has now rejected three of its own features on measurement**: a tail-robust estimator
-  that raised the false-positive rate, variance moderation, and online FDR. Two of the three
-  were deleted outright once the result was recorded — a negative result needs a correct
-  implementation to be trustworthy, and nothing after that.
+- **It has now rejected four of its own features on measurement**: a tail-robust estimator
+  that raised the false-positive rate, variance moderation, online FDR, and Successive
+  Halving. Three were deleted outright once the result was recorded — a negative result
+  needs a correct implementation to be trustworthy, and nothing after that.
 - **Refactors are proven, not asserted.** Extracting the statistics module was verified by
   fingerprinting 10,960 verdict-path outputs before and after — bit-identical, SHA-256
   matched, before the change was committed.

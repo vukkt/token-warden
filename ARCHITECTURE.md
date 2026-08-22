@@ -89,18 +89,18 @@ the database, or a model.
 
 | Module | Responsibility |
 | --- | --- |
-| `halving.ts` | Successive Halving: a budget schedule across competing candidates, and the elimination rule. Pure — the caller drives the async benchmark. Implemented, not yet wired |
 | `knapsack.ts` | The kept SET under a context budget. Facility-location objective (monotone submodular by construction) with density-greedy plus the best-single-item guard. Wired into `memory.ts` behind `WARDEN_CONTEXT_BUDGET` |
 
-The third theorem, Neyman allocation, is not a module — it lives in
+The other surviving theorem, Neyman allocation, is not a module — it lives in
 `select.ts#allocateTopUpRuns` where it has been since v0.24.0.
 
-Two more were proposed, implemented, measured and REJECTED: empirical-Bayes
-variance moderation (`moderate.ts`) and false-discovery control (`fdr.ts`, both
-Benjamini-Hochberg and LORD++). Both are deleted. A correct implementation was
-needed to make each negative result trustworthy, and once the results were
-recorded in FINDINGS.md the code had no remaining job — correct-but-unused code
-is the bloat v1.0.0 existed to remove. See [docs/four-theorems.md](docs/four-theorems.md).
+THREE MORE WERE PROPOSED, IMPLEMENTED, MEASURED AND REJECTED, and all three are
+deleted: empirical-Bayes variance moderation (`moderate.ts`), false-discovery
+control (`fdr.ts`, both Benjamini-Hochberg and LORD++), and Successive Halving
+(`halving.ts`). A correct implementation is what makes a negative result
+trustworthy; once the result is recorded in FINDINGS.md the code has no
+remaining job, and correct-but-unused code is the bloat v1.0.0 existed to
+remove. See [docs/four-theorems.md](docs/four-theorems.md).
 
 ## Data model (`~/.token-warden/warden.db`, SQLite)
 
