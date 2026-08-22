@@ -1,5 +1,95 @@
 # Changelog
 
+## v1.0.0
+
+The plugin is reduced to its thesis, and the mathematics that thesis depends on
+is made explicit, implemented, and MEASURED. Two of the four theorems were
+rejected by the project's own calibration harness; the one gate change that
+survived reverses five versions of prior instinct.
+
+### Reduced: 45 modules to 28, 22 commands to 6
+
+Three deletions, each a leaf that required no surgery on the core -- which is
+itself the argument that they were separate programs sharing a repository.
+
+- **The RAG sub-product** (retrieve, corpus, extract, interrogate, ragbench):
+  2,404 lines of source, 1,755 of test. BM25 retrieval, a chunking corpus, a
+  fact extractor and a grounded-answer benchmark are a complete second product,
+  and the thesis sentence never refers to any of it. `benchmarks/finance/` goes
+  with it: the freeze on that directory exists to keep GATE measurements
+  comparable, and no verdict ever read the finance corpus.
+- **The A/B benchmarking suite** (modelbench, promptbench, evolve, compare):
+  1,350 lines. Comparing models and prompts is useful and is not "does this
+  memory rule earn its context rent".
+- **The team ledger and ten advisory diagnostics** (share, adopt,
+  verify-ledger, cohort, confirm, contradict, compress, dogfood, health,
+  protect, sample-tasks, scope, and the `/warden-attribute` report). Each was
+  individually justified, and none can evict a rule. Ten commands producing
+  advice nothing consumes are ten surfaces to maintain and explain.
+
+`attribute.ts` was SPLIT rather than deleted -- its classification half feeds
+the Stop hook and the status dashboard reads the result, so that half survives
+as `tool-cost.ts`. `protect.ts` was removed with its column and gate handling
+left intact: a protected rule is an exception to the thesis, and protection has
+a better home as a forced-inclusion constraint in the knapsack. The unadopted
+brand vocabulary in `types.ts` (164 lines to 51) went with it, since its only
+adoption site was in a removed module.
+
+### Four theorems, implemented with their guarantees tested
+
+`src/halving.ts` (Successive Halving; Karnin, Koren & Somekh 2013),
+`src/knapsack.ts` (submodular greedy under a knapsack; Khuller, Moss & Naor
+1999), `src/fdr.ts` (Benjamini-Hochberg 1995 and LORD++ online FDR),
+`src/moderate.ts` (empirical-Bayes variance moderation; Smyth 2004, with
+digamma/trigamma and a bisection trigamma inverse).
+
+The guarantees are verified rather than cited: the knapsack's `(1-1/e)/2` bound
+is checked against brute-force optima over 800 random instances, BH's FDR
+control is measured by Monte Carlo, and Successive Halving's false-negative risk
+is pinned by a test that demonstrates the true best arm being eliminated under
+heavy noise rather than hiding it.
+
+### Two theorems measured and REJECTED
+
+- **Variance moderation.** A strictly better variance estimator -- more than
+  halving log-MSE even at three tasks -- that makes the gate strictly worse:
+  false positives flat (8.9% to 9.2%), power down at every effect size. It is
+  fitted on `log s^2` and so biased on the natural scale, running 1.84x high at
+  df=1, widening the band 35%. Minimising estimation error and maximising
+  decision quality are different objectives.
+- **Online FDR.** Does exactly what it promises -- a 4x cut in false discoveries
+  -- and loses on tokens anyway: 14,218 net tokens/run for the shipped gate at
+  55.1% FDR, against 5,588 for LORD++ at 13.3%. A worthless rule costs its rent
+  (~25 tok/run); a missed real rule forfeits its whole saving (~4,769 tok/run).
+  False positives are ~191x cheaper than false negatives.
+
+Both stay in the tree behind default-off flags, because a negative result is
+only trustworthy if the implementation was correct.
+
+### The default confidence multiple: 2 -> 1.5
+
+The one gate change that passed calibration, reversing v0.29.0. On the recorded
+`sql` pool it buys 11.2 points of power for 0.9 points of false positives, with
+overlapping intervals. Every statistical change this project had made pushed the
+gate stricter; it was already about 200x too strict for its own economics.
+
+Four test files now name `z=2` explicitly instead of inheriting it, because they
+pin figures PUBLISHED at that value. A published result belongs to the
+parameters it was measured under.
+
+### Also
+
+- `validation/stream-calibration.ts`: evaluates a sequential policy as a
+  sequence, which the existing harness structurally cannot, and reports NET
+  TOKENS alongside the error rates.
+- CI coverage had been red since the first cull commit -- the local gate ran
+  five checks and `npm run coverage` is a sixth. Statements floor re-baselined
+  96 to 94 for the composition change (deleting 14k lines of well-tested pure
+  logic stopped diluting the spawn-heavy `bench.ts`), with the reasoning and the
+  failed per-file-threshold attempt recorded in `vitest.config.ts`.
+- README rewritten around the theorems; an orphaned economics table still
+  showing the retracted $20/developer/year figures was removed.
+
 ## Unreleased
 
 ### The punch list, closed

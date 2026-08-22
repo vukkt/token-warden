@@ -9,6 +9,27 @@ justifies doing it — nothing here ships without a measured proof, per the
 project's core discipline (LLM proposes, deterministic verifier measures, only
 measured survivors persist).
 
+> **v1.0.0 REMOVED MOST OF THE COMMANDS THIS FILE REFERS TO.** The RAG subtree,
+> the A/B benchmarking suite, the team ledger and ten advisory diagnostics were
+> deleted — 22 commands down to 6. Entries below naming `/warden-cohort`,
+> `/warden-dogfood`, `/warden-ragbench`, `/warden-modelbench`,
+> `/warden-promptbench`, `/warden-evolve`, `/warden-attribute`,
+> `/warden-share`, `/warden-adopt`, `/warden-protect`, `/warden-scope`,
+> `/warden-health`, `/warden-compress`, `/warden-confirm`,
+> `/warden-contradict` or `/warden-sample-tasks` describe work that WAS shipped
+> and has since been withdrawn. They are left in place because the reasoning
+> that motivated each is still the record of how this project thought, and
+> because several would be the right thing to rebuild if the open question in
+> section 1 ever resolves. See [docs/four-theorems.md](docs/four-theorems.md)
+> section 2 for why they went.
+>
+> **The v1.0.0 measurements also invalidate this file's central instinct.**
+> Multiple entries below propose making the gate STRICTER. The stream
+> calibration showed the gate was already about 200x too strict for its own
+> economics, and the default confidence multiple has moved 2 -> 1.5. Treat any
+> "tighten the gate" item here as superseded until it is re-argued against
+> net tokens rather than against false-positive rate.
+
 ## 1. The central open question
 
 The engine is validated end-to-end on real tokens (~9.3M in the 2026-06 burn,

@@ -51,7 +51,7 @@ output) overwrites the agent's `MEMORY.md`, which the agent reads next session.
 | `Stop` / `SubagentStop` hooks | `hooks/hooks.json` -> `src/collect.ts` | Record session cost; trigger distillation |
 | `SessionStart` hook | `src/notify.ts` | One-line nudge when candidates are pending (silent otherwise) |
 | `PreToolUse` hook (`SendMessage`) | `src/gate.ts` | Inter-agent approval gate (fails open) |
-| 20 slash commands | `commands/*.md` | `/warden-status`, `/warden-select`, `/warden-receipt`, etc. |
+| 6 slash commands | `commands/*.md` | `/warden-status`, `/warden-power`, `/warden-bench`, `/warden-select`, `/warden-receipt`, `/warden-cost` |
 | 4 bundled subagents | `agents/{frontend,backend,sql,testing}.md` | The only agents with golden suites, so the only ones whose rules can be measured |
 
 Work done on the main thread is cost-measured but never distilled: with no
@@ -70,33 +70,33 @@ exactly like `sql` or `backend`.
 | `distill.ts` | p75 trigger, one model call (sonnet default, best-of-K), strict-JSON candidate rules, trigram dedupe |
 | `bench.ts` | Golden-suite runner on the frozen fixture; `runSuite`, baselines, suite hash |
 | `select.ts` | Variance-aware keep/evict verdict, round-robin re-audit, compile `MEMORY.md` |
-| `compare.ts` | Shared A/B comparison rendering (used by model/prompt benchmarking) |
-| `modelbench.ts` / `promptbench.ts` / `evolve.ts` | Model-migration, prompt A/B, and automated prompt-evolution benchmarking |
-| `attribute.ts` | Per tool/skill/MCP cost decomposition (`/warden-attribute`) |
 | `receipt.ts` | Per-rule evidence card from `rule_receipts` (`/warden-receipt`) |
-| `cohort.ts` | Production-cohort validation (`/warden-cohort`): real-work cost before vs. after rules, with a confidence verdict — the out-of-fixture signal ([design](docs/production-cohort-validation.md)) |
-| `share.ts` / `adopt.ts` / `verify-ledger.ts` | Team rule ledgers: export, re-measured import, offline CI gate |
+| `power.ts` | Burn planner: how many runs a given effect needs before you spend on it |
+| `cost.ts` / `pricing.ts` | The dollar lens. Advisory only — the keep/evict gate is denominated in TOKENS and never reads a price |
+| `tool-cost.ts` | Classify tool/skill/MCP calls and roll up their footprint. Written by the Stop hook, read by the status dashboard |
 | `status.ts` / `notify.ts` | Status dashboard and the SessionStart pending-candidate nudge |
-| `dogfood.ts` | Dogfood-window diagnostic (`/warden-dogfood`): collection liveness, real-work sessions per agent, which agents are INERT (recorded but outside `knownAgents()`, so never distillable), distance to the p75 trigger, one next action |
 | `gate.ts` | Inter-agent `SendMessage` approval prompt (sanitized, fails open) |
 | `sanitize.ts` | Single presentation-security chokepoint (control/ANSI stripping) |
 | `logfile.ts` | Single log sink: rotate at 1 MiB, sanitize, append. Every `*.log` next to the ledger goes through it |
 | `db.ts` / `types.ts` | SQLite access, versioned migrations, shared types |
 | `rules.ts` / `stats.ts` / `format.ts` / `model-call.ts` / `memory.ts` / `cli.ts` | Shared vocabulary: what a rule is, the estimators and gate constants, output formatting, the `claude -p` envelope, memory-file IO, the CLI entry convention |
 
-### Context sources (v0.42.0)
+### The four theorems (v1.0.0)
 
-A memory rule is one kind of context that must pay for itself. A retrieved
-document chunk is another. These modules make the second kind measurable by the
-same gate, and are independent of the rule pipeline above.
+Pure, dependency-free modules holding the mathematics the gate depends on. Each
+carries its guarantee as a test rather than as a claim, and none of them touches
+IO, the database, or a model.
 
 | Module | Responsibility |
 | --- | --- |
-| `corpus.ts` | Ingest md/txt/csv/html; chunk on the document's own structure, not fixed windows; every chunk carries a char span so a citation is checkable. Deterministic and model-free — it is the ground truth extraction is verified against |
-| `retrieve.ts` | Retrieval strategies as measurable configs: `full` (mega-prompt), `bm25`, `section`. Lexical by choice — exact periods decide financial answers, and it stays deterministic and zero-token |
-| `extract.ts` | Structured extraction behind a groundedness gate: every fact cites a chunk and quotes the span containing its value, checked mechanically without a model. Failures are rejected and counted |
-| `interrogate.ts` | The multi-hop arm, bounded at 4 hops — for questions whose second query depends on the first result |
-| `ragbench.ts` | The architecture comparison (`/warden-ragbench`). Zero tokens by default; `--yes` runs it end to end |
+| `fdr.ts` | False-discovery control: Benjamini-Hochberg over a fixed pool, LORD++ over the unbounded decision stream, plus the gate's one-sided p-value. Behind `WARDEN_ONLINE_FDR`, default OFF — measured and rejected, see FINDINGS.md |
+| `halving.ts` | Successive Halving: a budget schedule across competing candidates, and the elimination rule. Pure — the caller drives the async benchmark |
+| `knapsack.ts` | The kept SET under a context budget. Facility-location objective (monotone submodular by construction) with density-greedy plus the best-single-item guard |
+| `moderate.ts` | Empirical-Bayes variance moderation (Smyth 2004) with digamma/trigamma. Behind `WARDEN_MODERATE_VARIANCE`, default OFF — measured and rejected |
+
+Two of these are default-off because calibration rejected them. They stay in the
+tree because a negative result is only trustworthy if the implementation was
+correct, and both are tested to the same standard as the shipped code.
 
 ## Data model (`~/.token-warden/warden.db`, SQLite)
 
