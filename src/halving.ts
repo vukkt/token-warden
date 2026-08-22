@@ -81,10 +81,19 @@ export function halvingRounds(n: number, eta = 2): number {
  *
  * Each round receives an equal share of the budget and splits it evenly among
  * that round's survivors, so runs-per-arm grows geometrically as the field
- * narrows. Rounds that cannot afford even one run per surviving arm are
- * DROPPED rather than emitted with `runsPerArm: 0` -- a round that measures
- * nothing cannot rank anything, so eliminating on its output would be
- * discarding arms at random.
+ * narrows.
+ *
+ * INFEASIBLE PLANS RETURN AN EMPTY SCHEDULE. If the first round cannot give
+ * every arm at least one run, there is no valid plan at this `n` and `budget`,
+ * and the caller must reduce the field or raise the budget.
+ *
+ * An earlier version instead SKIPPED unaffordable rounds while still narrowing
+ * the field, which produced schedules like `[[2, 1]]` for seven arms: five arms
+ * eliminated without ever being measured. That is precisely the "discarding
+ * arms at random" this docstring used to warn against while the code did it.
+ * Only the FIRST round can be unaffordable -- the per-round share is fixed and
+ * the field only shrinks, so runs-per-arm is non-decreasing across rounds --
+ * which is why one check at the top is sufficient.
  *
  * The returned schedule never exceeds `budget` in total.
  */
@@ -96,21 +105,21 @@ export function halvingSchedule(
 	if (n <= 0 || budget <= 0) return [];
 	const rounds = halvingRounds(n, eta);
 	const perRound = budget / rounds;
+	// Every arm must be measured before any arm is eliminated.
+	if (Math.floor(perRound / n) < 1) return [];
 
 	const schedule: HalvingRound[] = [];
 	let arms = n;
 	let spent = 0;
 	for (let r = 0; r < rounds && arms >= 1; r++) {
-		const runsPerArm = Math.floor(perRound / arms);
-		if (runsPerArm >= 1) {
-			// Never let accumulated flooring push the plan over the budget.
-			const affordable = Math.floor((budget - spent) / arms);
-			const take = Math.min(runsPerArm, affordable);
-			if (take >= 1) {
-				schedule.push({ arms, runsPerArm: take });
-				spent += take * arms;
-			}
-		}
+		// Never let accumulated flooring push the plan over the budget.
+		const take = Math.min(
+			Math.floor(perRound / arms),
+			Math.floor((budget - spent) / arms),
+		);
+		if (take < 1) break;
+		schedule.push({ arms, runsPerArm: take });
+		spent += take * arms;
 		if (arms === 1) break;
 		arms = Math.max(1, Math.ceil(arms / eta));
 	}

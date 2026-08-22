@@ -86,6 +86,35 @@ describe("halvingSchedule", () => {
 		expect(schedule).toEqual([{ arms: 1, runsPerArm: 10 }]);
 	});
 
+	/**
+	 * THE REGRESSION THIS MODULE ACTUALLY HAD. A schedule must MEASURE every arm
+	 * before it eliminates any. The first version skipped rounds it could not
+	 * afford while still narrowing the field, so `halvingSchedule(7, 9)` returned
+	 * `[[2, 1]]` -- five arms discarded without a single measurement, which is
+	 * the "eliminating at random" the docstring warned against while the code
+	 * did it. Every other test in this file passed throughout.
+	 */
+	it("never starts a schedule with fewer arms than it was given", () => {
+		for (let n = 1; n <= 20; n++) {
+			for (const budget of [1, 2, 3, 5, 8, 9, 13, 21, 40, 100]) {
+				const schedule = halvingSchedule(n, budget);
+				if (schedule.length === 0) continue;
+				expect(
+					schedule[0]?.arms,
+					`n=${n} budget=${budget} began with ${schedule[0]?.arms} arms`,
+				).toBe(n);
+			}
+		}
+	});
+
+	it("returns nothing when the first round cannot measure every arm", () => {
+		// 7 arms and 9 run-units: the opening round can afford floor(3/7) = 0
+		// runs each, so there is no valid plan -- not a plan over 2 arms.
+		expect(halvingSchedule(7, 9)).toEqual([]);
+		expect(halvingSchedule(8, 9)).toEqual([]);
+		expect(halvingSchedule(12, 9)).toEqual([]);
+	});
+
 	it("drops rounds it cannot afford rather than emitting empty ones", () => {
 		// Any emitted round must be able to measure every arm in it; a round
 		// with runsPerArm 0 would rank arms on no data and eliminate at random.
