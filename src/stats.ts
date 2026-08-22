@@ -58,57 +58,6 @@ export function pooledVariance(vectors: number[][]): number | null {
 	return dof > 0 ? sumSq / dof : null;
 }
 
-/**
- * Standard normal CDF, via the Abramowitz & Stegun 7.1.26 rational
- * approximation to erf. Absolute error < 1.5e-7, which is far below anything
- * the gate can resolve: it is applied to a z built from an SE estimated on
- * three runs a side, so the sampling error in z dwarfs the approximation error
- * in Phi by many orders of magnitude.
- *
- * Exists so `fdr.ts` can turn the gate's z-statistics into p-values. Deliberately
- * not a dependency: one closed-form function is cheaper to audit than a
- * numerics package, and this one is textbook.
- */
-export function normalCdf(z: number): number {
-	// erf is odd, so fold to the positive half and mirror.
-	const sign = z < 0 ? -1 : 1;
-	const x = Math.abs(z) / Math.SQRT2;
-	const t = 1 / (1 + 0.3275911 * x);
-	const y =
-		1 -
-		((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) *
-			t +
-			0.254829592) *
-			t *
-			Math.exp(-x * x);
-	return 0.5 * (1 + sign * y);
-}
-
-/**
- * Inverse standard normal CDF (probit): the `z` with `normalCdf(z) = p`.
- *
- * By bisection on `normalCdf`, for the same reason `trigammaInverse` is: a
- * closed-form rational approximation is a second numerical object to verify,
- * and this is called once per verdict. `normalCdf` is strictly increasing, so
- * bracketing is trivial and convergence is guaranteed. 200 halvings of the
- * [-40, 40] bracket resolves far below the precision the caller can use.
- *
- * Clamps to +/-40 outside `(0, 1)`: p = 0 or 1 has no finite z, and returning
- * Infinity would poison a confidence multiple downstream.
- */
-export function normalQuantile(p: number): number {
-	if (!Number.isFinite(p) || p <= 0) return -40;
-	if (p >= 1) return 40;
-	let low = -40;
-	let high = 40;
-	for (let i = 0; i < 200; i++) {
-		const mid = (low + high) / 2;
-		if (normalCdf(mid) < p) low = mid;
-		else high = mid;
-	}
-	return (low + high) / 2;
-}
-
 export function median(xs: number[]): number {
 	const s = [...xs].sort((a, b) => a - b);
 	const mid = Math.floor(s.length / 2);
@@ -247,56 +196,6 @@ export function recoveryStrictness(): number {
  * *harder*, never easier, and answers the "you bust the cache on every change"
  * critique by pricing the bust in rather than ignoring it.
  */
-/**
- * Whether the gate moderates its per-task variance estimates across tasks
- * (`moderate.ts`) instead of using each task's raw sample variance.
- *
- * DEFAULT OFF. The moderated variance is biased by construction, and this
- * repository does not put a biased estimator in the verdict path on the
- * strength of a theorem -- robust-SE looked just as principled in v0.30.0 and
- * the calibration harness measured it raising the false-positive rate from ~3%
- * to ~7%. It ships only if `validation/empirical-calibration.ts` says it helps.
- *
- * Read PER CALL so the calibration harness can A/B it at runtime; a
- * module-level const would silently ignore the flag.
- */
-export function moderateVarianceEnabled(): boolean {
-	return process.env.WARDEN_MODERATE_VARIANCE === "1";
-}
-
-/**
- * Whether promotion thresholds come from the online-FDR procedure
- * (`fdr.ts#lordZ`) rather than the fixed `confidenceZ()`.
- *
- * DEFAULT OFF, pending calibration, on the same terms as every other change to
- * this gate.
- *
- * Read PER CALL so the calibration harness can A/B it at runtime.
- */
-export function onlineFdrEnabled(): boolean {
-	return process.env.WARDEN_ONLINE_FDR === "1";
-}
-
-/**
- * The false-discovery rate the online procedure holds over the whole decision
- * stream.
- *
- * Default 0.10, chosen so the FIRST decision of a fresh stream lands on
- * `z = 2.016` -- the gate's existing `z = 2` to within rounding. A new install
- * therefore behaves as it does today and diverges only as history accumulates,
- * which makes any measured difference attributable to the adaptation rather
- * than to a moved starting point.
- *
- * Values outside `(0, 1)` are rejected rather than clamped, matching
- * `confidenceZ` and `recoveryMarginFraction`: a typo yields the calibrated
- * default instead of a policy nobody measured.
- */
-export function onlineFdrAlpha(): number {
-	const set = process.env.WARDEN_FDR_ALPHA?.trim();
-	const raw = set ? Number(set) : 0.1;
-	return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.1;
-}
-
 /**
  * Token budget the compiled MEMORY.md may occupy, or null for unbounded.
  *

@@ -1,23 +1,20 @@
 /**
  * STREAM CALIBRATION — does online FDR hold its rate on the REAL noise?
  *
- * `empirical-calibration.ts` measures one decision at a time: every trial is
- * independent, and the answer is a per-decision false-positive rate (8.9% on
- * the recorded `sql` pool). That is the right question for a fixed threshold
- * and the WRONG one for LORD++, whose whole claim is about a sequence. A
- * procedure that spends and re-earns alpha-wealth cannot be evaluated by
- * replaying its first decision N times.
+ * `empirical-calibration.ts` measures one decision at a time and reports a
+ * per-decision false-positive rate (8.9% on the recorded `sql` pool). That
+ * number cannot answer the question this project actually has, which is about a
+ * whole memory file accumulated over many decisions: of the rules this agent
+ * ended up carrying, what fraction were noise, and what did the set save?
  *
  * So this harness runs STREAMS. Each trial is a long run of arrivals, some
- * genuinely valuable and some worthless, decided in order, with the alpha-wealth
- * carried forward exactly as `select.ts` carries it. The reported number is the
- * false-discovery proportion over the whole stream: of the rules this agent
- * ended up carrying, what fraction were noise?
+ * genuinely valuable and some worthless, decided in order. It compares the
+ * shipped confidence multiple against any other, and reports NET TOKENS beside
+ * the error rates -- which is what turned "better false-discovery rate" into
+ * "fewer tokens saved" and set the shipped default of z=1.5.
  *
  * Both arms see IDENTICAL draws (common random numbers), so the comparison
- * isolates the decision rule from the sampling. They diverge only in which
- * arrivals they promote -- which is the point, since that divergence is what
- * feeds back into LORD's wealth.
+ * isolates the decision rule from the sampling.
  *
  * Sampling matches empirical-calibration:
  *   - a NULL arrival is a permutation A/A split of one task's replicate pool,
@@ -28,15 +25,15 @@
  * Zero tokens: every "run" is a token total already in the runs table.
  *
  *   npx tsx validation/stream-calibration.ts [--agent <name>] [--db <path>]
- *     [--trials N] [--length N] [--runs N] [--rent N] [--alpha F]
- *     [--true-rate F] [--saving F] [--seed N]
+ *     [--trials N] [--length N] [--runs N] [--rent N] [--compare-z F]
+ *     [--overlap F] [--true-rate F] [--saving F] [--seed N]
  */
 import { pathToFileURL } from "node:url";
 import { numericFlag } from "../src/cli.js";
 import { goldenReplicateRuns, openDb } from "../src/db.js";
-import { lordZ } from "../src/fdr.js";
 import { assertKnownAgent } from "../src/registry.js";
 import { assessDelta } from "../src/select.js";
+import { confidenceZ } from "../src/stats.js";
 import {
 	groupReplicates,
 	promotedAt,
@@ -173,7 +170,6 @@ export function runStreams(
 		length: number;
 		runs: number;
 		rent: number;
-		alpha: number;
 		trueRate: number;
 		saving: number;
 		seed: number;
@@ -189,31 +185,30 @@ export function runStreams(
 		 * net-token optimum becomes finite.
 		 */
 		overlap?: number;
-		/** Confidence multiple for the fixed arm. Omitted means the shipped
+		/** Confidence multiple for the COMPARISON arm. Omitted means the shipped
 		 * `confidenceZ()`; supplied lets a sweep find where the net-token
 		 * optimum actually sits, including below the 1.0 floor that
 		 * `confidenceZ` refuses from the environment. */
-		fixedZ?: number;
+		compareZ?: number;
 	},
 ): ArmResult[] {
-	const lordFdp: number[] = [];
-	const fixedFdp: number[] = [];
-	let lordFound = 0;
-	let lordTrue = 0;
-	let lordMissed = 0;
-	let fixedFound = 0;
-	let fixedTrue = 0;
-	let fixedMissed = 0;
+	const altFdp: number[] = [];
+	const baseFdp: number[] = [];
+	let altFound = 0;
+	let altTrue = 0;
+	let altMissed = 0;
+	let baseFound = 0;
+	let baseTrue = 0;
+	let baseMissed = 0;
 
 	for (let trial = 0; trial < options.trials; trial++) {
 		// One RNG per trial, seeded from the trial index, so both arms replay the
 		// identical arrival sequence and any difference is the decision rule.
 		const rng = lcg(options.seed + trial * 7919);
-		const lordHistory: boolean[] = [];
-		let lordFalse = 0;
-		let lordTotal = 0;
-		let fixedFalse = 0;
-		let fixedTotal = 0;
+		let altFalse = 0;
+		let altTotal = 0;
+		let baseFalse = 0;
+		let baseTotal = 0;
 
 		for (let t = 0; t < options.length; t++) {
 			const arrival = drawArrival(
@@ -225,45 +220,42 @@ export function runStreams(
 				`t${t}`,
 			);
 
-			// LORD arm: threshold from this arrival's position in the stream.
-			const z = lordZ(lordHistory, options.alpha);
-			const lordAssessment = assessDelta(
-				arrival.without,
-				arrival.withRule,
+			// Baseline arm: the shipped gate.
+			const baseKeep = promotedAt(
+				assessDelta(arrival.without, arrival.withRule, options.rent),
 				options.rent,
-				z,
 			);
-			const lordKeep = promotedAt(lordAssessment, options.rent);
-			lordHistory.push(lordKeep);
-			if (lordKeep) {
-				lordTotal += 1;
-				if (arrival.real) lordTrue += 1;
-				else lordFalse += 1;
+			if (baseKeep) {
+				baseTotal += 1;
+				if (arrival.real) baseTrue += 1;
+				else baseFalse += 1;
 			} else if (arrival.real) {
-				lordMissed += 1;
+				baseMissed += 1;
 			}
 
-			// Fixed arm: the shipped gate, same draws.
-			const fixedAssessment = assessDelta(
-				arrival.without,
-				arrival.withRule,
+			// Comparison arm: a different confidence multiple, same draws.
+			const altKeep = promotedAt(
+				assessDelta(
+					arrival.without,
+					arrival.withRule,
+					options.rent,
+					options.compareZ,
+				),
 				options.rent,
-				options.fixedZ,
 			);
-			const fixedKeep = promotedAt(fixedAssessment, options.rent);
-			if (fixedKeep) {
-				fixedTotal += 1;
-				if (arrival.real) fixedTrue += 1;
-				else fixedFalse += 1;
+			if (altKeep) {
+				altTotal += 1;
+				if (arrival.real) altTrue += 1;
+				else altFalse += 1;
 			} else if (arrival.real) {
-				fixedMissed += 1;
+				altMissed += 1;
 			}
 		}
 
-		lordFdp.push(lordTotal === 0 ? 0 : lordFalse / lordTotal);
-		fixedFdp.push(fixedTotal === 0 ? 0 : fixedFalse / fixedTotal);
-		lordFound += lordTotal;
-		fixedFound += fixedTotal;
+		altFdp.push(altTotal === 0 ? 0 : altFalse / altTotal);
+		baseFdp.push(baseTotal === 0 ? 0 : baseFalse / baseTotal);
+		altFound += altTotal;
+		baseFound += baseTotal;
 	}
 
 	// The saving a genuinely valuable arrival carries, in tokens per run: the
@@ -275,28 +267,24 @@ export function runStreams(
 		) / groups.length;
 	const trueSaving = pooledMean * options.saving;
 
-	const fixedLabel =
-		options.fixedZ === undefined
-			? "fixed z=2 (shipped)"
-			: `fixed z=${options.fixedZ}`;
 	return [
 		summarise(
-			fixedLabel,
-			fixedFdp,
-			fixedFound,
-			fixedTrue,
-			fixedMissed,
+			`shipped z=${confidenceZ()}`,
+			baseFdp,
+			baseFound,
+			baseTrue,
+			baseMissed,
 			options.trials,
 			trueSaving,
 			options.rent,
 			options.overlap ?? 1,
 		),
 		summarise(
-			"LORD++ online FDR",
-			lordFdp,
-			lordFound,
-			lordTrue,
-			lordMissed,
+			`compare z=${options.compareZ ?? confidenceZ()}`,
+			altFdp,
+			altFound,
+			altTrue,
+			altMissed,
 			options.trials,
 			trueSaving,
 			options.rent,
@@ -327,13 +315,13 @@ function main(argv: string[]): number {
 	const length = flag("--length", 60);
 	const runs = flag("--runs", 2);
 	const rent = flag("--rent", 25);
-	const alpha = flag("--alpha", 0.1);
 	const trueRate = flag("--true-rate", 0.2);
 	const saving = flag("--saving", 0.1);
 	const seed = flag("--seed", 42);
 	const overlap = flag("--overlap", 1);
-	const fixedZAt = argv.indexOf("--fixed-z");
-	const fixedZ = fixedZAt >= 0 ? numericFlag(argv[fixedZAt + 1]) : undefined;
+	const compareZAt = argv.indexOf("--compare-z");
+	const compareZ =
+		compareZAt >= 0 ? numericFlag(argv[compareZAt + 1]) : undefined;
 
 	const db = openDb(dbPath);
 	const groups = groupReplicates(goldenReplicateRuns(db, agent), runs * 2);
@@ -349,7 +337,7 @@ function main(argv: string[]): number {
 		`agent ${agent} - ${groups.length} tasks - runs ${runs}/side - rent ${rent}\n` +
 			`streams of ${length} arrivals x ${trials} trials - ` +
 			`${(trueRate * 100).toFixed(0)}% of arrivals carry a real ` +
-			`${(saving * 100).toFixed(0)}% saving - alpha ${alpha} - seed ${seed}\n`,
+			`${(saving * 100).toFixed(0)}% saving - seed ${seed}\n`,
 	);
 
 	const results = runStreams(groups, {
@@ -357,12 +345,13 @@ function main(argv: string[]): number {
 		length,
 		runs,
 		rent,
-		alpha,
 		trueRate,
 		saving,
 		seed,
 		overlap,
-		...(fixedZ !== undefined && Number.isFinite(fixedZ) ? { fixedZ } : {}),
+		...(compareZ !== undefined && Number.isFinite(compareZ)
+			? { compareZ }
+			: {}),
 	});
 
 	console.log(
@@ -385,7 +374,7 @@ function main(argv: string[]): number {
 	}
 	console.log(
 		`\nRead: stream FDR is the fraction of KEPT rules that were worthless,\n` +
-			`averaged over trials. The online arm holds it far below the fixed arm.\n` +
+			`averaged over trials.\n` +
 			`\nBUT READ THE LAST COLUMN FIRST. FDR is a proxy, and for this project it\n` +
 			`is a BADLY MISCALIBRATED one: a worthless rule costs only its rent\n` +
 			`(${rent} tok/run) while a missed real rule forfeits its whole saving\n` +
@@ -401,7 +390,8 @@ function main(argv: string[]): number {
 				"en-US",
 			)} tok/run here). False positives are roughly two orders of\n` +
 			`magnitude cheaper than false negatives, so the arm with the WORSE FDR\n` +
-			`can still be the arm that saves more tokens. Judge on NET tok/run.`,
+			`can still be the arm that saves more tokens. Judge on NET tok/run.\n` +
+			`This sweep is what set the shipped default of z=1.5.`,
 	);
 	return 0;
 }

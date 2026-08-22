@@ -81,22 +81,26 @@ exactly like `sql` or `backend`.
 | `db.ts` / `types.ts` | SQLite access, versioned migrations, shared types |
 | `rules.ts` / `stats.ts` / `format.ts` / `model-call.ts` / `memory.ts` / `cli.ts` | Shared vocabulary: what a rule is, the estimators and gate constants, output formatting, the `claude -p` envelope, memory-file IO, the CLI entry convention |
 
-### The four theorems (v1.0.0)
+### The theorems (v1.0.0)
 
 Pure, dependency-free modules holding the mathematics the gate depends on. Each
-carries its guarantee as a test rather than as a claim, and none of them touches
-IO, the database, or a model.
+carries its guarantee as a test rather than as a claim, and neither touches IO,
+the database, or a model.
 
 | Module | Responsibility |
 | --- | --- |
-| `fdr.ts` | False-discovery control: Benjamini-Hochberg over a fixed pool, LORD++ over the unbounded decision stream, plus the gate's one-sided p-value. Behind `WARDEN_ONLINE_FDR`, default OFF — measured and rejected, see FINDINGS.md |
-| `halving.ts` | Successive Halving: a budget schedule across competing candidates, and the elimination rule. Pure — the caller drives the async benchmark |
-| `knapsack.ts` | The kept SET under a context budget. Facility-location objective (monotone submodular by construction) with density-greedy plus the best-single-item guard |
-| `moderate.ts` | Empirical-Bayes variance moderation (Smyth 2004) with digamma/trigamma. Behind `WARDEN_MODERATE_VARIANCE`, default OFF — measured and rejected |
+| `halving.ts` | Successive Halving: a budget schedule across competing candidates, and the elimination rule. Pure — the caller drives the async benchmark. Implemented, not yet wired |
+| `knapsack.ts` | The kept SET under a context budget. Facility-location objective (monotone submodular by construction) with density-greedy plus the best-single-item guard. Wired into `memory.ts` behind `WARDEN_CONTEXT_BUDGET` |
 
-Two of these are default-off because calibration rejected them. They stay in the
-tree because a negative result is only trustworthy if the implementation was
-correct, and both are tested to the same standard as the shipped code.
+The third theorem, Neyman allocation, is not a module — it lives in
+`select.ts#allocateTopUpRuns` where it has been since v0.24.0.
+
+Two more were proposed, implemented, measured and REJECTED: empirical-Bayes
+variance moderation (`moderate.ts`) and false-discovery control (`fdr.ts`, both
+Benjamini-Hochberg and LORD++). Both are deleted. A correct implementation was
+needed to make each negative result trustworthy, and once the results were
+recorded in FINDINGS.md the code had no remaining job — correct-but-unused code
+is the bloat v1.0.0 existed to remove. See [docs/four-theorems.md](docs/four-theorems.md).
 
 ## Data model (`~/.token-warden/warden.db`, SQLite)
 

@@ -1,25 +1,16 @@
 /**
- * The gate's opt-in paths.
+ * The gate's remaining opt-in seams.
  *
- * `WARDEN_MODERATE_VARIANCE` and `WARDEN_ONLINE_FDR` are both default-off,
- * pending calibration that (so far) rejected both. That is exactly why they
- * need tests: code nothing runs is code nothing checks, and a flag flipped
- * during a future calibration should exercise something already known to work
- * rather than something being run for the first time.
- *
- * These also pin the DEFAULT-OFF contract itself, which is the part a careless
- * edit would break silently.
+ * v1.0.0 removed the moderation and online-FDR flags along with the modules
+ * behind them, so what is left is the context budget and the explicit
+ * confidence multiple the calibration harness sweeps. Both are exercised here
+ * because a seam nothing runs is a seam nothing checks.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import type { TaskSummary } from "../src/bench.js";
 import { summarizeTask } from "../src/bench.js";
 import { assessDelta } from "../src/select.js";
-import {
-	memoryContextBudget,
-	moderateVarianceEnabled,
-	onlineFdrAlpha,
-	onlineFdrEnabled,
-} from "../src/stats.js";
+import { memoryContextBudget } from "../src/stats.js";
 
 function task(id: string, tokens: number[]): TaskSummary {
 	return summarizeTask(
@@ -31,54 +22,6 @@ function task(id: string, tokens: number[]): TaskSummary {
 		})),
 	);
 }
-
-afterEach(() => {
-	delete process.env.WARDEN_MODERATE_VARIANCE;
-	delete process.env.WARDEN_ONLINE_FDR;
-	delete process.env.WARDEN_FDR_ALPHA;
-});
-
-describe("gate feature flags", () => {
-	it("are off unless set to exactly 1", () => {
-		expect(moderateVarianceEnabled()).toBe(false);
-		expect(onlineFdrEnabled()).toBe(false);
-		for (const value of ["0", "true", "yes", "", "2"]) {
-			process.env.WARDEN_MODERATE_VARIANCE = value;
-			process.env.WARDEN_ONLINE_FDR = value;
-			expect(moderateVarianceEnabled()).toBe(false);
-			expect(onlineFdrEnabled()).toBe(false);
-		}
-	});
-
-	it("turn on for 1", () => {
-		process.env.WARDEN_MODERATE_VARIANCE = "1";
-		process.env.WARDEN_ONLINE_FDR = "1";
-		expect(moderateVarianceEnabled()).toBe(true);
-		expect(onlineFdrEnabled()).toBe(true);
-	});
-});
-
-describe("onlineFdrAlpha", () => {
-	it("defaults to 0.10, the value that puts a fresh stream on z=2", () => {
-		expect(onlineFdrAlpha()).toBe(0.1);
-	});
-
-	it("accepts a value inside (0, 1)", () => {
-		process.env.WARDEN_FDR_ALPHA = "0.05";
-		expect(onlineFdrAlpha()).toBe(0.05);
-	});
-
-	it("rejects rather than clamps anything outside (0, 1)", () => {
-		// The same discipline as confidenceZ and recoveryMarginFraction: a typo
-		// yields the calibrated default, never a policy nobody measured. Note
-		// "0" and "1" are both REJECTED -- an alpha of 0 admits nothing and an
-		// alpha of 1 admits everything, and neither is a rate.
-		for (const bad of ["0", "1", "-0.5", "1.5", "abc", "", "   "]) {
-			process.env.WARDEN_FDR_ALPHA = bad;
-			expect(onlineFdrAlpha()).toBe(0.1);
-		}
-	});
-});
 
 describe("assessDelta with an explicit confidence multiple", () => {
 	const without = [task("t1", [10_000, 10_400]), task("t2", [9_000, 9_600])];
@@ -97,10 +40,8 @@ describe("assessDelta with an explicit confidence multiple", () => {
 	});
 
 	/**
-	 * A wider band can only ever make a verdict less certain, never more. This
-	 * is the property the online-FDR wiring depends on when it hands LORD's
-	 * per-arrival multiple to the same machinery, and it is stated as
-	 * MONOTONICITY rather than as two hand-picked points: an earlier draft
+	 * A wider band can only ever make a verdict less certain, never more. Stated
+	 * as MONOTONICITY rather than as two hand-picked points: an earlier draft
 	 * asserted `uncertain` at z=8 and failed, because this delta clears the bar
 	 * by 1,896 tokens against an SE near 229 and so stays certain until z>8.3.
 	 * The property was right; the constant was a guess.
@@ -118,61 +59,6 @@ describe("assessDelta with an explicit confidence multiple", () => {
 	});
 });
 
-describe("assessDelta with variance moderation enabled", () => {
-	// Deliberately heterogeneous per-task noise: a quiet task and a loud one is
-	// the case moderation exists to reconcile, and the case where leaving it
-	// unexercised would hide an indexing error between the two sides.
-	const without = [
-		task("quiet", [10_000, 10_010, 10_020]),
-		task("loud", [9_000, 14_000, 6_000]),
-	];
-	const withRule = [
-		task("quiet", [8_000, 8_010, 8_030]),
-		task("loud", [7_000, 12_000, 4_000]),
-	];
-
-	it("produces a finite standard error on the same delta", () => {
-		const plain = assessDelta(without, withRule, 25);
-		process.env.WARDEN_MODERATE_VARIANCE = "1";
-		const moderated = assessDelta(without, withRule, 25);
-
-		// The point estimate is a function of the MEANS and must not move:
-		// moderation touches variances only.
-		expect(moderated.delta).toBe(plain.delta);
-		expect(moderated.standardError).not.toBeNull();
-		expect(Number.isFinite(moderated.standardError as number)).toBe(true);
-		expect(moderated.standardError).toBeGreaterThan(0);
-	});
-
-	it("changes the standard error it reports", () => {
-		const plain = assessDelta(without, withRule, 25).standardError as number;
-		process.env.WARDEN_MODERATE_VARIANCE = "1";
-		const moderated = assessDelta(without, withRule, 25)
-			.standardError as number;
-		// If these matched, the flag would be wired to nothing -- which is the
-		// failure mode a default-off feature is most likely to have.
-		expect(moderated).not.toBeCloseTo(plain, 6);
-	});
-
-	it("survives a task whose runs are identical (zero sample variance)", () => {
-		process.env.WARDEN_MODERATE_VARIANCE = "1";
-		const flat = [task("a", [5_000, 5_000, 5_000]), task("b", [7_000, 9_000])];
-		const moved = [task("a", [3_000, 3_000, 3_000]), task("b", [5_000, 7_000])];
-		const a = assessDelta(flat, moved, 25);
-		expect(a.standardError).not.toBeNull();
-		expect(Number.isFinite(a.standardError as number)).toBe(true);
-	});
-
-	it("still reports null confidence when no task can estimate variance", () => {
-		process.env.WARDEN_MODERATE_VARIANCE = "1";
-		const one = [task("a", [5_000])];
-		const two = [task("a", [3_000])];
-		// One run a side leaves nothing to moderate; the gate must stand down
-		// rather than invent a band from a fitted prior.
-		expect(assessDelta(one, two, 25).standardError).toBeNull();
-	});
-});
-
 describe("WARDEN_CONTEXT_BUDGET", () => {
 	afterEach(() => {
 		delete process.env.WARDEN_CONTEXT_BUDGET;
@@ -182,9 +68,8 @@ describe("WARDEN_CONTEXT_BUDGET", () => {
 		expect(memoryContextBudget()).toBeNull();
 		// Zero is REJECTED rather than clamped: a budget of 0 would compile an
 		// empty MEMORY.md, silently discarding every rule the operator paid to
-		// measure. That is a far worse failure than ignoring a typo. Blank must
-		// mean ABSENT rather than zero -- Number("") is 0, the trap
-		// recoveryMarginFraction documents.
+		// measure. Blank must mean ABSENT rather than zero -- Number("") is 0,
+		// the trap recoveryMarginFraction documents.
 		for (const bad of ["0", "-100", "abc", "", "   "]) {
 			process.env.WARDEN_CONTEXT_BUDGET = bad;
 			expect(memoryContextBudget()).toBeNull();

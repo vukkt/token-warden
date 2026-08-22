@@ -1,7 +1,8 @@
-# Four theorems
+# The theorems
 
-The spec for v1.0.0. What the plugin should be, why the current version is not
-that, and which four proven results replace the accreted machinery.
+The spec for v1.0.0, kept as the record of what was proposed, what was measured,
+and what survived. Two of the four proposed theorems were implemented, measured,
+rejected and then deleted; their sections are retained as history.
 
 ## 1. The binding constraint
 
@@ -105,38 +106,43 @@ one genuine exception and it was **split** rather than deleted — its
 classification half feeds the Stop hook and `status.ts` reads the result, so
 that half survives as `tool-cost.ts` while the report command goes.
 
-## 3. The four theorems
+## 3. The theorems
 
 Each attacks a measured, documented weakness. Each is a named published result
-with a proof I did not invent. They compose into the same four-stage loop, one
-theorem per stage.
+with a proof I did not invent.
 
 ```
-  allocate            spend              decide            pack
-  Neyman        ->    Successive   ->    LORD++       ->   submodular
-  allocation          Halving            online FDR        knapsack
-  (within a           (across            (holds FDR        (cuts
-   candidate)          candidates)        over time)        redundancy)
+  allocate            spend              pack
+  Neyman        ->    Successive   ->    submodular
+  allocation          Halving            knapsack
+  (within a           (across            (cuts
+   candidate)          candidates)        redundancy)
 ```
 
-**The lineup changed as the evidence came in, and the final four are not the
-four this document opened with.** Theorem I was specified as James-Stein, was
-corrected to variance moderation when the algebra showed James-Stein to be a
-no-op, and was then rejected outright on measurement. Theorem II was specified
-as Benjamini-Hochberg and had to be replaced by an online procedure once it was
-clear the multiplicity lives in a stream rather than a pool. What fills the
-estimator slot is **Neyman allocation**, which this project already shipped in
-v0.24.0 and which section 1 identifies as the one clear win in its history — the
-one change that moved runs toward the variance instead of adjusting a threshold.
+**THIS SECTION OPENED WITH FOUR AND ENDS WITH THREE.** The lineup is recorded as
+it actually went rather than quietly rewritten, because the failures are the
+most informative thing here.
 
-Recording it this way rather than quietly rewriting the opening: a spec that
-survives contact with measurement unchanged is usually a spec that was never
-tested against anything.
+| slot | specified | outcome |
+| --- | --- | --- |
+| estimate | James-Stein shrinkage | **algebraically a no-op** on this gate |
+| estimate (retry) | Empirical-Bayes variance moderation | **implemented, measured, rejected** |
+| decide | Benjamini-Hochberg | **wrong object** — controls a pool, the multiplicity is a stream |
+| decide (retry) | LORD++ online FDR | **implemented, measured, rejected** |
+| allocate | Neyman allocation | shipped in v0.24.0, still the one clear win |
+| spend | Successive Halving | implemented, not yet wired |
+| pack | submodular knapsack | implemented and wired behind a context budget |
 
-```
-```
+The two rejected modules were **deleted from the tree** after the fact. Keeping
+correct-but-unused code was itself the bloat this rework existed to remove, and
+the results they produced live on in FINDINGS.md, which is where a result
+belongs. The sections below are kept as the record of what was tried and why it
+failed — read them as history, not as a description of the current tree.
 
-### I. Empirical-Bayes variance moderation — the estimator
+A spec that survives contact with measurement unchanged is usually a spec that
+was never tested against anything.
+
+### I. Empirical-Bayes variance moderation — REMOVED (`src/moderate.ts`, deleted)
 
 **This section originally specified James-Stein shrinkage. That was wrong, and
 the correction is more interesting than the original plan.**
@@ -216,7 +222,7 @@ ship. The theorem earns it a trial, not a slot.
 > `src/moderate.ts` stays, behind `WARDEN_MODERATE_VARIANCE=1`, default off. The
 > negative result is only trustworthy because the implementation is correct.
 
-### II. Benjamini-Hochberg — the decision
+### II. Benjamini-Hochberg, then LORD++ — REMOVED (`src/fdr.ts`, deleted)
 
 **Theorem** (Benjamini & Hochberg 1995). Order p-values `p_(1) <= ... <= p_(m)`,
 let `k = max{ i : p_(i) <= (i/m) q }`, reject `H_(1)..H_(k)`. Then
@@ -295,8 +301,7 @@ per-candidate p-value input rather than the decision itself.
 > forever. It needs **no new state** — `rule_receipts` already stores one row per
 > decision, which is the stream history.
 >
-> BH stays for the genuine within-pool case and as the honest baseline the
-> numbers above are measured against. LORD++ is the operative procedure.
+> BH was kept as the honest baseline the numbers above are measured against.
 
 > **THIRD CORRECTION, AND THIS ONE RETIRES THE WHOLE THEOREM.** LORD++ was
 > wired behind a flag and measured on the recorded pool by
@@ -327,9 +332,14 @@ per-candidate p-value input rather than the decision itself.
 >
 > **The design this evidence implies is the inverse of what was built: permissive
 > at the gate, strict at the packer.** Scarcity logic belongs where the scarcity
-> is — the context window — not at the admission test.
+> is — the context window — not at the admission test. Both halves shipped: the
+> default confidence multiple moved 2 -> 1.5, and `knapsack.ts` is wired into
+> memory compilation behind `WARDEN_CONTEXT_BUDGET`.
+>
+> `src/fdr.ts` was then DELETED. It answered a question this project should not
+> be asking, and the answer is preserved in FINDINGS.md.
 
-### III. Successive Halving — the allocator
+### III. Successive Halving — the allocator (`src/halving.ts`)
 
 **Theorem** (Karnin, Koren & Somekh 2013; Jamieson & Talwalkar 2016). Given a
 budget `B` over `n` arms, halving the surviving set each round and splitting the
@@ -375,7 +385,7 @@ far from the boundary. At `bar/SE ~ 1:100` nearly everything is near the
 boundary. The v0.36.0 confidence-sequence result is the empirical version of
 this argument, already paid for. Not re-proposing it.
 
-### IV. Submodular greedy under a knapsack — the packer
+### IV. Submodular greedy under a knapsack — the packer (`src/knapsack.ts`)
 
 **Theorem** (Nemhauser, Wolsey & Fisher 1978). For monotone submodular `f`,
 greedy maximisation under a cardinality constraint achieves `(1 - 1/e) ~ 0.632`

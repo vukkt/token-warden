@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+### Deleted the two rejected theorem modules
+
+`src/fdr.ts` and `src/moderate.ts` are removed, with their tests and their
+wiring. v1.0.0 shipped both default-off on the argument that a negative result
+is only trustworthy if the implementation was correct. That argument justifies
+writing the code and measuring it; it does not justify carrying it afterwards.
+The results are recorded in FINDINGS.md, which is where a result belongs, and
+correct-but-unused code is exactly the bloat this rework existed to remove.
+
+Removed with them: `WARDEN_MODERATE_VARIANCE`, `WARDEN_ONLINE_FDR`,
+`WARDEN_FDR_ALPHA`, `select.ts#moderatedTaskVariances`, the `streamHistory`
+field on `SelectionRun`, and `db.ts#decisionHistory`.
+
+Also removes `stats.ts#normalCdf` and `stats.ts#normalQuantile`, which were
+added for `fdr.ts` -- and `normalCdf` DUPLICATED one `power.ts` has exported all
+along. That duplication should not have shipped; deleting the FDR module
+resolves it.
+
+`assessDelta`'s optional `baseZ` parameter STAYS. No production caller passes
+it, but `validation/stream-calibration.ts` needs it to sweep z below the 1.0
+floor `confidenceZ` refuses from the environment -- and that sweep is what set
+the shipped default of 1.5. Deleting the seam would make the evidence for a
+shipped constant unreproducible.
+
+The stream harness keeps its net-token accounting and loses only the LORD arm:
+it now compares the shipped confidence multiple against any other via
+`--compare-z`, on identical draws. Verified still reproducing the decision it
+justified (z=1.5 nets 8,845 tok/run against z=2's 8,191 at overlap 0.5).
+
+**Three theorems remain**, and the docs say three rather than four: Neyman
+allocation (`select.ts`, shipped v0.24.0), Successive Halving (`halving.ts`,
+implemented but not wired), and the submodular knapsack (`knapsack.ts`, wired
+into memory compilation behind `WARDEN_CONTEXT_BUDGET`).
+
+Coverage floor re-baselined again for the same composition reason: deleting two
+well-covered pure modules moved global lines 96.07 -> 95.86, so that floor goes
+96 -> 95. Nothing became less tested.
+
+src 10.5k -> 9.9k lines, 28 -> 26 modules, 1036 -> 970 tests.
+
 ## v1.0.0
 
 The plugin is reduced to its thesis, and the mathematics that thesis depends on

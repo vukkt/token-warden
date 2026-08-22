@@ -1597,10 +1597,10 @@ so moderation is roughly harmless at higher run counts -- and roughly pointless
 there too, since a variance on 4+ df is already stable. There is no run count at
 which it clearly pays.
 
-`src/moderate.ts` and its tests are kept: the implementation is correct, the
-special functions are verified against closed forms, and the negative result is
-only trustworthy because the implementation is right. The flag stays default-off
-and the gate is unchanged.
+`src/moderate.ts` was kept default-off for one release and then DELETED. The
+implementation was correct and its special functions verified against closed
+forms -- which is what makes this negative result trustworthy -- but once the
+result was recorded here the code had no further job. The gate is unchanged.
 
 ### Correction to the spec this came from
 
@@ -1701,6 +1701,7 @@ gate, and strict at the packer.** Scarcity logic belongs where the scarcity
 actually is -- the context window -- not at the admission test. The project
 applied it at the wrong stage.
 
-`src/fdr.ts` is kept, flag default-off. BH and LORD++ are both correct, both
-tested, and both measure what they claim. They are simply answering a question
-this project should not be asking.
+`src/fdr.ts` was kept default-off for one release and then DELETED. BH and
+LORD++ were both correct, both tested, and both measured what they claimed --
+they were simply answering a question this project should not be asking. The
+result is the artifact worth keeping; the code was not.

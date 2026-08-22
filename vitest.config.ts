@@ -21,13 +21,14 @@ export default defineConfig({
 			//
 			// RE-BASELINED at v1.0.0, and the reason matters. The v0.40.0 floor
 			// (lines 96.89 / statements 96.06 / functions 96.98 / branches 89.24)
-			// was measured across 45 modules. v1.0.0 deleted 21 of them — the RAG
-			// subtree, the A/B benchmarking suite, the team ledger and ten advisory
-			// commands — and those were pure, easily-tested logic sitting at high
-			// 90s. Removing them did not make anything less tested; it removed the
+			// was measured across 45 modules. v1.0.0 deleted 23 of them — the RAG
+			// subtree, the A/B benchmarking suite, the team ledger, ten advisory
+			// commands, and then `fdr.ts`/`moderate.ts` once calibration rejected
+			// both — and those were pure, easily-tested logic sitting at high 90s.
+			// Removing them did not make anything less tested; it removed the
 			// ballast that was diluting `bench.ts`, which spawns real `claude`
 			// subprocesses and has always been this repo's integration boundary.
-			// Global statements fell to 94.94 on that composition change alone.
+			// The floor fell on that composition change alone, twice.
 			//
 			// A per-file threshold for bench.ts would be the better tool -- it would
 			// keep the global bar high and pin the boundary separately -- but the
@@ -46,10 +47,10 @@ export default defineConfig({
 			//
 			// Keep this comment's metric order matching the keys below, and
 			// re-stamp both whenever the floor moves.
-			// Measured at v1.0.0 (1030 tests): lines 96.07 / statements 94.94 /
-			// functions 96.65 / branches 89.22, floored just beneath each.
+			// Measured at v1.0.0 (970 tests): lines 95.86 / statements 94.72 /
+			// functions 96.46 / branches 89.08, floored just beneath each.
 			thresholds: {
-				lines: 96,
+				lines: 95,
 				statements: 94,
 				functions: 96,
 				branches: 89,

@@ -30,7 +30,6 @@ import { numericFlag, runCli } from "./cli.js";
 import {
 	agentTokenMix,
 	decideRule,
-	decisionHistory,
 	getActiveRules,
 	getRuleById,
 	getRulesetVersion,
@@ -44,13 +43,11 @@ import {
 	type WardenDb,
 	withDb,
 } from "./db.js";
-import { lordZ } from "./fdr.js";
 import {
 	compileActiveMemory,
 	healMemoryDrift,
 	memoryFilePath,
 } from "./memory.js";
-import { moderateVariances } from "./moderate.js";
 import { blendedDollarsPerToken, priceFor } from "./pricing.js";
 import { assertKnownAgent } from "./registry.js";
 import { displayText } from "./sanitize.js";
@@ -59,9 +56,6 @@ import {
 	keepBar,
 	mean,
 	median,
-	moderateVarianceEnabled,
-	onlineFdrAlpha,
-	onlineFdrEnabled,
 	pooledVariance,
 	recoveryMarginFraction,
 	recoveryStrictness,
@@ -307,56 +301,14 @@ function taskSavingVariance(pair: SidePair, pooled: PooledVariances): number {
  * `sqrt( (1/K²)·Σᵢ [·] )` — the K² in the old formula is `(Σ 1)²` — so the
  * unweighted path stays bit-identical. `weights` is aligned with `pairs`. Null
  * when no task has ≥2 runs/side. */
-/**
- * Per-task saving variances with each SIDE's variances moderated across tasks
- * (Smyth 2004; see `moderate.ts`).
- *
- * The two sides are fitted SEPARATELY. A candidate rule changes what the agent
- * does, so the with-rule and without-rule runs are not draws from one
- * distribution, and pooling their variances into a single prior would blur a
- * real difference in noise between the two arms into both of them.
- *
- * `sampleVariance` returns null for a side with fewer than two runs; that maps
- * to 0 here, which `moderateVariances` excludes from the hyperparameter FIT and
- * then assigns the fitted prior outright. That is deliberately the same rescue
- * the unmoderated path spells as `?? pooled`, with a fitted scale instead of a
- * flat pooled one.
- */
-function moderatedTaskVariances(pairs: SidePair[]): number[] {
-	const withoutVars = pairs.map((p) => sampleVariance(p.without) ?? 0);
-	const withVars = pairs.map((p) => sampleVariance(p.with) ?? 0);
-	const withoutDfs = pairs.map((p) => Math.max(0, p.without.length - 1));
-	const withDfs = pairs.map((p) => Math.max(0, p.with.length - 1));
-
-	const without = moderateVariances(withoutVars, withoutDfs).moderated;
-	const withRule = moderateVariances(withVars, withDfs).moderated;
-
-	return pairs.map(
-		(pair, i) =>
-			(without[i] as number) / pair.without.length +
-			(withRule[i] as number) / pair.with.length,
-	);
-}
-
 function withinTaskSE(pairs: SidePair[], weights: number[]): number | null {
 	if (pairs.length === 0) return null;
 	const pooled = pooledSideVariances(pairs);
 	if (pooled === null) return null;
-	// Off by default: the moderated variance is biased by construction, so it
-	// stays behind a flag until validation/empirical-calibration.ts shows it
-	// does not raise the false-positive rate. Read per call, not frozen at
-	// module load, because the calibration harness sets it at runtime.
-	const moderated = moderateVarianceEnabled()
-		? moderatedTaskVariances(pairs)
-		: null;
 	let sumVar = 0;
 	for (let i = 0; i < pairs.length; i++) {
 		const weight = weights[i] as number;
-		const taskVar =
-			moderated === null
-				? taskSavingVariance(pairs[i] as SidePair, pooled)
-				: (moderated[i] as number);
-		sumVar += weight ** 2 * taskVar;
+		sumVar += weight ** 2 * taskSavingVariance(pairs[i] as SidePair, pooled);
 	}
 	return Math.sqrt(sumVar / sum(weights) ** 2);
 }
@@ -753,12 +705,14 @@ export function assessDelta(
 	withRule: TaskSummary[],
 	contextCost: number,
 	/**
-	 * Confidence multiple to use instead of the fixed `confidenceZ()`. This is
-	 * how online FDR (`fdr.ts#lordZ`) reaches the verdict: LORD's per-decision
-	 * threshold arrives here already converted from an alpha to a z, so the
-	 * uncertain band, the Neyman top-up, the recovery path and two-strike
-	 * retention all keep working against it unchanged. Omitted everywhere except
-	 * the one caller that has the agent's decision history to hand.
+	 * Confidence multiple to use instead of the fixed `confidenceZ()`.
+	 *
+	 * No production caller passes this: the gate always uses `confidenceZ()`.
+	 * It exists for `validation/stream-calibration.ts`, which sweeps z to find
+	 * the net-token optimum and needs values BELOW the 1.0 floor that
+	 * `confidenceZ` refuses from the environment. That sweep is what set the
+	 * shipped default of 1.5, so the seam it needs is kept rather than the
+	 * evidence for a shipped constant becoming unreproducible.
 	 */
 	baseZ?: number,
 ): DeltaAssessment {
@@ -1179,19 +1133,6 @@ interface SelectionRun {
 	retentionRounds: number;
 	/** The injected runner wrapped in the per-pass environment-failure guard. */
 	measureSuite: SuiteRunner;
-	/**
-	 * The agent's decision stream, oldest first, `true` where a candidate was
-	 * promoted. Seeded from `rule_receipts` and APPENDED IN MEMORY as this
-	 * invocation decides, because the three candidates of one invocation are
-	 * three separate arrivals in the stream and none of their receipts is
-	 * written until its own decision completes. Reading the table afresh per
-	 * candidate would hand all three the same alpha-wealth and quietly break the
-	 * online-FDR guarantee at exactly the point it is supposed to bind.
-	 *
-	 * Only consulted when online FDR is enabled; maintained either way, so the
-	 * flag changes one comparison rather than a code path.
-	 */
-	streamHistory: boolean[];
 }
 
 /** Lazily run a measurement pass at most once, and not at all when no decision
@@ -1273,17 +1214,10 @@ function measureWithTopUp(
 ): MeasuredComparison {
 	let measured = plan.measure("");
 	let reference = plan.reference();
-	// Fixed for the whole decision, including its top-up rounds: the threshold
-	// belongs to this candidate's ARRIVAL in the stream, and letting it drift
-	// between rounds would mean the bar moved while the evidence was being
-	// gathered against it.
-	const baseZ = onlineFdrEnabled()
-		? lordZ(run.streamHistory, onlineFdrAlpha())
-		: undefined;
 	const assess = (): DeltaAssessment =>
 		plan.measuredSide === "without-rule"
-			? assessDelta(measured, reference, plan.rule.context_cost, baseZ)
-			: assessDelta(reference, measured, plan.rule.context_cost, baseZ);
+			? assessDelta(measured, reference, plan.rule.context_cost)
+			: assessDelta(reference, measured, plan.rule.context_cost);
 	let assessment = assess();
 	if (!assessment.uncertain || run.topUpBudget <= 0) {
 		return { assessment, toppedUp: false, rounds: 0, measured, reference };
@@ -1582,9 +1516,6 @@ function runDecision(run: SelectionRun, plan: MeasurementPlan): Decision {
 		contextCost: plan.rule.context_cost,
 		assessment,
 	});
-	// The stream advances by exactly one arrival per decision, whatever the
-	// verdict was -- a null that was correctly rejected still spent wealth.
-	run.streamHistory.push(status === "active");
 	persistDecision(run, plan, {
 		underpowered,
 		evidenceRuns: evidenceDepth(reference, measured),
@@ -1835,7 +1766,6 @@ export function selectForAgent(
 			uniformTopUp: options.uniformTopUp ?? false,
 			retentionRounds: options.retentionRounds ?? MAX_RETENTION_ROUNDS,
 			measureSuite: guardEnvironment(agent, runner),
-			streamHistory: decisionHistory(db, agent),
 		};
 		const baseline = lazyPass(() =>
 			run.measureSuite(activeSet, "active-set", true),
