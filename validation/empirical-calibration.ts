@@ -149,8 +149,16 @@ function resample(rng: () => number, pool: number[], n: number): number[] {
 
 /** Wrap raw token totals as a completed-run task summary; `tag` keeps
  * sessionIds unique across the sides and top-up passes of one trial (merged
- * summaries concatenate result lists). */
-function toSummary(taskId: string, totals: number[], tag: string): TaskSummary {
+ * summaries concatenate result lists).
+ *
+ * Exported for `stream-calibration.ts`, which needs to build samples the same
+ * way this harness does -- a second copy of this wrapper is exactly how two
+ * harnesses start disagreeing about what they are measuring. */
+export function toSummary(
+	taskId: string,
+	totals: number[],
+	tag: string,
+): TaskSummary {
 	return summarizeTask(
 		taskId,
 		totals.map((tokens, i) => ({

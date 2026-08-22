@@ -4,7 +4,9 @@ import {
 	gatePValue,
 	lordAlpha,
 	lordDecisions,
+	lordZ,
 } from "../src/fdr.js";
+import { normalCdf, normalQuantile } from "../src/stats.js";
 
 /** Deterministic LCG (Numerical Recipes constants) so the Monte-Carlo checks
  * below are reproducible: a flaky statistical test is worse than none. */
@@ -467,5 +469,54 @@ describe("lordAlpha (online FDR over the decision stream)", () => {
 		}
 		const found = lordDecisions(pValues, 0.1).filter(Boolean).length;
 		expect(found).toBeGreaterThan(realCount * 0.3);
+	});
+});
+
+describe("normalQuantile / lordZ", () => {
+	it("inverts normalCdf", () => {
+		for (const z of [-3, -1, -0.25, 0, 0.5, 1.96, 2, 3.5]) {
+			expect(normalQuantile(normalCdf(z))).toBeCloseTo(z, 5);
+		}
+	});
+
+	it("clamps rather than returning infinities at the boundaries", () => {
+		expect(normalQuantile(0)).toBe(-40);
+		expect(normalQuantile(1)).toBe(40);
+		expect(normalQuantile(Number.NaN)).toBe(-40);
+	});
+
+	/**
+	 * The backward-compatibility anchor. At alpha=0.10 the first decision of a
+	 * stream lands on the gate's existing z=2, so a fresh install behaves as it
+	 * does today and only diverges as history accumulates. Any measured
+	 * difference is then attributable to the adaptation, not to a moved
+	 * starting point.
+	 */
+	it("starts a fresh stream at the gate's existing z=2", () => {
+		expect(lordZ([], 0.1)).toBeCloseTo(2.016, 2);
+	});
+
+	it("tightens the multiple as nulls accumulate", () => {
+		const barren = (n: number) => Array.from({ length: n }, () => false);
+		expect(lordZ(barren(10), 0.1)).toBeGreaterThan(lordZ([], 0.1));
+		expect(lordZ(barren(50), 0.1)).toBeGreaterThan(lordZ(barren(10), 0.1));
+	});
+
+	it("loosens the multiple after a discovery", () => {
+		const barren = Array.from({ length: 10 }, () => false);
+		const withHit = [...barren.slice(0, 9), true];
+		expect(lordZ(withHit, 0.1)).toBeLessThan(lordZ(barren, 0.1));
+	});
+
+	it("stays a usable multiple over a long barren stream", () => {
+		// The threshold must tighten without running away: a z that drifted past
+		// ~6 would make promotion impossible at any effect size this benchmark
+		// can resolve, turning FDR control into a silent shutdown.
+		const z = lordZ(
+			Array.from({ length: 500 }, () => false),
+			0.1,
+		);
+		expect(z).toBeGreaterThan(2);
+		expect(z).toBeLessThan(6);
 	});
 });

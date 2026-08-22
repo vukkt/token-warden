@@ -30,6 +30,7 @@ import { numericFlag, runCli } from "./cli.js";
 import {
 	agentTokenMix,
 	decideRule,
+	decisionHistory,
 	getActiveRules,
 	getRuleById,
 	getRulesetVersion,
@@ -43,6 +44,7 @@ import {
 	type WardenDb,
 	withDb,
 } from "./db.js";
+import { lordZ } from "./fdr.js";
 import {
 	compileActiveMemory,
 	healMemoryDrift,
@@ -58,6 +60,8 @@ import {
 	mean,
 	median,
 	moderateVarianceEnabled,
+	onlineFdrAlpha,
+	onlineFdrEnabled,
 	pooledVariance,
 	recoveryMarginFraction,
 	recoveryStrictness,
@@ -690,8 +694,9 @@ function confidenceBasis(
 	weights: number[],
 	meanDelta: number,
 	rawSE: number | null,
+	baseZ?: number,
 ): ConfidenceBasis {
-	const z = confidenceZ();
+	const z = baseZ ?? confidenceZ();
 	if (rawSE !== null) {
 		return {
 			standardError: rawSE,
@@ -747,6 +752,15 @@ export function assessDelta(
 	without: TaskSummary[],
 	withRule: TaskSummary[],
 	contextCost: number,
+	/**
+	 * Confidence multiple to use instead of the fixed `confidenceZ()`. This is
+	 * how online FDR (`fdr.ts#lordZ`) reaches the verdict: LORD's per-decision
+	 * threshold arrives here already converted from an alpha to a z, so the
+	 * uncertain band, the Neyman top-up, the recovery path and two-strike
+	 * retention all keep working against it unchanged. Omitted everywhere except
+	 * the one caller that has the agent's decision history to hand.
+	 */
+	baseZ?: number,
 ): DeltaAssessment {
 	const set = perTaskComparisons(without, withRule);
 	const { comparisons, regression } = set;
@@ -779,6 +793,7 @@ export function assessDelta(
 		weights,
 		meanDelta,
 		rawSE,
+		baseZ,
 	);
 
 	const threshold = keepBar(contextCost);
@@ -1164,6 +1179,19 @@ interface SelectionRun {
 	retentionRounds: number;
 	/** The injected runner wrapped in the per-pass environment-failure guard. */
 	measureSuite: SuiteRunner;
+	/**
+	 * The agent's decision stream, oldest first, `true` where a candidate was
+	 * promoted. Seeded from `rule_receipts` and APPENDED IN MEMORY as this
+	 * invocation decides, because the three candidates of one invocation are
+	 * three separate arrivals in the stream and none of their receipts is
+	 * written until its own decision completes. Reading the table afresh per
+	 * candidate would hand all three the same alpha-wealth and quietly break the
+	 * online-FDR guarantee at exactly the point it is supposed to bind.
+	 *
+	 * Only consulted when online FDR is enabled; maintained either way, so the
+	 * flag changes one comparison rather than a code path.
+	 */
+	streamHistory: boolean[];
 }
 
 /** Lazily run a measurement pass at most once, and not at all when no decision
@@ -1245,10 +1273,17 @@ function measureWithTopUp(
 ): MeasuredComparison {
 	let measured = plan.measure("");
 	let reference = plan.reference();
+	// Fixed for the whole decision, including its top-up rounds: the threshold
+	// belongs to this candidate's ARRIVAL in the stream, and letting it drift
+	// between rounds would mean the bar moved while the evidence was being
+	// gathered against it.
+	const baseZ = onlineFdrEnabled()
+		? lordZ(run.streamHistory, onlineFdrAlpha())
+		: undefined;
 	const assess = (): DeltaAssessment =>
 		plan.measuredSide === "without-rule"
-			? assessDelta(measured, reference, plan.rule.context_cost)
-			: assessDelta(reference, measured, plan.rule.context_cost);
+			? assessDelta(measured, reference, plan.rule.context_cost, baseZ)
+			: assessDelta(reference, measured, plan.rule.context_cost, baseZ);
 	let assessment = assess();
 	if (!assessment.uncertain || run.topUpBudget <= 0) {
 		return { assessment, toppedUp: false, rounds: 0, measured, reference };
@@ -1547,6 +1582,9 @@ function runDecision(run: SelectionRun, plan: MeasurementPlan): Decision {
 		contextCost: plan.rule.context_cost,
 		assessment,
 	});
+	// The stream advances by exactly one arrival per decision, whatever the
+	// verdict was -- a null that was correctly rejected still spent wealth.
+	run.streamHistory.push(status === "active");
 	persistDecision(run, plan, {
 		underpowered,
 		evidenceRuns: evidenceDepth(reference, measured),
@@ -1797,6 +1835,7 @@ export function selectForAgent(
 			uniformTopUp: options.uniformTopUp ?? false,
 			retentionRounds: options.retentionRounds ?? MAX_RETENTION_ROUNDS,
 			measureSuite: guardEnvironment(agent, runner),
+			streamHistory: decisionHistory(db, agent),
 		};
 		const baseline = lazyPass(() =>
 			run.measureSuite(activeSet, "active-set", true),

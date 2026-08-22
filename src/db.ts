@@ -1280,6 +1280,32 @@ export function latestReceipts(db: WardenDb, agent: string): ReceiptRow[] {
 		.all(agent);
 }
 
+/**
+ * One agent's decision stream in chronological order: `true` where the verdict
+ * promoted the candidate, `false` otherwise.
+ *
+ * This is the history the online-FDR procedure (`fdr.ts#lordAlpha`) needs, and
+ * it needs no new table. `rule_receipts` already writes exactly one row per
+ * decision -- that IS the stream -- so the alpha-wealth is reconstructed from
+ * the audit trail rather than cached beside it. A cached wealth counter could
+ * drift out of step with the decisions it claims to summarise; a derived one
+ * cannot.
+ *
+ * Ordered by `decided_at` then `rule_id`, matching the tie-break used
+ * everywhere else receipts are read, so two decisions written in the same
+ * millisecond still have a stable order.
+ */
+export function decisionHistory(db: WardenDb, agent: string): boolean[] {
+	return db
+		.prepare<unknown[], { status: string }>(
+			`SELECT status FROM rule_receipts
+			 WHERE agent = ?
+			 ORDER BY decided_at ASC, rule_id ASC`,
+		)
+		.all(agent)
+		.map((row) => row.status === "active");
+}
+
 /** Pending candidate counts per agent — the SessionStart nudge. */
 export function candidateCounts(
 	db: WardenDb,

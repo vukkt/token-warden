@@ -1610,3 +1610,97 @@ SAVINGS. That is a no-op for this gate: `theta_JS = xbar + c*(x - xbar)` implies
 mean, and `withinTaskSE` reads variances rather than means. Variance moderation
 was the corrected target. It has now also been rejected -- on evidence rather
 than on algebra.
+
+## Online FDR (2026-08): the right theorem for the wrong objective
+
+Theorem II of the v1.0.0 spec was false-discovery control. Benjamini-Hochberg
+went in first; it was then correctly identified as controlling the wrong thing
+(a fixed pool of 3, when the multiplicity lives in an unbounded STREAM of
+invocations) and replaced by LORD++ online FDR, wired behind
+`WARDEN_ONLINE_FDR=1` and measured by a new harness,
+[validation/stream-calibration.ts](validation/stream-calibration.ts).
+
+**It does not ship as the default either.** The reason is more interesting than
+the moderation rejection, and it calls into question five versions of this
+project's instincts.
+
+### What the stream harness measures
+
+`empirical-calibration.ts` replays one decision N times independently, which is
+the right question for a fixed threshold and the wrong one for a procedure whose
+whole claim is about a sequence. The new harness runs STREAMS: 60 arrivals
+decided in order, alpha-wealth carried forward exactly as `select.ts` carries
+it, both arms seeing identical draws.
+
+On the recorded `sql` pool, 20% of arrivals carrying a real 10% saving:
+
+| arm | stream FDR | kept | real kept | real missed | NET tok/run |
+| --- | --- | --- | --- | --- | --- |
+| fixed z=2 (shipped) | 55.1% | 6.8 | 3.0 | 9.2 | **14,218** |
+| LORD++ online FDR | 13.3% | 1.6 | 1.2 | 11.1 | 5,588 |
+
+LORD does exactly what it promises: it cuts the false-discovery rate by 4x. And
+the shipped gate, with four times the junk in memory, **saves 2.5x more tokens.**
+
+### Why: the payoff asymmetry
+
+A worthless rule costs its rent, about 25 tokens per run. A missed real rule
+forfeits its entire saving, about 4,769 tokens per run on this pool. **False
+positives are ~191x cheaper than false negatives.**
+
+Under that asymmetry, a rule is worth keeping when `P(real) > 1/191`, i.e. above
+about **0.5%** confidence. The gate demands `z = 2`, which is 97.7%. The
+promotion threshold is mis-set against the economics by more than two orders of
+magnitude, and every procedure that trades power for precision moves it further
+in the wrong direction.
+
+The result is robust across the plausible parameter space. Fixed wins on net
+tokens in all nine cells:
+
+| real rate | saving | fixed FDR | fixed net | LORD FDR | LORD net |
+| --- | --- | --- | --- | --- | --- |
+| 5% | 2% | 95.0% | 108 | 13.5% | 88 |
+| 5% | 10% | 85.9% | 3,490 | 13.4% | 1,157 |
+| 5% | 20% | 74.7% | 14,868 | 14.6% | 6,841 |
+| 20% | 2% | 76.3% | 901 | 11.0% | 404 |
+| 20% | 10% | 53.3% | 15,160 | 11.4% | 6,040 |
+| 20% | 20% | 35.2% | 63,407 | 13.9% | 39,693 |
+| 50% | 2% | 50.8% | 2,185 | 9.9% | 1,135 |
+| 50% | 10% | 26.4% | 34,303 | 10.3% | 17,537 |
+| 50% | 20% | 14.6% | 147,289 | 10.1% | 131,855 |
+
+Even at a 95% false-discovery rate, keeping more still nets more.
+
+### The lesson, which is bigger than this feature
+
+**This project has been optimising the wrong direction for five versions.**
+v0.29.0 tightened z from 1 to 2. v0.30.0 tried robust SE. v0.32.0 added
+two-strike retention. v0.36.0 tried confidence sequences. v0.37.0 added a
+t-correction. Every one of those makes the gate STRICTER, and the economics say
+the gate is already about 200x too strict.
+
+The confidence-sequence entry in DECISIONS.md identified the binding constraint
+as `bar/SE ~ 1:100` and concluded that the estimator was the bottleneck. That
+was half right. The other half is that **the bar is in the wrong place**: with
+savings ~191x rent, precision is nearly worthless and power is nearly
+everything.
+
+### What this does NOT license
+
+Keeping everything, for two reasons the harness does not model:
+
+1. **Context is finite.** This accounting assumes a junk rule costs only rent.
+   Once the context budget binds, junk rules also CROWD OUT real ones, and the
+   marginal cost of a false positive stops being 25 tokens. That is precisely
+   what theorem IV (`src/knapsack.ts`) exists to handle.
+2. **A wrong rule can actively mislead.** The gate evicts regressions on a
+   separate path that this model does not touch, and that path must stay.
+
+So the coherent design is the opposite of what was built: **be permissive at the
+gate, and strict at the packer.** Scarcity logic belongs where the scarcity
+actually is -- the context window -- not at the admission test. The project
+applied it at the wrong stage.
+
+`src/fdr.ts` is kept, flag default-off. BH and LORD++ are both correct, both
+tested, and both measure what they claim. They are simply answering a question
+this project should not be asking.

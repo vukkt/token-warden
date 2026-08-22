@@ -298,6 +298,37 @@ per-candidate p-value input rather than the decision itself.
 > BH stays for the genuine within-pool case and as the honest baseline the
 > numbers above are measured against. LORD++ is the operative procedure.
 
+> **THIRD CORRECTION, AND THIS ONE RETIRES THE WHOLE THEOREM.** LORD++ was
+> wired behind a flag and measured on the recorded pool by
+> `validation/stream-calibration.ts`. It does exactly what it promises — a 4x
+> cut in false discoveries — **and it loses on tokens anyway**:
+>
+> | arm | stream FDR | real kept | NET tok/run |
+> | --- | --- | --- | --- |
+> | fixed `z=2` (shipped) | 55.1% | 3.0 | **14,218** |
+> | LORD++ online FDR | 13.3% | 1.2 | 5,588 |
+>
+> A worthless rule costs its rent (~25 tok/run). A missed real rule forfeits its
+> whole saving (~4,769 tok/run). **False positives are ~191x cheaper than false
+> negatives**, so a rule is worth keeping above roughly `P(real) > 0.5%` — while
+> the gate demands 97.7%. Fixed wins on net tokens in all nine cells of a
+> true-rate x effect-size sweep, even where its FDR reaches 95%.
+>
+> **The gate is not too loose. It is about 200x too strict**, and every
+> statistical upgrade in this project's history — z 1 -> 2, robust SE,
+> two-strike, confidence sequences, the t-correction — pushed it further the
+> wrong way. Section 1 concluded "the estimator is the bottleneck". That was
+> half the story; the other half is that **the bar is in the wrong place.**
+>
+> This does not license keeping everything, for a reason the model deliberately
+> excludes: it prices a junk rule at rent alone, which holds only while context
+> is free. Once the budget binds, junk rules *crowd out* real ones. That is
+> exactly theorem IV's job.
+>
+> **The design this evidence implies is the inverse of what was built: permissive
+> at the gate, strict at the packer.** Scarcity logic belongs where the scarcity
+> is — the context window — not at the admission test.
+
 ### III. Successive Halving — the allocator
 
 **Theorem** (Karnin, Koren & Somekh 2013; Jamieson & Talwalkar 2016). Given a

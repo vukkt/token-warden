@@ -49,7 +49,7 @@
  *
  * Pure and zero-token.
  */
-import { normalCdf } from "./stats.js";
+import { normalCdf, normalQuantile } from "./stats.js";
 
 /**
  * One-sided p-value for the gate's own hypothesis: "this candidate's saving is
@@ -266,4 +266,27 @@ export function lordDecisions(
 		history.push(p <= lordAlpha(history, alpha));
 	}
 	return history;
+}
+
+/**
+ * LORD's threshold expressed as a CONFIDENCE MULTIPLE rather than a p-value.
+ *
+ * This is how online FDR reaches the gate without rebuilding it. `select.ts`
+ * already routes every promotion through one number -- the `z` in
+ * `delta - bar >= z * SE` -- and carries an uncertain band, a Neyman top-up
+ * pass, a recovery path and a two-strike retention policy hanging off it.
+ * Replacing that machinery with a raw p-value comparison would mean rewriting
+ * all of it. Converting `alpha_t` to `z_t = Phi^-1(1 - alpha_t)` instead leaves
+ * every one of those mechanisms exactly as calibrated and makes only the
+ * threshold stream-aware.
+ *
+ * The default `alpha` is 0.10 for a reason worth stating: it makes the FIRST
+ * decision of a stream land on `z = 2.016`, which is the gate's existing
+ * hard-coded `z = 2` to within a rounding error. A fresh install therefore
+ * behaves as it does today and only diverges as history accumulates -- so any
+ * measured difference is attributable to the adaptation rather than to a
+ * changed starting point.
+ */
+export function lordZ(history: readonly boolean[], alpha: number): number {
+	return normalQuantile(1 - lordAlpha(history, alpha));
 }
