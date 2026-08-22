@@ -16,10 +16,17 @@
  * The fixture is a static artifact, not a live read. Tests must never touch
  * `~/.token-warden` (test/setup.ts enforces that), and pinning against a
  * moving ledger would not pin anything anyway.
+ *
+ * PINNED AT z=2, which is what the default was when these figures were
+ * published. v1.0.0 moved the default to 1.5 (stats.ts#confidenceZ carries the
+ * measured FP/power table behind that), and burn plans read the confidence
+ * multiple -- so inheriting the default here would silently restate published
+ * run counts under parameters nobody published them under. A published number
+ * belongs to the parameters it was measured with, so the parameter is named.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ENV_FAILURE_TOKEN_FLOOR } from "../src/bench.js";
 import {
 	type AnalysisRun,
@@ -58,6 +65,14 @@ const RENT = 14;
 /** The compression point estimate FINDINGS records, as a fraction of the
  * suite's mean run: 10,851 / 100,702. */
 const EFFECT = 0.108;
+
+beforeEach(() => {
+	process.env.WARDEN_CONFIDENCE_Z = "2";
+});
+
+afterEach(() => {
+	delete process.env.WARDEN_CONFIDENCE_Z;
+});
 
 describe("the recorded pool", () => {
 	it("is the burn FINDINGS describes: 168 rows, 53 dead, 115 usable", () => {

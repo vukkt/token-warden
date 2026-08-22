@@ -90,7 +90,9 @@ describe("assessDelta with an explicit confidence multiple", () => {
 	});
 
 	it("falls back to confidenceZ() when none is given", () => {
-		expect(assessDelta(without, withRule, 25).confidenceMultiple).toBe(2);
+		// 1.5 since v1.0.0, down from 2 -- see stats.ts#confidenceZ for the
+		// measured FP/power table behind that reversal.
+		expect(assessDelta(without, withRule, 25).confidenceMultiple).toBe(1.5);
 	});
 
 	/**

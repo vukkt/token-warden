@@ -140,22 +140,47 @@ export function sessionsPerWeek(): number {
 }
 
 /**
- * Confidence multiple on the standard error for the "uncertain" band. Default 2
- * (~95% one-sided): a candidate must clear the 2×-rent bar by ≥ 2 standard
- * errors to be promoted. The calibration harness (validation/calibration.ts)
- * showed the old 1-SE band gave a ~16% false-positive rate (keeping a zero-effect
- * rule); 2 SE drops that to ~2-3% in that synthetic model — the empirical A/A
- * harness later measured 8.8% on real recorded runs (FINDINGS.md), so treat the
- * synthetic figure as a floor. Lower it (toward 1) to trade precision for power
- * once you trust your benchmark's variance.
+ * Confidence multiple on the standard error for the "uncertain" band: a
+ * candidate must clear the 2x-rent bar by at least this many standard errors.
+ *
+ * DEFAULT 1.5 since v1.0.0, down from 2. This reverses the v0.29.0 tightening,
+ * and it is the only gate change of that rework that survived calibration.
+ *
+ * v0.29.0 raised z from 1 to 2 because the SYNTHETIC harness showed a 1-SE band
+ * keeping zero-effect rules ~16% of the time. That optimised the false-positive
+ * rate, which is not the objective. Measured on the recorded `sql` pool
+ * (validation/empirical-calibration.ts, 3,000 trials, runs=2):
+ *
+ *     z      false positive        power at a 10% saving
+ *     1.0    19.4% [18.0, 20.8]    63.0%
+ *     1.5     9.8% [ 8.8, 11.0]    46.1%
+ *     2.0     8.9% [ 7.9, 10.0]    34.9%
+ *
+ * Moving 2 -> 1.5 buys 11.2 points of power for 0.9 points of false positives,
+ * a 12:1 trade whose FP intervals overlap. Moving further to 1.0 doubles the
+ * false-positive rate for another 17 points, which is a real trade rather than
+ * a free one — hence 1.5 rather than the token-optimal 1.0.
+ *
+ * WHY POWER IS WORTH SO MUCH MORE THAN PRECISION HERE. A worthless rule costs
+ * only its rent, ~25 tokens per run. A missed real rule forfeits its entire
+ * saving, ~4,769 tokens per run on that pool. False positives are ~191x cheaper
+ * than false negatives, so a rule is worth keeping once P(real) exceeds roughly
+ * 0.5% — while z=2 demands 97.7%. `validation/stream-calibration.ts` measures
+ * the consequence directly: on net tokens saved, the looser arm wins in every
+ * cell of a true-rate x effect-size sweep. See FINDINGS.md, "Online FDR".
+ *
+ * This is NOT a licence to drop z to 0. That accounting prices a junk rule at
+ * rent alone, which holds only while context is free; once the window binds,
+ * junk rules crowd out real ones. 1.5 is the point where the FP cost is still
+ * inside the noise of the status quo.
  *
  * A value below 1, non-numeric, or blank is REJECTED and falls back to the
- * default 2 — it is not clamped up to 1, so `0.5` yields the stricter 2 rather
- * than the looser 1. See DECISIONS.md (v0.40.0) for why that is left as-is.
+ * default — it is not clamped up to 1, so `0.5` yields 1.5 rather than 1. See
+ * DECISIONS.md (v0.40.0) for why that is left as-is.
  */
 export function confidenceZ(): number {
-	const raw = Number(process.env.WARDEN_CONFIDENCE_Z ?? 2);
-	return Number.isFinite(raw) && raw >= 1 ? raw : 2;
+	const raw = Number(process.env.WARDEN_CONFIDENCE_Z ?? 1.5);
+	return Number.isFinite(raw) && raw >= 1 ? raw : 1.5;
 }
 
 /**

@@ -43,9 +43,13 @@ function summary(
 }
 
 beforeEach(() => {
-	// The uncertainty band width depends on WARDEN_CONFIDENCE_Z; these
-	// false-positive assertions are calibrated for the default z=2.
-	delete process.env.WARDEN_CONFIDENCE_Z;
+	// PINNED AT z=2, not at "the default". These assertions reproduce figures
+	// PUBLISHED in FINDINGS.md, and those were measured when 2 was the default.
+	// v1.0.0 moved the default to 1.5 (see stats.ts#confidenceZ for the FP/power
+	// table behind that), which would silently invalidate every published number
+	// this file guards. A published result belongs to the parameters it was
+	// measured under, so the parameter is named here rather than inherited.
+	process.env.WARDEN_CONFIDENCE_Z = "2";
 });
 
 describe("groupReplicates", () => {

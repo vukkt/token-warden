@@ -1022,12 +1022,25 @@ describe("selectForAgent recovery of underpowered evictions", () => {
 		dir = mkdtempSync(join(tmpdir(), "warden-select-rec-"));
 		db = openDb(join(dir, "warden.db"));
 		process.env.TOKEN_WARDEN_MEMORY_DIR = join(dir, "agent-memory");
+		// PINNED AT z=2. The BORDERLINE fixture below is constructed to sit at
+		// a specific number of standard errors from the bar -- between the
+		// ordinary gate and the 1.5x recovery bar -- and that window moves with
+		// z. At the v1.0.0 default of 1.5 the two bars become 1.5 and 2.25 SE,
+		// and a 2.3 SE measurement clears BOTH, so the fixture would stop
+		// separating the cases it exists to separate.
+		//
+		// The BEHAVIOUR under test (a second look is strictly harder than a
+		// first) is z-independent, since recoveryStrictness multiplies whatever
+		// z is in force. Only the fixture's arithmetic is z-specific, so the z
+		// is named here and the comment on BORDERLINE stays true.
+		process.env.WARDEN_CONFIDENCE_Z = "2";
 	});
 
 	afterEach(() => {
 		db.close();
 		rmSync(dir, { recursive: true, force: true });
 		delete process.env.TOKEN_WARDEN_MEMORY_DIR;
+		delete process.env.WARDEN_CONFIDENCE_Z;
 	});
 
 	const TASKS = ["sql-01", "sql-02", "sql-03"];
