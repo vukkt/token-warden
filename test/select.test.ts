@@ -625,6 +625,33 @@ describe("selectForAgent", () => {
 			expect(memory).not.toContain("Rule A");
 		});
 
+		/**
+		 * THE SUBMODULAR HALF, doing something. Under the knapsack's independent
+		 * default the objective is a plain sum, so two near-duplicate rules each
+		 * count in full and the packer takes both. Similarity is trigram overlap
+		 * between rule bodies, so the second one is discounted and the budget
+		 * buys BREADTH instead.
+		 *
+		 * The two grep rules below sit at ~0.57 trigram similarity; each is
+		 * ~0.16 similar to the planning rule. On savings alone the pair wins
+		 * (100 + 95 = 195 against 100 + 90 = 190), which is exactly the wrong
+		 * answer and is what the independent default would give.
+		 */
+		it("drops a near-duplicate in favour of a rule covering new ground", () => {
+			seedActive("Grep for the symbol before reading a whole file.", 12, 100);
+			seedActive("Search for the symbol before opening a whole file.", 12, 95);
+			seedActive("State a one-line plan before the first edit.", 12, 90);
+
+			// Room for two of the three.
+			process.env.WARDEN_CONTEXT_BUDGET = "24";
+			compileActiveMemory(db, agent);
+
+			const memory = readFileSync(memoryFilePath(agent), "utf8");
+			expect(memory).toContain("Grep for the symbol");
+			expect(memory).toContain("State a one-line plan");
+			expect(memory).not.toContain("Search for the symbol");
+		});
+
 		it("preserves ledger order rather than emitting greedy's selection order", () => {
 			seedActive("Rule A: cheapest to carry.", 10, 100);
 			seedActive("Rule B: the big winner.", 40, 9000);

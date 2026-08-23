@@ -30,6 +30,7 @@ import {
 	type WardenDb,
 } from "./db.js";
 import { packRules } from "./knapsack.js";
+import { trigramSimilarity } from "./rules.js";
 import { displayText } from "./sanitize.js";
 import { memoryContextBudget } from "./stats.js";
 
@@ -112,26 +113,58 @@ function memorySafeRules(rules: RuleRow[]): RuleRow[] {
  * Protected rules are FORCED in, which is where that constraint belongs: it is
  * a statement about the solution set, not about a rule's individual merit.
  *
- * The similarity function is left at the independent default, so this is
- * currently an ordinary 0/1 knapsack. Real pairwise rule overlap has never been
- * measured, and inventing a redundancy structure the data does not support
- * would be exactly the kind of unmeasured claim this project exists to refuse.
+ * SIMILARITY IS TRIGRAM OVERLAP BETWEEN RULE BODIES, which is what makes the
+ * submodular half of the packer load-bearing rather than decorative. Under the
+ * module's independent default the objective collapses to a plain sum and the
+ * whole facility-location construction does nothing; with a real similarity,
+ * two rules that say nearly the same thing stop each counting in full.
+ *
+ * `trigramSimilarity` satisfies what the objective needs -- it lands in [0, 1],
+ * it is symmetric, and it is 1 on the diagonal -- and it is not a new
+ * assumption smuggled in here: `distill.ts` already uses this exact measure to
+ * decide that two rules ARE the same rule, deduping candidates above 0.85. This
+ * reuses a judgement the project already makes and already tests.
+ *
+ * THE HONEST LIMIT. Trigram overlap measures TEXTUAL similarity, not overlap in
+ * what two rules actually save. Two rules can be worded quite differently and
+ * address the same waste, which this will miss, or be worded alike and address
+ * different waste, which this will over-discount. It is a proxy. It is a better
+ * proxy than assuming independence, which is the alternative and is known to be
+ * false -- but measuring real pairwise savings overlap is a token burn nobody
+ * has run, and this stays a proxy until someone does.
  */
 function packToBudget(rules: RuleRow[]): RuleRow[] {
 	const budget = memoryContextBudget();
 	if (budget === null) return rules;
 
+	const candidates = rules.map((rule) => ({
+		id: String(rule.id),
+		contextCost: rule.context_cost,
+		// A rule with no recorded delta (authored, or migrated from before
+		// receipts) contributes no measured saving, so the knapsack ranks it
+		// last rather than guessing on its behalf.
+		saving: rule.measured_delta ?? 0,
+		forced: rule.protected === 1,
+	}));
+
+	// Precomputed once. `trigramSimilarity` rebuilds both trigram sets on every
+	// call, and greedy asks for O(n^2) similarities per selection round, so
+	// calling it directly would recompute the same sets a cubic number of times.
+	const bodyById = new Map(rules.map((r) => [String(r.id), r.body]));
+	const matrix = new Map<string, number>();
+	for (const a of candidates) {
+		for (const b of candidates) {
+			matrix.set(
+				JSON.stringify([a.id, b.id]),
+				trigramSimilarity(bodyById.get(a.id) ?? "", bodyById.get(b.id) ?? ""),
+			);
+		}
+	}
+
 	const { chosen } = packRules(
-		rules.map((rule) => ({
-			id: String(rule.id),
-			contextCost: rule.context_cost,
-			// A rule with no recorded delta (authored, or migrated from before
-			// receipts) contributes no measured saving, so the knapsack ranks it
-			// last rather than guessing on its behalf.
-			saving: rule.measured_delta ?? 0,
-			forced: rule.protected === 1,
-		})),
+		candidates,
 		budget,
+		(a, m) => matrix.get(JSON.stringify([a.id, m.id])) ?? 0,
 	);
 
 	// Preserve the caller's ordering rather than greedy's selection order: the
