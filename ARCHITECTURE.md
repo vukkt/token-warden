@@ -87,7 +87,7 @@ the database, or a model.
 
 | Module | Responsibility |
 | --- | --- |
-| `knapsack.ts` | The kept SET under a context budget. Facility-location objective (monotone submodular by construction) with density-greedy plus the best-single-item guard. Wired into `memory.ts` behind `WARDEN_CONTEXT_BUDGET` |
+| `knapsack.ts` | The kept SET under a context budget. Facility-location objective (monotone submodular by construction) with density-greedy plus the best-single-item guard. Wired into `memory.ts` behind `WARDEN_CONTEXT_BUDGET`; redundancy is detected by trigram overlap between rule bodies, a proxy for savings overlap rather than a measurement of it |
 
 The other surviving theorem, Neyman allocation, is not a module — it lives in
 `select.ts#allocateTopUpRuns` where it has been since v0.24.0.

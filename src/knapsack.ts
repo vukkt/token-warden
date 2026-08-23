@@ -30,12 +30,30 @@
  * The mode universe is the candidate set itself: every rule is taken as the
  * proxy for the waste mode it was distilled to address, with `sigma(i, i) = 1`.
  *
- * DEGRADING TO THE CURRENT BEHAVIOUR. With the default similarity -- 1 on the
- * diagonal, 0 elsewhere -- f collapses to `sum of s_i over S`, a modular
- * function, and the problem becomes an ordinary 0/1 knapsack. That matters: the
- * repo has NOT measured pairwise rule overlap, so the honest default is to
- * assume none, and this module must not invent savings structure it has no data
- * for. Supply a real `similarity` only once there is a measurement behind it.
+ * THE DEFAULT DEGRADES TO A PLAIN KNAPSACK. With the default similarity -- 1 on
+ * the diagonal, 0 elsewhere -- f collapses to `sum of s_i over S`, a modular
+ * function, and the problem becomes an ordinary 0/1 knapsack. That is the right
+ * default for a library that cannot know what its caller knows.
+ *
+ * WHAT THE ONE CALLER SUPPLIES, and the standard it actually meets.
+ * `memory.ts#packToBudget` passes trigram overlap between rule bodies. An
+ * earlier version of this paragraph said to "supply a real `similarity` only
+ * once there is a measurement behind it", and trigram overlap is NOT a
+ * measurement of savings overlap -- it is a textual proxy for it. That bar was
+ * set too high to ever be cleared by anything short of a token burn measuring
+ * pairwise marginal savings, which nobody has run.
+ *
+ * The bar that replaced it: a similarity must be an existing, tested measure
+ * the project already trusts for the same judgement, and its limits must be
+ * stated where it is supplied. Trigram overlap qualifies -- `distill.ts` dedupes
+ * candidates above 0.85 on exactly this measure, i.e. the project already uses
+ * it to decide two rules ARE the same rule.
+ *
+ * The alternative is not neutrality. Independence is not an absence of a claim
+ * about savings structure; it is the claim that two rules saying nearly the same
+ * thing each save in full, which is certainly false. Between a proxy with stated
+ * limits and an assumption known to be wrong, the proxy is the more honest
+ * default for a caller that has bodies to compare.
  *
  * THE GUARANTEE (Khuller, Moss & Naor, IPL 1999). Greedy by density -- always
  * take the feasible item with the best marginal-gain-per-token -- and then

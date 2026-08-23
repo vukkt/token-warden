@@ -419,6 +419,32 @@ is the first token burn v1.0.0 should fund.
 stays as an admission filter — a rule that cannot clear its own rent alone never
 enters the knapsack — but the kept set is chosen jointly.
 
+> **SHIPPED, with a proxy where a measurement was demanded.** The paragraph
+> above says the packer "must degrade to the current per-rule behaviour when
+> marginal savings are unmeasured", and it did exactly that for a release: the
+> similarity defaulted to independence, so the facility-location objective
+> collapsed to a plain sum and the whole construction was decorative.
+>
+> It now uses **trigram overlap between rule bodies** (`memory.ts#packToBudget`),
+> which is a proxy for savings overlap rather than a measurement of it. That is a
+> deliberate lowering of the bar this section set, and the reasoning is:
+>
+> - The bar as written ("measured pairwise marginals") could not be cleared by
+>   anything short of a token burn nobody has funded, so it guaranteed the
+>   machinery stayed dead indefinitely.
+> - **Independence is not neutral.** It is the claim that two rules saying nearly
+>   the same thing each save in full, which is certainly false. The choice was
+>   never "proxy versus nothing" — it was "proxy versus an assumption known to be
+>   wrong."
+> - Trigram overlap is not invented for this. `distill.ts` already dedupes
+>   candidates above 0.85 on the same measure, so the project already uses it to
+>   decide two rules ARE the same rule.
+>
+> The `(1-1/e)/2` guarantee still holds — the objective is submodular by
+> construction whatever similarity is supplied. What remains unearned is the
+> claim that the objective's *inputs* describe real savings overlap. Measuring
+> pairwise marginals is still the right burn to fund.
+
 ## 4. What this buys
 
 | Weakness (measured, documented) | Theorem | Mechanism |
