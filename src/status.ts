@@ -41,6 +41,7 @@ import {
 import { formatNumber as fmt, pctChange } from "./format.js";
 import { knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
+import { CHARS_PER_TOKEN } from "./stats.js";
 
 const TOTAL_SQL = RUN_TOTAL_TOKENS_SQL;
 
@@ -405,9 +406,11 @@ export function formatStatus(data: StatusData): string {
 		),
 
 		...section(
-			"Top tool / skill / MCP costs (real-work footprint, ≈tokens; see /warden-attribute):",
+			"Top tool / skill / MCP costs (real-work footprint, ≈tokens):",
 			data.toolCosts.map((c) => {
-				const estTokens = Math.round((c.inputChars + c.resultChars) / 4);
+				const estTokens = Math.round(
+					(c.inputChars + c.resultChars) / CHARS_PER_TOKEN,
+				);
 				const where =
 					c.kind === "builtin"
 						? c.label

@@ -58,6 +58,23 @@ export function pooledVariance(vectors: number[][]): number | null {
 	return dof > 0 ? sumSq / dof : null;
 }
 
+/**
+ * Characters per token, the estimator this project prices everything with.
+ *
+ * Named here because it was written out twice as a bare `4` -- in
+ * `rules.ts#contextCost`, which is the denominator of the entire product, and
+ * in the status dashboard's tool-footprint estimate. If the tokenizer's real
+ * ratio ever moves, the rent a rule pays and the cost the dashboard reports
+ * have to move together or the two stop describing the same thing.
+ *
+ * The ROUNDING deliberately differs at the two call sites and is not
+ * centralised with the constant. Rent uses `ceil`: a rule is charged for the
+ * token it partially occupies, so the gate is never flattered by a rounding
+ * error. The dashboard uses `round`, because it is reporting an estimate to a
+ * human rather than charging anyone.
+ */
+export const CHARS_PER_TOKEN = 4;
+
 export function median(xs: number[]): number {
 	const s = [...xs].sort((a, b) => a - b);
 	const mid = Math.floor(s.length / 2);

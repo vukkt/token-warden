@@ -11,6 +11,7 @@
  * path is measured against, and the distiller is now just one of its callers.
  */
 import { z } from "zod";
+import { CHARS_PER_TOKEN } from "./stats.js";
 
 /** Jaccard similarity above which two bodies are treated as the same rule. */
 export const SIMILARITY_THRESHOLD = 0.85;
@@ -125,5 +126,5 @@ export const ruleBodySchema = z
  * saving against `effectiveRent` (`stats.ts`), which builds on this.
  */
 export function contextCost(body: string): number {
-	return Math.ceil(body.length / 4);
+	return Math.ceil(body.length / CHARS_PER_TOKEN);
 }

@@ -22,6 +22,7 @@ import { shouldDistill } from "./distill.js";
 import { appendLogLine } from "./logfile.js";
 import { knownAgents } from "./registry.js";
 import { displayText } from "./sanitize.js";
+import { median } from "./stats.js";
 import { aggregateToolCosts } from "./tool-cost.js";
 import { parseTranscriptFile } from "./transcript.js";
 
@@ -30,15 +31,6 @@ import { parseTranscriptFile } from "./transcript.js";
 const ANOMALY_MULTIPLE = 2;
 const ANOMALY_MIN_PRIORS = 5;
 const ANOMALY_WINDOW = 50;
-
-function median(values: number[]): number {
-	if (values.length === 0) return 0;
-	const sorted = [...values].sort((a, b) => a - b);
-	const mid = Math.floor(sorted.length / 2);
-	return sorted.length % 2 === 0
-		? ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2
-		: (sorted[mid] ?? 0);
-}
 
 /**
  * Pure anomaly detector: returns how many times the agent's recent median
