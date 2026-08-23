@@ -1771,3 +1771,57 @@ It was fixed and pinned with two regression tests (verified to fail against the
 old implementation) in the commit before this one, so the deleted implementation
 is a correct one. A negative result about a broken implementation would not have
 been a result.
+
+## The context window is not scarce (2026-08-23)
+
+The submodular knapsack (`src/knapsack.ts`) is wired into memory compilation and
+ships OFF. The question of what its default budget should be turns out to have
+an arithmetic answer rather than a judgement one.
+
+Rule bodies are capped at 200 characters and `contextCost` is `ceil(len/4)`, so
+a rule costs at most 50 tokens and typically about 28 -- the two live `sql`
+rules are 27 and 28.
+
+| rules carried | typical tokens | share of a 200k window |
+| --- | --- | --- |
+| 2 (today) | 56 | 0.03% |
+| 10 | 280 | 0.14% |
+| 50 | 1,400 | 0.70% |
+| 100 | 2,800 | 1.40% |
+| 200 | 5,600 | 2.80% |
+
+The live ledger has measured **six rules in ten weeks** (2 active, 4 evicted).
+
+### There is no honest default budget
+
+- Generous enough not to evict rules the operator paid to measure -- call it
+  2,000 tokens, about seventy rules -- and it **never binds for anyone**, at any
+  plausible rate of rule accumulation. Shipping it would be theatre.
+- Tight enough to bind at current counts -- around 60 tokens -- and it starts
+  **discarding measured savings** the moment a third rule survives.
+
+Nothing sensible sits between those, so `WARDEN_CONTEXT_BUDGET` ships unset and
+`packToBudget` returns the rule set untouched.
+
+### Consequence for the headline
+
+**One theorem runs in a default install, not two.** Neyman allocation runs on
+every top-up pass; the knapsack runs only when an operator sets a budget. The
+README now says so in the theorem table rather than leaving "two theorems" to be
+read as two running.
+
+### Why this one is kept when three others were deleted
+
+The distinction is worth stating because it is the only thing separating this
+from Successive Halving, which was deleted for looking similar.
+
+Variance moderation, online FDR and Successive Halving were each measured at the
+operating point and found **harmful or neutral there**. Halving in particular
+gave the winner exactly the depth uniform allocation gives while adding false
+negatives -- carrying it was a live cost paid for nothing.
+
+The knapsack is measured as **not yet needed**, which is a different result. Its
+cost when idle is one null check, it has no failure mode while off, and it is
+the only mechanism that would handle rule accumulation if that ever becomes
+real. "No benefit at this scale" and "no benefit" are not the same finding, and
+the honest thing is to keep the code and stop advertising it as running.

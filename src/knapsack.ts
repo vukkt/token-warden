@@ -69,6 +69,28 @@
  * that numbers in the tens, and it is deliberately not implemented -- the
  * bound below is the one this code earns.
  *
+ * WHY IT IS OFF BY DEFAULT, which is an arithmetic result rather than caution.
+ * This manages scarcity in the context window, and at observed rule counts
+ * there is none. Rule bodies are capped at 200 characters, so `contextCost` is
+ * at most 50 tokens and typically ~28; a hundred rules would occupy about 2,800
+ * tokens, roughly 1.4% of a 200k window. The live ledger has measured six rules
+ * in ten weeks.
+ *
+ * That leaves no honest default budget. Generous enough not to evict rules the
+ * operator paid to measure (~2,000 tokens, about seventy rules) and it never
+ * binds for anyone; tight enough to bind and it starts discarding measured
+ * savings. `memoryContextBudget()` therefore returns null unless
+ * `WARDEN_CONTEXT_BUDGET` is set, and `packToBudget` returns the rules
+ * untouched when it is.
+ *
+ * The module is kept anyway, and the distinction from the three theorems this
+ * project deleted matters. Those were measured and found HARMFUL OR NEUTRAL at
+ * the operating point -- Successive Halving gave the winner the same depth as
+ * uniform allocation while adding false negatives, so carrying it was a live
+ * cost. This one is measured as NOT YET NEEDED: its cost when idle is a single
+ * null check, and it is the only mechanism that would handle rule accumulation
+ * if that ever becomes real.
+ *
  * Pure and zero-token.
  */
 

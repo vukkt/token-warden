@@ -66,13 +66,26 @@ signal-to-noise ratio of 1:100 is what every design decision here is really abou
 Four proven results were proposed for that problem. All four were implemented and measured
 against the recorded data. **Two earned their place:**
 
-| stage | theorem | what it buys |
+| stage | theorem | runs |
 |---|---|---|
-| **allocate** | Neyman (1934), optimal stratified allocation | spends runs where the variance is, not uniformly |
-| **pack** | submodular greedy under a knapsack — Khuller, Moss & Naor (1999) | stops near-duplicate rules each passing a per-item bar |
+| **allocate** | Neyman (1934), optimal stratified allocation | **always** — every top-up pass |
+| **pack** | submodular greedy under a knapsack — Khuller, Moss & Naor (1999) | only under `WARDEN_CONTEXT_BUDGET`, which is **unset by default** |
 
 The knapsack's `(1-1/e)/2` bound is verified against brute-force optima over 800 random
 instances rather than cited in a comment.
+
+**So one theorem runs in a default install, not two, and the reason is arithmetic rather
+than caution.** The knapsack manages scarcity in the context window, and at observed rule
+counts there is none: rule bodies are capped at 200 characters, so 100 rules would occupy
+about 2,800 tokens — **1.4% of a 200k window**. This ledger has measured six rules in ten
+weeks. A budget generous enough not to evict rules you paid to measure would never bind for
+anyone; a budget tight enough to bind would start throwing away measured savings. There is
+no honest default between those, so it ships unset.
+
+The code stays wired because its cost when idle is one null check, and it is the only thing
+that would handle rule accumulation if that ever becomes real. That is a different case
+from the three deleted theorems, which were measured and found *harmful or neutral at the
+operating point*; this one is measured as **not yet needed**.
 
 **The other three were deleted, and that is the more useful half of this project.** A
 codebase that ships four proven algorithms proves it can copy from a paper. One that
