@@ -360,6 +360,94 @@ describe("parseTranscript — toolEvents (attribution raw material)", () => {
 		expect(parseTranscript(lines).toolEvents[0]?.resultChars).toBe(0);
 	});
 
+	/**
+	 * ARRAY-FORM tool_result content, restored after being lost.
+	 *
+	 * These two cases were the only coverage of `resultContentChars`'s array
+	 * branch, and they lived in test/attribute.test.ts because they happened to
+	 * assert through the `/warden-attribute` renderer. That command was removed
+	 * in v1.0.0 and its test file went with it -- taking the regression tests
+	 * for a live bug fix that has nothing to do with the renderer. The parsing
+	 * still runs on every Stop hook and still feeds `tool_costs` and the status
+	 * dashboard; only the tests protecting it disappeared.
+	 *
+	 * Rewritten against `parseTranscript`, the surviving public path, so they
+	 * cannot be orphaned again by deleting a consumer.
+	 */
+	it("sums the text blocks of an array-form tool_result", () => {
+		const lines = [
+			entry({
+				type: "assistant",
+				uuid: "a1",
+				message: {
+					id: "m1",
+					content: [{ type: "tool_use", id: "t1", name: "Grep", input: {} }],
+				},
+			}),
+			entry({
+				type: "user",
+				uuid: "u1",
+				message: {
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "t1",
+							content: [
+								{ type: "text", text: "abc" },
+								{ type: "text", text: "de" },
+							],
+						},
+					],
+				},
+			}),
+		];
+		expect(parseTranscript(lines.join("\n")).toolEvents[0]?.resultChars).toBe(
+			5,
+		);
+	});
+
+	/**
+	 * The regression from error-ledger entry #4: a bare string, a number, a null
+	 * or an image block sitting beside real text must not zero the whole
+	 * result's footprint. Parsing the array strictly and catching the failure
+	 * would discard every good sibling, which silently corrupted attribution
+	 * before it was fixed.
+	 */
+	it("counts good text blocks even when the result array has odd siblings", () => {
+		const lines = [
+			entry({
+				type: "assistant",
+				uuid: "a1",
+				message: {
+					id: "m1",
+					content: [{ type: "tool_use", id: "t1", name: "Grep", input: {} }],
+				},
+			}),
+			entry({
+				type: "user",
+				uuid: "u1",
+				message: {
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "t1",
+							content: [
+								{ type: "image", source: { data: "..." } },
+								{ type: "text", text: "realtext" },
+								12345,
+								null,
+								"bare string sibling",
+							],
+						},
+					],
+				},
+			}),
+		];
+		expect(parseTranscript(lines.join("\n")).toolEvents[0]?.resultChars).toBe(
+			8,
+		);
+	});
+
 	it("counts a result only once even if streamed across entries", () => {
 		const resultEntry = entry({
 			type: "user",
