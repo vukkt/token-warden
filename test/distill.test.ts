@@ -143,6 +143,31 @@ describe("trigramSimilarity", () => {
 		expect(trigramSimilarity(a, b)).toBeLessThan(0.85);
 	});
 
+	/**
+	 * Content-free strings, which went untested until this function acquired a
+	 * SECOND caller. `memory.ts#packToBudget` now feeds it rule bodies to build
+	 * the packer's similarity matrix, so what it returns here decides real
+	 * packing behaviour rather than nothing.
+	 *
+	 * There is no special case in the implementation and there does not need to
+	 * be: padding makes the gram set non-empty for every input, so a string that
+	 * normalises to nothing still yields the single trigram of three spaces. Two
+	 * such strings are therefore identical, and a content-free string shares
+	 * nothing with a real one.
+	 *
+	 * `("!!!", "???")` is the case worth pinning. An unreachable branch used to
+	 * sit above this comparing trimmed strings, which would have called them
+	 * DIFFERENT. Treating them as identical is the answer both callers want:
+	 * neither carries information to distinguish.
+	 */
+	it("treats content-free strings as identical, and as sharing nothing with real ones", () => {
+		expect(trigramSimilarity("", "")).toBe(1);
+		expect(trigramSimilarity("!!!", "???")).toBe(1);
+		expect(trigramSimilarity("", "a")).toBe(0);
+		expect(trigramSimilarity("", "Use Grep before reading a file.")).toBe(0);
+		expect(trigramSimilarity("...", "Use Grep before reading a file.")).toBe(0);
+	});
+
 	it("ignores case and punctuation", () => {
 		expect(
 			trigramSimilarity("Use grep first!", "use GREP first"),

@@ -29,13 +29,26 @@ function characterTrigrams(text: string): Set<string> {
 	return grams;
 }
 
-/** Jaccard similarity over character trigrams, in [0, 1]. */
+/**
+ * Jaccard similarity over character trigrams, in [0, 1].
+ *
+ * There is no empty-gram-set case to guard. `characterTrigrams` pads to
+ * `"  " + normalized + " "`, so `padded.length` is always `normalized.length + 3`
+ * and the loop always adds at least one gram -- a string that normalises to
+ * nothing still yields `{"   "}`. An `if (size === 0)` branch stood here and was
+ * unreachable.
+ *
+ * It also disagreed with the code around it, which is why it is deleted rather
+ * than left as harmless defence. For `("!!!", "???")` the dead branch would have
+ * returned 0, comparing the trimmed strings and finding them different; the live
+ * path returns 1, because both normalise to the same single padding trigram. The
+ * live answer is the right one for the two callers: content-free strings carry no
+ * distinguishing information, so treating them as maximally similar is what the
+ * distiller's dedupe and the packer's redundancy signal both want.
+ */
 export function trigramSimilarity(a: string, b: string): number {
 	const gramsA = characterTrigrams(a);
 	const gramsB = characterTrigrams(b);
-	if (gramsA.size === 0 || gramsB.size === 0) {
-		return a.trim() === b.trim() ? 1 : 0;
-	}
 	let intersection = 0;
 	for (const gram of gramsA) {
 		if (gramsB.has(gram)) intersection++;
