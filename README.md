@@ -11,10 +11,10 @@ That is the whole idea. Everything below is either the loop that enforces it, th
 theorems that survived measurement, or the record of the three that did not.
 
 ```text
-  version    1.1.0             tests        917 across 35 files
-  license    MIT               coverage    95.7% lines, CI-enforced floor
+  version    1.1.0             tests       ~920 across 35 files
+  license    MIT               coverage    96% lines, CI-enforced floor
   source     24 modules        commands    6
-              9.4k lines       built       2026-06 to 2026-08
+              9.5k lines       built       2026-06 to 2026-08
 ```
 
 ---

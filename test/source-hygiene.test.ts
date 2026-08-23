@@ -226,3 +226,86 @@ describe("exports are reachable", () => {
 		).toEqual([]);
 	});
 });
+
+/**
+ * THE README'S OWN NUMBERS ARE TRUE.
+ *
+ * The stats block at the top of README.md is the first thing a reader sees, and
+ * it has silently drifted after almost every deletion in this rework -- module
+ * counts, test counts, coverage, source size. Hand-restamping it has now been
+ * done five times and been wrong on several of those. For a project whose only
+ * real claim is that it does not overstate, a stale front page is the worst
+ * place to be sloppy.
+ *
+ * WHAT IS PINNED here is everything derivable from the tree without running
+ * anything: version, module count, command count, test-file count, and source
+ * size. Those cannot drift again without this failing.
+ *
+ * WHAT IS NOT, and why the README states them approximately rather than
+ * exactly:
+ *
+ *  - TEST COUNT cannot be counted statically. `it.each` expands at runtime, so
+ *    the 35 files hold 768 literal `it(` calls and vitest reports 921. Any
+ *    static number would be a different number, confidently wrong.
+ *  - COVERAGE requires a coverage run, and a guard that reads a report only
+ *    when one happens to be present passes vacuously the rest of the time --
+ *    the exact failure this suite has already shipped twice.
+ *
+ * So the README says "~920" and "96%", which small drift cannot falsify, and
+ * this guard covers the rest exactly. Approximate-and-true beats
+ * precise-and-stale.
+ */
+describe("README stats block matches the repository", () => {
+	const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
+	const stats = readme.slice(
+		readme.indexOf("```text"),
+		readme.indexOf("```", readme.indexOf("```text") + 7),
+	);
+
+	it("finds the stats block at all", () => {
+		expect(stats).toContain("version");
+		expect(stats).toContain("commands");
+	});
+
+	it("states the shipped version", () => {
+		const version = JSON.parse(
+			readFileSync(join(repoRoot, "package.json"), "utf8"),
+		).version;
+		expect(stats).toContain(version);
+	});
+
+	it("states the real module and command counts", () => {
+		const modules = readdirSync(join(repoRoot, "src")).filter((f) =>
+			f.endsWith(".ts"),
+		).length;
+		const commands = readdirSync(join(repoRoot, "commands")).filter((f) =>
+			f.endsWith(".md"),
+		).length;
+		expect(stats).toContain(`${modules} modules`);
+		expect(stats).toContain(`commands    ${commands}`);
+	});
+
+	it("states the real test-file count", () => {
+		const files = readdirSync(join(repoRoot, "test")).filter((f) =>
+			f.endsWith(".test.ts"),
+		).length;
+		expect(stats).toContain(`across ${files} files`);
+	});
+
+	it("states the source size to the nearest tenth of a thousand lines", () => {
+		const total = readdirSync(join(repoRoot, "src"))
+			.filter((f) => f.endsWith(".ts"))
+			.reduce(
+				(sum, f) =>
+					sum +
+					readFileSync(join(repoRoot, "src", f), "utf8").split("\n").length -
+					1,
+				0,
+			);
+		const claimed = /([\d.]+)k lines/.exec(stats)?.[1];
+		expect(claimed, "README states no source size").toBeDefined();
+		// Rounded to 0.1k, so a handful of lines does not fail the build -- but a
+		// deletion of any real size does.
+		expect(Number(claimed)).toBeCloseTo(total / 1000, 1);
+	});
+});
