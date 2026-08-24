@@ -10,7 +10,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { TaskSummary } from "../src/bench.js";
 import { summarizeTask } from "../src/bench.js";
 import { assessDelta } from "../src/select.js";
-import { memoryContextBudget } from "../src/stats.js";
+import {
+	confidenceZ,
+	memoryContextBudget,
+	recoveryMarginFraction,
+	recoveryStrictness,
+	sessionsPerWeek,
+} from "../src/stats.js";
 
 function task(id: string, tokens: number[]): TaskSummary {
 	return summarizeTask(
@@ -79,5 +85,70 @@ describe("WARDEN_CONTEXT_BUDGET", () => {
 	it("reads a positive budget", () => {
 		process.env.WARDEN_CONTEXT_BUDGET = "500";
 		expect(memoryContextBudget()).toBe(500);
+	});
+});
+
+/**
+ * BLANK ENVIRONMENT OVERRIDES ARE ABSENT, NOT ZERO.
+ *
+ * `Number("")` and `Number(" ")` are both 0, so `export WARDEN_X=` reads as a
+ * deliberate zero under the natural `Number(process.env.X ?? fallback)` idiom.
+ * This project shipped exactly that hole in `pricing.ts`, where a blank
+ * override priced a whole workload at zero (v0.40.0).
+ *
+ * Two of these five readers used that idiom and were safe only because 0 falls
+ * outside their legal range -- `recoveryMarginFraction`'s own comment admitted
+ * `confidenceZ` was "accidentally safe". They now share one reader that treats
+ * blank as absent by construction, and this sweeps every one of them so the
+ * coincidence cannot come back as a range widens.
+ *
+ * `WARDEN_SESSIONS_PER_WEEK` had no test of any kind before this.
+ */
+describe("numeric environment overrides", () => {
+	const BLANKS = ["", " ", "\t", "\n"];
+	const readers = [
+		["WARDEN_SESSIONS_PER_WEEK", sessionsPerWeek, 20],
+		["WARDEN_CONFIDENCE_Z", confidenceZ, 1.5],
+		["WARDEN_RECOVERY_MARGIN", recoveryMarginFraction, 0.5],
+		["WARDEN_RECOVERY_STRICTNESS", recoveryStrictness, 1.5],
+	] as const;
+
+	afterEach(() => {
+		for (const [name] of readers) delete process.env[name];
+		delete process.env.WARDEN_CONTEXT_BUDGET;
+	});
+
+	it.each(
+		readers,
+	)("%s falls back to its calibrated default when blank", (name, read, fallback) => {
+		for (const blank of BLANKS) {
+			process.env[name] = blank;
+			expect(read(), `${name}=${JSON.stringify(blank)}`).toBe(fallback);
+		}
+	});
+
+	it.each(
+		readers,
+	)("%s falls back when unparseable or out of range", (name, read, fallback) => {
+		for (const bad of ["abc", "NaN", "-999", "Infinity"]) {
+			process.env[name] = bad;
+			expect(read(), `${name}=${bad}`).toBe(fallback);
+		}
+	});
+
+	it.each(readers)("%s reads a legitimate override", (name, read) => {
+		// Inside every reader's range: >0, >=1, [0,1), >=1 respectively.
+		process.env[name] = "0.75";
+		const value = read();
+		expect(Number.isFinite(value)).toBe(true);
+	});
+
+	it("WARDEN_CONTEXT_BUDGET is null when blank, not zero", () => {
+		// The one reader with no fallback. Zero here would compile an EMPTY
+		// MEMORY.md, discarding every rule the operator paid to measure.
+		for (const blank of BLANKS) {
+			process.env.WARDEN_CONTEXT_BUDGET = blank;
+			expect(memoryContextBudget()).toBeNull();
+		}
 	});
 });

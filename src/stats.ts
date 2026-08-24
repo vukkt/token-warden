@@ -93,16 +93,43 @@ export function median(xs: number[]): number {
 const CACHE_CREATE_MULTIPLIER = 1.25;
 
 /**
+ * Read a numeric environment override, or null when there is none to read.
+ *
+ * Null means absent, BLANK, non-numeric, or outside the range the caller
+ * accepts. Blank is the case this exists for. `Number("")` and `Number(" ")`
+ * are both 0, so the natural idiom `Number(process.env.X ?? fallback)` reads
+ * `export WARDEN_X=` as a deliberate zero rather than as an unset variable --
+ * and this project has already shipped that hole once, in `pricing.ts`, where
+ * a blank override priced an entire workload at zero (v0.40.0).
+ *
+ * Two of the five readers below used that idiom and survived only because 0
+ * happens to fall outside their legal range. `recoveryMarginFraction` said so
+ * in as many words: "confidenceZ is accidentally safe from this because 0 is
+ * out of ITS range". Safety by coincidence stops being safety the moment
+ * someone widens a range, so the coincidence is replaced by construction.
+ *
+ * Rejecting rather than clamping is deliberate and shared by every caller: a
+ * typo yields the calibrated default instead of a policy nobody measured.
+ */
+function numericEnv(
+	name: string,
+	accepts: (value: number) => boolean,
+): number | null {
+	const set = process.env[name]?.trim();
+	if (!set) return null;
+	const raw = Number(set);
+	return Number.isFinite(raw) && accepts(raw) ? raw : null;
+}
+
+/**
  * Sessions per week, the horizon the one-time cache re-prefill is amortized
  * over. Shared by the gate (`effectiveRent`) and the dollar projection
  * (`cost.ts`) — these were two identical copies in two modules, and they must
  * agree by construction or the economics disagree with the bar.
  */
 export function sessionsPerWeek(): number {
-	// A zero/negative/NaN override would invert or trivialize the inequality;
-	// fall back to the default instead.
-	const raw = Number(process.env.WARDEN_SESSIONS_PER_WEEK ?? 20);
-	return Number.isFinite(raw) && raw > 0 ? raw : 20;
+	// Zero or negative would invert or trivialize the inequality.
+	return numericEnv("WARDEN_SESSIONS_PER_WEEK", (n) => n > 0) ?? 20;
 }
 
 /**
@@ -145,8 +172,7 @@ export function sessionsPerWeek(): number {
  * DECISIONS.md (v0.40.0) for why that is left as-is.
  */
 export function confidenceZ(): number {
-	const raw = Number(process.env.WARDEN_CONFIDENCE_Z ?? 1.5);
-	return Number.isFinite(raw) && raw >= 1 ? raw : 1.5;
+	return numericEnv("WARDEN_CONFIDENCE_Z", (n) => n >= 1) ?? 1.5;
 }
 
 /**
@@ -167,18 +193,12 @@ export function confidenceZ(): number {
  * Read per call, not frozen at module load: the calibration harness sweeps it.
  */
 export function recoveryMarginFraction(): number {
-	// Blank must mean ABSENT, not zero. Number("") is 0, which is inside this
-	// parameter's legal range, so the usual `Number(env ?? default)` idiom would
-	// turn `WARDEN_RECOVERY_MARGIN=` into the LOOSEST possible policy — every
-	// eviction on the positive side of the bar reclassified as recoverable.
-	// (`confidenceZ` is accidentally safe from this because 0 is out of ITS
-	// range; this parameter is not, and a test pins the difference.)
-	const set = process.env.WARDEN_RECOVERY_MARGIN?.trim();
-	const raw = set ? Number(set) : 0.5;
-	// Outside [0, 1) it is not a fraction of the margin. Reject rather than
-	// clamp, so a typo yields the calibrated default instead of a policy nobody
-	// measured — the same discipline as confidenceZ().
-	return Number.isFinite(raw) && raw >= 0 && raw < 1 ? raw : 0.5;
+	// Outside [0, 1) it is not a fraction of the margin. 0 IS inside this
+	// parameter's legal range, which is why `numericEnv` must treat a blank
+	// override as absent rather than as zero: `WARDEN_RECOVERY_MARGIN=` would
+	// otherwise select the loosest possible policy, reclassifying every
+	// eviction on the positive side of the bar as recoverable.
+	return numericEnv("WARDEN_RECOVERY_MARGIN", (n) => n >= 0 && n < 1) ?? 0.5;
 }
 
 /**
@@ -196,11 +216,9 @@ export function recoveryMarginFraction(): number {
  * positives for two-and-a-half times the power. See FINDINGS.md.
  */
 export function recoveryStrictness(): number {
-	const set = process.env.WARDEN_RECOVERY_STRICTNESS?.trim();
-	const raw = set ? Number(set) : 1.5;
 	// Below 1 would make a re-tried rule EASIER to bank than a first-time one,
-	// which inverts the whole point; reject and fall back to the default.
-	return Number.isFinite(raw) && raw >= 1 ? raw : 1.5;
+	// which inverts the whole point.
+	return numericEnv("WARDEN_RECOVERY_STRICTNESS", (n) => n >= 1) ?? 1.5;
 }
 
 /**
@@ -228,10 +246,8 @@ export function recoveryStrictness(): number {
  * `recoveryMarginFraction` documents.
  */
 export function memoryContextBudget(): number | null {
-	const set = process.env.WARDEN_CONTEXT_BUDGET?.trim();
-	if (!set) return null;
-	const raw = Number(set);
-	return Number.isFinite(raw) && raw > 0 ? raw : null;
+	// No fallback: unset means unbounded, which is the shipped default.
+	return numericEnv("WARDEN_CONTEXT_BUDGET", (n) => n > 0);
 }
 
 export function effectiveRent(contextCost: number): number {
