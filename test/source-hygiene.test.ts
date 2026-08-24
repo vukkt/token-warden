@@ -309,3 +309,92 @@ describe("README stats block matches the repository", () => {
 		expect(Number(claimed)).toBeCloseTo(total / 1000, 1);
 	});
 });
+
+/**
+ * EVERY DIRECTORY OF TYPESCRIPT IS ACTUALLY CHECKED.
+ *
+ * `validation/` holds 3,864 lines of measurement harness -- including
+ * `stream-calibration.ts`, whose output is the evidence for the shipped
+ * `confidenceZ()` default of 1.5. For most of this project's life tsconfig's
+ * `include` was `["src", "test"]`, so only the validation files a TEST happened
+ * to import were typechecked. Six were not, totalling 1,456 lines, and a
+ * deliberate `const x: number = "string"` in `stream-calibration.ts` passed
+ * `npm run typecheck` cleanly.
+ *
+ * That is the failure mode this repository keeps producing: a check that
+ * reports success while looking at nothing. knip's `@public` tag did it, knip
+ * being blind to test-only imports did it, `biome check` exiting 0 on warnings
+ * did it, and `knip.json` never listing `ragbench.ts` did it.
+ *
+ * The cost here is specific rather than theoretical. A harness that silently
+ * stops compiling is discovered at the moment someone tries to reproduce a
+ * published number -- which is exactly when it needs to work.
+ */
+describe("every TypeScript directory is in scope", () => {
+	const CHECKED_DIRS = ["src", "test", "validation"];
+
+	it("tsconfig typechecks every directory holding TypeScript", () => {
+		const tsconfig = JSON.parse(
+			readFileSync(join(repoRoot, "tsconfig.json"), "utf8"),
+		);
+		for (const dir of CHECKED_DIRS) {
+			expect(
+				tsconfig.include,
+				`${dir}/ holds TypeScript but tsconfig does not include it, so ` +
+					"`tsc --noEmit` reports clean without reading most of it",
+			).toContain(dir);
+		}
+	});
+
+	it("knip analyses every directory holding TypeScript", () => {
+		const knip = JSON.parse(readFileSync(join(repoRoot, "knip.json"), "utf8"));
+		const project: string[] = knip.project;
+		for (const dir of CHECKED_DIRS.filter((d) => d !== "test")) {
+			expect(
+				project.some((p) => p.startsWith(`${dir}/`)),
+				`${dir}/ is outside knip's "project", so knip cannot see dead code in it`,
+			).toBe(true);
+		}
+	});
+
+	it("every UNIMPORTED validation harness is a knip entry", () => {
+		// These are standalone CLI harnesses. Nothing imports them, so without an
+		// explicit entry knip reports each as an unused FILE rather than analysing
+		// what is dead inside it.
+		//
+		// Only the unimported ones. A harness a test already imports is reachable
+		// through knip's vitest plugin, and adding a redundant `entry` line makes
+		// knip emit a configuration hint -- which, as the knip-sees-every-command
+		// block above records, invites a future cleanup that removes the real one.
+		const knip = JSON.parse(readFileSync(join(repoRoot, "knip.json"), "utf8"));
+		const entries: string[] = knip.entry;
+
+		const importers = [
+			...readdirSync(join(repoRoot, "test")).map((f) => join("test", f)),
+			...readdirSync(join(repoRoot, "validation")).map((f) =>
+				join("validation", f),
+			),
+		]
+			.filter((f) => f.endsWith(".ts"))
+			.map((f) => [f, readFileSync(join(repoRoot, f), "utf8")] as const);
+
+		const files = readdirSync(join(repoRoot, "validation")).filter((f) =>
+			f.endsWith(".ts"),
+		);
+		expect(files.length).toBeGreaterThan(5);
+
+		for (const f of files) {
+			const self = join("validation", f);
+			const imported = importers.some(
+				([path, body]) =>
+					path !== self && body.includes(`validation/${f.slice(0, -3)}.js`),
+			);
+			if (imported) continue;
+			expect(
+				entries,
+				`validation/${f} is imported by nothing, so knip needs it as an entry ` +
+					"to look inside it at all",
+			).toContain(`validation/${f}`);
+		}
+	});
+});

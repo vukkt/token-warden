@@ -8,9 +8,18 @@
 		"src/receipt.ts",
 		"src/power.ts",
 		"src/cost.ts",
-		"scripts/*.mjs"
+		"scripts/*.mjs",
+		"validation/calibration.ts",
+		"validation/dress-rehearsal.ts",
+		"validation/empirical-calibration.ts",
+		"validation/full-loop-experiment.ts",
+		"validation/naive-headroom-experiment.ts",
+		"validation/selftest.ts",
+		"validation/stream-calibration.ts",
+		"validation/topup-placement.ts",
+		"validation/variance-decomposition.ts"
 	],
 	"ignoreBinaries": ["mkfifo"],
-	"project": ["src/**/*.ts"],
+	"project": ["src/**/*.ts", "validation/**/*.ts"],
 	"ignoreExportsUsedInFile": true
 }
