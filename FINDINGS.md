@@ -1825,3 +1825,74 @@ cost when idle is one null check, it has no failure mode while off, and it is
 the only mechanism that would handle rule accumulation if that ever becomes
 real. "No benefit at this scale" and "no benefit" are not the same finding, and
 the honest thing is to keep the code and stop advertising it as running.
+
+## The gate's constant had a hidden zero in it (2026-08-26)
+
+Every net-token sweep this project has run — the one that set `z = 1.5` at
+v1.0.0 included — priced a kept worthless rule at exactly its rent, 25 tokens a
+run, and nothing more. That assumption was never written down, and it decided
+the answer.
+
+Sweeping the confidence multiple on the recorded `sql` pool (357 candidate runs,
+200 trials x 40 arrivals, overlap 0.85):
+
+| z | stream FDR | kept | real kept | real missed | NET tok/run |
+|---|---|---|---|---|---|
+| 2.0 | 58.0% | 4.8 | 2.0 | 6.1 | 9,047 |
+| **1.5 (shipped)** | 50.1% | 5.6 | 2.8 | 5.3 | **12,492** |
+| 1.0 | 56.1% | 9.5 | 4.2 | 3.9 | 18,188 |
+| 0.5 | 67.4% | 17.6 | 5.7 | 2.4 | 23,795 |
+| 0.0 | 70.1% | 22.8 | 6.8 | 1.3 | 27,533 |
+
+Monotone, and it stays monotone at every marginal-saving decay this project can
+defend. Read literally it says to abolish the gate. **That is the missing term
+speaking, not the noise.** With a false positive priced at its rent alone it is
+~190x cheaper than a false negative, so of course the optimum is to keep
+everything.
+
+So `harm` — what one kept worthless rule costs per run BEYOND its rent — is now
+an explicit parameter of `validation/stream-calibration.ts`. Net tokens are
+linear in it, so two arms cross at exactly one point and it is solved, not
+searched:
+
+    h* = (netBeforeHarm_a - netBeforeHarm_b) / (falseKept_a - falseKept_b)
+
+Break-even harm for the shipped `z = 1.5` against each alternative, expressed
+against the **14,018 tokens one extra tool call costs** (the within-task
+regression above, R^2 94.6%):
+
+| overlap | vs z=0 | vs z=0.5 | vs z=1.0 | vs z=2.0 |
+|---|---|---|---|---|
+| 1.0 (additive) | 1,435 (10.2%) | 1,530 (10.9%) | 2,704 (19.3%) | 126,482 (902%) |
+| 0.85 | 711 (5.1%) | 825 (5.9%) | 1,653 (11.8%) | 93,116 (664%) |
+| 0.7 | 312 (2.2%) | 395 (2.8%) | 914 (6.5%) | 64,457 (460%) |
+
+**The result is the two ends read against each other.** Against every LOOSER
+gate the break-even is 2.2%-19.3% of one tool call: `z = 1.5` wins provided a
+worthless rule provokes one extra call in more than roughly one session in
+twenty, which for an unearned instruction sitting in the prompt every session is
+a low bar. Against the TIGHTER gate the break-even is 460%-902% of a call:
+returning to `z = 2.0` would need a worthless rule to cost four to nine extra
+tool calls per session, which nothing supports.
+
+`z = 1.5` therefore sits in a **defensible interior**, bracketed by a plausible
+harm on one side and an absurd one on the other. The shipped value did not
+change. What changed is that it is now defended by a falsifiable claim — *the
+gate is right iff a worthless rule provokes an extra tool call in more than ~5%
+of sessions* — rather than by a sweep with an unstated zero in it.
+
+**Nothing shipped in `src/`.** No default moved, no command was added. This is
+one parameter and one division inside a zero-token harness.
+
+*Limits.* `harm` is named and falsifiable now, which is strictly less than
+measured; measuring it means benchmarking agents carrying deliberately worthless
+rules, which is affordable and is the natural next burn. The table is one agent,
+one pool, one seed family, and `overlap` remains a modelling choice rather than
+a measurement — the same gap the packer's trigram proxy has.
+
+The full survey this came out of, including the 100 algorithms considered and
+the ten worth revisiting, is `docs/hundred-algorithms.md`. Ranks 3-10 there all
+optimise allocation ACROSS candidate rules, and every one is held back for the
+same reason: the ledger has measured six rules in ten weeks, and building for a
+candidate volume that does not exist is the error that put four theorems in the
+tree and then took three back out.

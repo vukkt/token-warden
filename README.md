@@ -11,7 +11,7 @@ That is the whole idea. Everything below is either the loop that enforces it, th
 theorems that survived measurement, or the record of the three that did not.
 
 ```text
-  version    1.1.0             tests       ~920 across 35 files
+  version    1.1.0             tests       ~960 across 36 files
   license    MIT               coverage    96% lines, CI-enforced floor
   source     24 modules        commands    6
               9.5k lines       built       2026-06 to 2026-08
@@ -208,7 +208,7 @@ The measurement discipline is the product, so the codebase is held to it.
 
 | | |
 |---|---|
-| **Tests** | 917 across 35 files. 15.0k lines of test against 9.4k of source. |
+| **Tests** | 957 across 36 files. 15.5k lines of test against 9.5k of source. |
 | **Coverage** | 95.7% lines, 94.6% statements, 96.5% functions, 89.1% branches, behind a floor CI fails on. |
 | **Pipeline** | Staged: quality gates test, fixture and coverage, which gate validate, which gates release. Actions SHA-pinned, `npm ci`. |
 | **Types** | Strict TypeScript with `noUncheckedIndexedAccess`. Zero `any`, zero `@ts-ignore`, zero non-null assertions. |

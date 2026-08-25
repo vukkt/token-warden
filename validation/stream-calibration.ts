@@ -26,7 +26,11 @@
  *
  *   npx tsx validation/stream-calibration.ts [--agent <name>] [--db <path>]
  *     [--trials N] [--length N] [--runs N] [--rent N] [--compare-z F]
- *     [--overlap F] [--true-rate F] [--saving F] [--seed N]
+ *     [--overlap F] [--true-rate F] [--saving F] [--seed N] [--harm N]
+ *
+ * `--harm` is the term every earlier sweep set to zero without saying so; the
+ * run always reports the BREAK-EVEN harm between the two arms, which is the
+ * number that decides the comparison. See FINDINGS 2026-08-26.
  */
 import { pathToFileURL } from "node:url";
 import { numericFlag } from "../src/cli.js";
@@ -126,10 +130,17 @@ interface ArmResult {
 	/**
 	 * Expected NET tokens per run from the memory this arm ends up carrying:
 	 * every genuinely valuable rule pays its saving, every kept rule pays its
-	 * rent. This is the objective the project actually has, and it is not the
-	 * one an FDR is a proxy for -- see the note this harness prints.
+	 * rent, and every kept WORTHLESS rule additionally pays `harm`. This is the
+	 * objective the project actually has, and it is not the one an FDR is a
+	 * proxy for -- see the note this harness prints.
 	 */
 	netTokensPerRun: number;
+	/** Worthless rules kept per stream. The coefficient on `harm`, and the
+	 * quantity the break-even calculation differences between arms. */
+	falseDiscoveries: number;
+	/** Net tokens excluding the harm term, so a break-even can be solved
+	 * without re-running the streams at every candidate harm. */
+	netBeforeHarm: number;
 }
 
 function summarise(
@@ -142,15 +153,19 @@ function summarise(
 	trueSaving: number,
 	rent: number,
 	overlap: number,
+	harm: number,
 ): ArmResult {
 	const kept = discoveries / trials;
 	const realKept = trueDiscoveries / trials;
+	const falseKept = kept - realKept;
 	// Geometric decay of the marginal saving: sum_{j=0}^{k-1} overlap^j.
 	// At overlap = 1 this is exactly k, the additive model.
 	const jointSaving =
 		overlap >= 1
 			? realKept * trueSaving
 			: trueSaving * ((1 - overlap ** realKept) / (1 - overlap));
+	// Real rules pay their JOINT saving; EVERY kept rule pays rent.
+	const netBeforeHarm = jointSaving - kept * rent;
 	return {
 		label,
 		falseDiscoveryProportion:
@@ -158,9 +173,34 @@ function summarise(
 		discoveries: kept,
 		trueDiscoveries: realKept,
 		missedReal: missedReal / trials,
-		// Real rules pay their JOINT saving; EVERY kept rule pays rent.
-		netTokensPerRun: jointSaving - kept * rent,
+		falseDiscoveries: falseKept,
+		netBeforeHarm,
+		netTokensPerRun: netBeforeHarm - falseKept * harm,
 	};
+}
+
+/** The two numbers a net-tokens line is made of. Everything else on an
+ * `ArmResult` is reporting; these two are the algebra. */
+export type HarmLine = Pick<ArmResult, "netBeforeHarm" | "falseDiscoveries">;
+
+/**
+ * The harm at which two arms tie on net tokens.
+ *
+ * Net is linear in `harm`: `net = netBeforeHarm - falseKept * harm`, so the
+ * arms cross at exactly one point and it can be solved rather than searched:
+ *
+ *     h* = (netBeforeHarm_a - netBeforeHarm_b) / (falseKept_a - falseKept_b)
+ *
+ * Null when the arms keep the same number of worthless rules (the lines are
+ * parallel -- one arm dominates at every harm), or when the crossing is at a
+ * negative harm, which is not a quantity this project can have: it would mean
+ * a worthless rule PAYS beyond saving its own rent.
+ */
+export function breakEvenHarm(a: HarmLine, b: HarmLine): number | null {
+	const spread = a.falseDiscoveries - b.falseDiscoveries;
+	if (Math.abs(spread) < 1e-9) return null;
+	const h = (a.netBeforeHarm - b.netBeforeHarm) / spread;
+	return h > 0 ? h : null;
 }
 
 export function runStreams(
@@ -185,6 +225,26 @@ export function runStreams(
 		 * net-token optimum becomes finite.
 		 */
 		overlap?: number;
+		/**
+		 * What one KEPT WORTHLESS rule costs per run BEYOND its rent.
+		 *
+		 * Defaults to 0, which is the assumption every earlier sweep made
+		 * silently, and it is the reason they all pointed the same way. At harm=0
+		 * a false positive is nearly free -- 25 tokens of rent against a missed
+		 * rule's ~4,769 -- so net tokens rise monotonically as the gate loosens
+		 * and the optimum sits at z=0 for any overlap this project can defend.
+		 * "Be maximally permissive" is not a finding about the noise; it is that
+		 * assumption read back.
+		 *
+		 * The assumption is also the least defensible thing in the model. A
+		 * worthless rule is not inert: it is an instruction in the agent's prompt
+		 * every session, and one that provokes a single extra tool call costs
+		 * 14,018 tokens (FINDINGS: within-task regression, R^2 94.6%) -- 560x its
+		 * rent. Nobody has measured it, so this stays a parameter rather than a
+		 * new default, and `breakEvenHarm` reports the value at which the
+		 * shipped gate becomes the right one.
+		 */
+		harm?: number;
 		/** Confidence multiple for the COMPARISON arm. Omitted means the shipped
 		 * `confidenceZ()`; supplied lets a sweep find where the net-token
 		 * optimum actually sits, including below the 1.0 floor that
@@ -278,6 +338,7 @@ export function runStreams(
 			trueSaving,
 			options.rent,
 			options.overlap ?? 1,
+			options.harm ?? 0,
 		),
 		summarise(
 			`compare z=${options.compareZ ?? confidenceZ()}`,
@@ -289,6 +350,7 @@ export function runStreams(
 			trueSaving,
 			options.rent,
 			options.overlap ?? 1,
+			options.harm ?? 0,
 		),
 	];
 }
@@ -319,6 +381,7 @@ function main(argv: string[]): number {
 	const saving = flag("--saving", 0.1);
 	const seed = flag("--seed", 42);
 	const overlap = flag("--overlap", 1);
+	const harm = flag("--harm", 0);
 	const compareZAt = argv.indexOf("--compare-z");
 	const compareZ =
 		compareZAt >= 0 ? numericFlag(argv[compareZAt + 1]) : undefined;
@@ -349,6 +412,7 @@ function main(argv: string[]): number {
 		saving,
 		seed,
 		overlap,
+		harm,
 		...(compareZ !== undefined && Number.isFinite(compareZ)
 			? { compareZ }
 			: {}),
@@ -393,6 +457,37 @@ function main(argv: string[]): number {
 			`can still be the arm that saves more tokens. Judge on NET tok/run.\n` +
 			`This sweep is what set the shipped default of z=1.5.`,
 	);
+
+	const [shipped, compared] = results as [ArmResult, ArmResult];
+	const crossing = breakEvenHarm(shipped, compared);
+	console.log(
+		`\n--- harm accounting (harm = ${Math.round(harm).toLocaleString("en-US")} tok/run per kept worthless rule) ---`,
+	);
+	if (crossing === null) {
+		console.log(
+			"The two arms keep the same number of worthless rules, so harm cannot\n" +
+				"separate them: one dominates at every harm.",
+		);
+	} else {
+		const looser =
+			compared.falseDiscoveries > shipped.falseDiscoveries ? compared : shipped;
+		const tighter = looser === compared ? shipped : compared;
+		console.log(
+			`BREAK-EVEN HARM: ${Math.round(crossing).toLocaleString("en-US")} tok/run.\n` +
+				`Below it '${looser.label}' wins; above it '${tighter.label}' does.\n` +
+				`\nThat number is the whole argument, because harm has never been\n` +
+				`measured. It is the cost of one worthless rule sitting in the prompt\n` +
+				`every session, BEYOND the ${rent} tokens of rent already charged. Every\n` +
+				`sweep before this one fixed it at 0 without saying so, which is why\n` +
+				`they all concluded the gate should loosen -- at harm=0 a false positive\n` +
+				`is nearly free and the optimum is z=0 for any overlap this project can\n` +
+				`defend. Compare the break-even against 14,018 tok/run, the measured\n` +
+				`cost of ONE extra tool call (FINDINGS, R^2 94.6%): if a worthless rule\n` +
+				`provokes an extra call in even ${((crossing / 14018) * 100).toFixed(
+					1,
+				)}% of sessions, the tighter arm wins.`,
+		);
+	}
 	return 0;
 }
 
