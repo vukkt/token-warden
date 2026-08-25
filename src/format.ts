@@ -9,6 +9,11 @@
  * output (a mean of 1000.4 renders as "1,000.4" or "1,000" depending on which
  * file you happen to be in).
  *
+ * Four of those six modules — `attribute`, `compare`, `cohort`, `confirm` —
+ * were deleted in v1.0.0. The history is kept because it is the reason both
+ * contracts still exist side by side; the surviving importers are `cost.ts`,
+ * `receipt.ts`, `power.ts` and `status.ts`.
+ *
  * The two contracts are deliberately NOT unified — that would silently change
  * rendered numbers in half the reports. They are given separate, honest names
  * so a call site declares which one it means, and the ambiguity is resolved at
@@ -32,10 +37,15 @@ export function formatRounded(n: number): string {
  * A signed percentage change, or "n/a" when the baseline is zero.
  *
  * A percentage of a zero baseline is undefined, and reporting 0 for it would
- * read as "no relative change" — a different and false claim. Lives here
- * rather than in `status.ts` because `compare.ts` needs it, and importing the
- * whole status report to reach one formatter was the coupling this extraction
- * removes.
+ * read as "no relative change" — a different and false claim. It lives here
+ * rather than in `status.ts` because `compare.ts` needed it too, and importing
+ * the whole status report to reach one formatter was the coupling this
+ * extraction removed.
+ *
+ * `compare.ts` is gone and `status.ts` is now the ONLY caller, so that reason
+ * has expired: this could move back with nothing lost but the churn. Recorded
+ * rather than acted on, because a formatter in a formatting module is not
+ * wrong — it is just no longer justified by the argument written above it.
  */
 export function pctChange(current: number, baseline: number): string {
 	if (baseline === 0) return "n/a";

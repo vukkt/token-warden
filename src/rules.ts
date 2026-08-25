@@ -6,9 +6,15 @@
  * accident. `adopt.ts`, `compress.ts`, `protect.ts`, `sample-tasks.ts` and
  * `scope.ts` all imported the distiller solely to reach these pure text
  * helpers, and thereby took a dependency on `spawnSync`, the prompt builder
- * and the DB layer. Nothing here touches the database, the filesystem, the
- * environment, or a subprocess: it is the shared definition every rule-writing
- * path is measured against, and the distiller is now just one of its callers.
+ * and the DB layer.
+ *
+ * ALL FIVE OF THOSE CALLERS WERE DELETED IN v1.0.0, and the history is kept
+ * only because it is why the seam is here. The current importers are
+ * `distill.ts` and `memory.ts` — the second one is the reason the split still
+ * earns its place, since `memory.ts` reaches `trigramSimilarity` for the
+ * packer and must not pull the distiller's subprocess machinery in to do it.
+ * Nothing here touches the database, the filesystem, the environment, or a
+ * subprocess.
  */
 import { z } from "zod";
 import { CHARS_PER_TOKEN } from "./stats.js";

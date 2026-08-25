@@ -1058,8 +1058,18 @@ export function summarizeTask(
  * summaries by the calibration harnesses and the selector's own tests, which
  * work at token scales of hundreds by design, and a bare magnitude test
  * reclassifies their runs as environment failures and aborts the pass.
- * Recorded rows read back from the ledger are handled where they are read
- * (`compare.ts`), at their real magnitude.
+ * Recorded rows written BEFORE that fix are a separate matter, and the honest
+ * statement changed with v1.0.0. They used to be re-derived where they were
+ * read, in `compare.ts`; that module was deleted and nothing replaced the
+ * re-derivation. What keeps it from mattering is the config filter rather than
+ * any active guard: all 19 such rows in the live ledger are `config =
+ * 'candidate'`, and `goldenReplicateRuns` — the pool the power planner and
+ * every calibration harness draw from — restricts to `config = 'active'`.
+ * Verified on the live ledger 2026-08-26, not assumed.
+ *
+ * So the exposure is anything that reads CANDIDATE rows without a floor.
+ * `validation/variance-decomposition.ts --config candidate` is exactly that,
+ * which is why FINDINGS documents those rows where it reports that tool.
  */
 export function isEnvironmentFailure(result: RunResult): boolean {
 	return !result.completed && result.tokens < ENV_FAILURE_TOKEN_FLOOR;

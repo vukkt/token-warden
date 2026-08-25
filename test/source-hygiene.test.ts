@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -446,5 +446,108 @@ describe("every TypeScript directory is in scope", () => {
 					"to look inside it at all",
 			).toContain(`validation/${f}`);
 		}
+	});
+});
+
+/**
+ * DOCSTRINGS THAT DESCRIBE A REPOSITORY THAT NO LONGER EXISTS.
+ *
+ * v1.0.0 deleted 23 modules and ten commands. The survivors' headers went on
+ * explaining themselves in terms of the dead ones -- `rules.ts` justified its
+ * own existence by naming five callers, ALL FIVE of which had been deleted;
+ * `memory.ts` cited two commands that were gone; `bench.ts` said a class of
+ * recorded row was "handled where they are read (`compare.ts`)", which was no
+ * longer true anywhere, because nothing replaced the re-derivation when that
+ * module went.
+ *
+ * That last one is the reason this is a guard and not a tidy-up. A reader
+ * chasing a correctness claim to a file that does not exist cannot tell
+ * whether the handling moved or evaporated, and here it had evaporated.
+ *
+ * Backticked `x.ts` and `/warden-x` references are checked because those are
+ * the forms this repo uses for a real file or command. Past-tense history is
+ * explicitly allowed -- this project keeps its corrections -- so a mention is
+ * only a failure when nothing near it marks the thing as gone.
+ */
+describe("no docstring points at a file or command that was deleted", () => {
+	/** Words that mark a reference as history rather than a live claim. */
+	const PAST_MARKERS =
+		/\b(deleted|removed|gone|gave way|gave up|gone with|gone in|gone at|since|gone,|was |were |used to|gone\.|no longer|gone --|expired|evaporated|dead|old |gone;|previously|gone -)/i;
+
+	function livingFile(name: string): boolean {
+		return ["src", "validation", "test", "scripts"].some((d) =>
+			existsSync(join(repoRoot, d, name)),
+		);
+	}
+
+	/**
+	 * Context for a mention is its whole COMMENT BLOCK, not its neighbouring
+	 * lines. A header explaining a deletion routinely names the dead modules in
+	 * one sentence and marks them dead in the next, several lines down; a
+	 * three-line window called those stale and would have pushed the marker
+	 * next to every name just to satisfy the check.
+	 */
+	function blockAround(lines: string[], index: number): string {
+		let start = index;
+		while (start > 0 && !/^\s*(\/\*|$)/.test(lines[start] as string)) start--;
+		let end = index;
+		while (end < lines.length - 1 && !/\*\/\s*$/.test(lines[end] as string))
+			end++;
+		return lines.slice(start, end + 1).join(" ");
+	}
+
+	it("names only modules that exist, or marks the mention as history", () => {
+		const sources = readdirSync(join(repoRoot, "src")).filter((f) =>
+			f.endsWith(".ts"),
+		);
+		expect(
+			sources.length,
+			"read no sources; the scan below would pass vacuously",
+		).toBeGreaterThan(15);
+
+		const stale: string[] = [];
+		for (const file of sources) {
+			const lines = readFileSync(join(repoRoot, "src", file), "utf8").split(
+				"\n",
+			);
+			lines.forEach((line, i) => {
+				for (const m of line.matchAll(/`([a-z][a-z0-9-]*\.ts)`/g)) {
+					const named = m[1] as string;
+					if (livingFile(named)) continue;
+					// Allowed when the surrounding block marks it as history.
+					if (PAST_MARKERS.test(blockAround(lines, i))) continue;
+					stale.push(`src/${file}:${i + 1} names ${named}`);
+				}
+			});
+		}
+		expect(stale, stale.join("\n")).toEqual([]);
+	});
+
+	it("names only commands that exist, or marks the mention as history", () => {
+		const commands = readdirSync(join(repoRoot, "commands")).filter((f) =>
+			f.endsWith(".md"),
+		);
+		expect(
+			commands.length,
+			"read no commands; the scan below would pass vacuously",
+		).toBeGreaterThan(3);
+		const live = new Set(commands.map((f) => `/${f.slice(0, -3)}`));
+
+		const stale: string[] = [];
+		for (const file of readdirSync(join(repoRoot, "src")).filter((f) =>
+			f.endsWith(".ts"),
+		)) {
+			const lines = readFileSync(join(repoRoot, "src", file), "utf8").split(
+				"\n",
+			);
+			lines.forEach((line, i) => {
+				for (const m of line.matchAll(/`(\/warden-[a-z-]+)`/g)) {
+					if (live.has(m[1] as string)) continue;
+					if (PAST_MARKERS.test(blockAround(lines, i))) continue;
+					stale.push(`src/${file}:${i + 1} names ${m[1]}`);
+				}
+			});
+		}
+		expect(stale, stale.join("\n")).toEqual([]);
 	});
 });

@@ -9,9 +9,15 @@
  * Extracted from `select.ts` so the two small governance CLIs that also write
  * it (`/warden-protect` and `/warden-scope`, ~110 lines each) no longer import
  * the entire rule selector — and through it `bench.ts` and `pricing.ts` — to
- * reach one function. `compileMemoryMd` came from `bench.ts`, which needs it to
- * install memory into a throwaway fixture; both callers now share one
- * definition of what the compiled bytes are.
+ * reach one function. Both of those commands were deleted in v1.0.0.
+ *
+ * What keeps the module is the other half of the same argument, which did not
+ * depend on them: `compileMemoryMd` came from `bench.ts`, which needs it to
+ * install memory into a throwaway fixture, while `select.ts` needs the writer.
+ * Those two are the current importers, and they share one definition of what
+ * the compiled bytes are — which is the property that actually matters, since
+ * a fixture compiled differently from the real file would make every benchmark
+ * measure the wrong thing.
  */
 import {
 	existsSync,
@@ -78,8 +84,11 @@ const MEMORY_SCOPE_MAX = 200;
  * tool is supposed to be making cheaper.
  *
  * Bodies are validated single-line at every insertion path (distill, compress,
- * adopt), but a scope is stored VERBATIM by design (src/scope.ts: the stored
- * value is what gets compiled), so nothing guarded this write. Defense in depth
+ * adopt), but a scope was stored VERBATIM by design — `scope.ts` compiled
+ * exactly what it was given — so nothing guarded this write. That command and
+ * its module were deleted in v1.0.0, leaving `db.ts#setRuleScope` with no
+ * production caller; the READ path here stays live so a ledger written before
+ * v1.0.0 still compiles its scoped rules correctly. Defense in depth
  * belongs at the writer, not only at the writers' inputs: everything crossing
  * into compiled memory goes through `displayText`, the repo's single
  * sanitization chokepoint, which strips control/escape/invisible characters and

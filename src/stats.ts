@@ -5,6 +5,9 @@
  * the power planner (`power.ts`) can share them without importing the whole
  * rule selector — `compare.ts` previously pulled in the verdict machinery to
  * reach `assessDelta`, and `power.ts` pulled it in for three pure functions.
+ * `compare.ts` was deleted in v1.0.0; the seam kept earning its place anyway
+ * and now has seven importers in `src/`, more than any module here except
+ * `registry.ts` and `sanitize.ts`.
  *
  * Everything here is pure apart from the two environment readers, which are
  * deliberately read PER CALL rather than frozen at module load: the calibration

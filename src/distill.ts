@@ -52,9 +52,11 @@ import { digestTranscript } from "./transcript.js";
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Prior completed real-work sessions an agent needs before the p75 trigger
- * means anything. Exported so `/warden-dogfood` reports the REAL number the
- * gate uses instead of a second copy that could drift from it. */
-export const MIN_PRIOR_RUNS = 5;
+ * means anything. It was exported so the dogfood report could print the REAL
+ * number the gate uses rather than a second copy that could drift from it;
+ * that command went in v1.0.0 and nothing outside this file reads it now, so
+ * the export went with it. */
+const MIN_PRIOR_RUNS = 5;
 /** Most recent evicted rules fed back into the distiller prompt as measured
  * negative examples. Bounded so the feedback block cannot grow without limit
  * as the negative dataset accumulates. */

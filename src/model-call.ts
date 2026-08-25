@@ -1,12 +1,18 @@
 /**
  * The headless `claude -p --output-format json` boundary.
  *
- * Three paths call a model — the distiller, the compression rewriter, and the
+ * Three paths called a model — the distiller, the compression rewriter, and the
  * prompt evolver — and each of them once hand-rolled `JSON.parse(stdout).result`.
  * That shape crashes on a bare `null` payload (valid JSON), and it silently
  * reads the CLI's own error envelope as if it were a model answer. Both bugs
  * were live. This module is the one place that knows what the envelope looks
  * like, so the three paths cannot drift again.
+ *
+ * Two of the three were deleted in v1.0.0 and `distill.ts` is now the only
+ * caller. The seam is kept on the argument that survived the deletions rather
+ * than on the one that motivated it: this is where untrusted model output
+ * crosses into the process, and a security boundary is worth naming even when
+ * exactly one path uses it.
  *
  * Everything here treats model output as untrusted input: bounded before it is
  * parsed, validated at the boundary, and failing CLOSED with a reason the
@@ -15,7 +21,7 @@
 import { z } from "zod";
 
 /**
- * The model the distiller and the compression rewriter invoke.
+ * The model the distiller invokes.
  *
  * Read per call, not frozen at module load: every other config value in the
  * repo is read per call, and a module-level const silently ignores any

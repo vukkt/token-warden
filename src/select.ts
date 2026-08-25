@@ -2034,7 +2034,7 @@ function decisionLine(
 			? `, ≈$${(decision.delta * dollarsPerToken).toFixed(4)}/run advisory`
 			: "";
 	// The body is model-written. Every other report that prints one
-	// (status.ts, receipt.ts, cost.ts, health.ts) routes it through
+	// (status.ts, receipt.ts, cost.ts) routes it through
 	// `displayText`; this line did not, so a body carrying a newline forged an
 	// extra decision row in the selector's own report — the one place a reader
 	// looks to see what was kept and evicted. The insert-time schema is the
