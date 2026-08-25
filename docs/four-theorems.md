@@ -444,6 +444,29 @@ enters the knapsack — but the kept set is chosen jointly.
 > construction whatever similarity is supplied. What remains unearned is the
 > claim that the objective's *inputs* describe real savings overlap. Measuring
 > pairwise marginals is still the right burn to fund.
+>
+> **CORRECTION (2026-08-25).** "Whatever similarity is supplied" was the right
+> qualifier on the wrong input. The guarantee is indifferent to the *similarity*
+> and is NOT indifferent to the *savings*: it needs `s_m >= 0`, and this
+> paragraph's confidence stopped anyone from checking whether the savings could
+> go negative. They can. `twoStrikeRetention` keeps a rule active after its
+> first sub-threshold re-audit, `decideRule` writes that sub-threshold number to
+> `rules.measured_delta`, and `memory.ts` reads that column straight in as
+> `saving`. Below zero, `s_m * max` is supermodular and the bound is void.
+>
+> It was not only a void proof. A good rule that merely *reads* like the rule on
+> probation raises the max on its mode, is charged the negative, and can be
+> dropped for it — measured at a rule worth 1,000 tokens a run, affordable
+> inside the budget, returned unchosen. Now clamped at the single point a mode
+> weight enters the arithmetic, with the properties pinned as tests that were
+> run against the unclamped code first.
+>
+> The generalisable lesson is not about savings. `cost.ts` had this exact clamp,
+> with a comment explaining it, before the packer was written — the discipline
+> existed in the repo and the new module simply did not inherit it. **A
+> precondition stated in prose is not enforced.** The three properties this
+> module claims are all machine-checked; non-negativity was the one that was
+> only asserted, and it was the one that was false.
 
 ## 4. What this buys
 
