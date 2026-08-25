@@ -93,6 +93,22 @@ implements four, measures them against its own data, and keeps the two that pay 
 the thing it claims to do for memory rules — to itself. Full derivations and every
 correction: **[docs/four-theorems.md](docs/four-theorems.md)**.
 
+**Why only four were tried, out of a hundred that could have been.** A later survey scored
+100 algorithms — variance reduction, sequential testing, bandits, submodular optimisation,
+causal inference — against this project's measured constraints, and most die *structurally*
+rather than narrowly. The sharpest example: adjusting for tool calls would cut the standard
+error 4.3x, and is invalid, because a turn-reducing rule works *through* tool calls, so
+controlling for them removes the effect along with the noise. The eight algorithms that do
+survive all allocate effort across *candidate rules* — and all wait on the same thing, that
+this ledger has produced six rules in ten weeks. **[docs/hundred-algorithms.md](docs/hundred-algorithms.md)**.
+
+The survey's one shipped result was not an algorithm. It was that `z = 1.5`, the gate's
+confidence multiple, had been set by sweeps that priced a worthless rule at exactly its
+rent and nothing more — so they all pointed at abolishing the gate. Adding the missing term
+and solving for the break-even shows `z = 1.5` is right **iff a worthless rule provokes one
+extra tool call in more than ~5% of sessions**. The default did not move; it stopped being
+arbitrary.
+
 ---
 
 ## What the measurements said
