@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -344,6 +345,43 @@ describe("every TypeScript directory is in scope", () => {
 					"`tsc --noEmit` reports clean without reading most of it",
 			).toContain(dir);
 		}
+	});
+
+	/**
+	 * The general form, rather than a list of directories someone has to
+	 * remember to extend. Naming `validation` fixed the case that had already
+	 * gone wrong; this catches the NEXT one -- a `.ts` file added at the root,
+	 * or in a new directory, that no `include` entry reaches.
+	 *
+	 * It found `.perfcheck.ts`: a tracked root dotfile importing from
+	 * `src/db.js`, referenced by no script, workflow or config, outside
+	 * typecheck scope, and answering a question that shipped long ago.
+	 */
+	it("leaves no TypeScript file outside tsconfig's reach", () => {
+		const tsconfig = JSON.parse(
+			readFileSync(join(repoRoot, "tsconfig.json"), "utf8"),
+		);
+		const include: string[] = tsconfig.include;
+
+		// Everything git tracks, so build output and node_modules cannot appear.
+		const tracked = execSync("git ls-files -- '*.ts'", {
+			cwd: repoRoot,
+			encoding: "utf8",
+		})
+			.split("\n")
+			.filter(Boolean)
+			// The frozen fixture is a benchmark input, deliberately not compiled.
+			.filter((f) => !f.startsWith("benchmarks/"));
+
+		const unreachable = tracked.filter(
+			(f) => !include.some((inc) => f === inc || f.startsWith(`${inc}/`)),
+		);
+
+		expect(
+			unreachable,
+			"these .ts files are tracked but no tsconfig `include` entry reaches " +
+				"them, so `tsc --noEmit` never reads them",
+		).toEqual([]);
 	});
 
 	it("knip analyses every directory holding TypeScript", () => {

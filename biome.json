@@ -7,12 +7,7 @@
 	},
 	"files": {
 		"ignoreUnknown": false,
-		"includes": [
-			"**",
-			"!.claude",
-			"!benchmarks/fixture",
-			"!benchmarks/finance/corpus"
-		]
+		"includes": ["**", "!.claude", "!benchmarks/fixture"]
 	},
 	"formatter": {
 		"enabled": true,
