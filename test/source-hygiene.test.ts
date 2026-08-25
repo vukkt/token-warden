@@ -162,8 +162,27 @@ describe("exports are reachable", () => {
 		srcFiles.map((f) => [f, readFileSync(join(repoRoot, "src", f), "utf8")]),
 	);
 
-	/** Every file that could legitimately reference a src export. */
-	const consumers: string[] = [];
+	/**
+	 * Comments are NOT usage, and this guard used to think they were.
+	 *
+	 * `consumers` is raw file text, so a `\b<name>\b` match was satisfied by any
+	 * mention -- including a test comment explaining what a constant means. That
+	 * is how `distill.ts#MIN_PRIOR_RUNS` stayed `export`ed after the only command
+	 * that read it was deleted: two test comments name it, no code imports it,
+	 * and the guard reported clean. Stripping comments first is the difference
+	 * between "somebody wrote this word down" and "somebody calls this".
+	 *
+	 * Over-stripping is the safe direction: it can only turn a real use
+	 * invisible, which FAILS the build and gets looked at. Under-stripping is
+	 * what let the export through silently.
+	 */
+	const stripComments = (src: string): string =>
+		src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+
+	/** Every file that could legitimately reference a src export, keyed by its
+	 * repo-relative path so a file is excluded from its own audit by IDENTITY
+	 * rather than by comparing text that has since been rewritten. */
+	const consumers = new Map<string, string>();
 	for (const dir of ["src", "test", "validation"]) {
 		let entries: string[] = [];
 		try {
@@ -173,14 +192,17 @@ describe("exports are reachable", () => {
 		}
 		for (const f of entries) {
 			if (f.endsWith(".ts")) {
-				consumers.push(readFileSync(join(repoRoot, dir, f), "utf8"));
+				consumers.set(
+					`${dir}/${f}`,
+					stripComments(readFileSync(join(repoRoot, dir, f), "utf8")),
+				);
 			}
 		}
 	}
 
 	it("finds source files to audit at all", () => {
 		expect(srcFiles.length).toBeGreaterThanOrEqual(20);
-		expect(consumers.length).toBeGreaterThanOrEqual(50);
+		expect(consumers.size).toBeGreaterThanOrEqual(50);
 	});
 
 	it("exports nothing that only its own file can see", () => {
@@ -207,7 +229,9 @@ describe("exports are reachable", () => {
 				const word = new RegExp(`\\b${name}\\b`);
 				const isType = /\b(?:interface|type)\b/.test(decl);
 
-				const usedElsewhere = consumers.some((c) => c !== own && word.test(c));
+				const usedElsewhere = [...consumers].some(
+					([path, body]) => path !== `src/${file}` && word.test(body),
+				);
 				if (usedElsewhere) continue;
 				// Hatch 2 is TYPES ONLY. Applied to values it exempts everything,
 				// because `export const X = ...` trivially contains its own name --

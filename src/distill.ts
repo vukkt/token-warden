@@ -61,8 +61,8 @@ const MIN_PRIOR_RUNS = 5;
  * negative examples. Bounded so the feedback block cannot grow without limit
  * as the negative dataset accumulates. */
 const MAX_EVICTED_FEEDBACK = 8;
-/** Rolling window of most recent runs used for the p75. Exported for the same
- * reason as MIN_PRIOR_RUNS. */
+/** Rolling window of most recent runs used for the p75. Was exported for the
+ * same reason as MIN_PRIOR_RUNS, and stopped being exported with it. */
 const ROLLING_WINDOW = 50;
 const MAX_DIGEST_CHARS = 8000;
 const DISTILL_TIMEOUT_MS = 2 * 60 * 1000;
