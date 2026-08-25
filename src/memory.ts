@@ -142,7 +142,10 @@ function packToBudget(rules: RuleRow[]): RuleRow[] {
 		contextCost: rule.context_cost,
 		// A rule with no recorded delta (authored, or migrated from before
 		// receipts) contributes no measured saving, so the knapsack ranks it
-		// last rather than guessing on its behalf.
+		// last rather than guessing on its behalf. A rule on probation carries a
+		// NEGATIVE delta and is still active by design; the packer clamps that to
+		// zero, because a negative mode weight would break the objective it
+		// proves a bound against (knapsack.ts, non-negativity precondition).
 		saving: rule.measured_delta ?? 0,
 		forced: rule.protected === 1,
 	}));

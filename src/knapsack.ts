@@ -27,6 +27,27 @@
  * only shrink as S grows, which is exactly submodularity. Both properties are
  * checked directly in the tests rather than asserted here.
  *
+ * BOTH PROPERTIES REQUIRE `s_m >= 0`, and that is a precondition this module
+ * has to enforce rather than assume, because a negative saving is REACHABLE.
+ * `twoStrikeRetention` keeps a rule ACTIVE after its first sub-threshold
+ * re-audit (probation, strike 1 of 2), and `decideRule` writes that
+ * sub-threshold measurement to `rules.measured_delta` — which may be negative,
+ * meaning the rule was measured to COST tokens. `memory.ts` reads exactly that
+ * column as `saving`.
+ *
+ * With `s_m < 0` the arithmetic inverts: `s_m * max` becomes supermodular, and
+ * the marginal gain of covering that mode is negative, so the Khuller-Moss-Naor
+ * bound below stops holding. Worse, it is contagious. A GOOD rule that merely
+ * reads like the bad one raises the max on the bad rule's mode and is charged
+ * for it, so it can be excluded on someone else's bad measurement — a rule
+ * saving 1,000 tokens a run dropped for being worded like a rule on probation.
+ * That case is pinned as a regression test.
+ *
+ * So a negative saving is clamped to zero at the one place `s_m` enters the
+ * arithmetic. A rule measured to lose tokens contributes no saving, which is
+ * the honest reading of the measurement; it keeps `f` monotone submodular, and
+ * it leaves the rule's own fate to the gate, which is what decides fates.
+ *
  * The mode universe is the candidate set itself: every rule is taken as the
  * proxy for the waste mode it was distilled to address, with `sigma(i, i) = 1`.
  *
@@ -98,7 +119,9 @@ export interface PackCandidate {
 	id: string;
 	/** Tokens of context this rule occupies every session. */
 	contextCost: number;
-	/** Measured tokens saved per session by this rule ALONE. */
+	/** Measured tokens saved per session by this rule ALONE. A negative value
+	 * (a rule on probation, measured to cost tokens) is read as zero — see the
+	 * non-negativity precondition in the module header. */
 	saving: number;
 	/** Forced into the solution regardless of density -- the knapsack home for
 	 * `rules.protected`. Forced items consume budget before anything else. */
@@ -138,7 +161,9 @@ export function coverageValue(
 			const covered = similarity(rule, mode);
 			if (covered > best) best = covered;
 		}
-		total += mode.saving * best;
+		// The non-negativity precondition, enforced at the single point where a
+		// mode's weight enters the arithmetic. See the module header.
+		total += Math.max(0, mode.saving) * best;
 	}
 	return total;
 }

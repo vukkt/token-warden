@@ -100,6 +100,50 @@ describe("coverageValue", () => {
 			expect(gainOnA).toBeGreaterThanOrEqual(gainOnB - 1e-9);
 		}
 	});
+
+	/**
+	 * The non-negativity precondition, checked on the properties it protects
+	 * rather than on the clamp itself. A rule on probation is active with a
+	 * NEGATIVE `measured_delta`, and an unclamped negative mode weight makes
+	 * `s_m * max` supermodular -- monotonicity and diminishing returns both
+	 * invert on that mode. The savings here are drawn to straddle zero, so most
+	 * trials carry at least one.
+	 */
+	it("stays monotone and submodular when a mode was measured negative", () => {
+		const rand = lcg(31);
+		for (let trial = 0; trial < 500; trial++) {
+			const pool = Array.from({ length: 6 }, (_, i) =>
+				rule(`${"xy"[i % 2]}${i}`, 1 + rand() * 20, rand() * 150 - 50),
+			);
+			const a: PackCandidate[] = [];
+			const b: PackCandidate[] = [];
+			for (const p of pool) {
+				if (rand() < 0.4) {
+					a.push(p);
+					b.push(p);
+				} else if (rand() < 0.5) {
+					b.push(p);
+				}
+			}
+			const x = pool.find((p) => !b.includes(p));
+			if (!x) continue;
+			const onA = coverageValue(a, pool, byGroup);
+			const onB = coverageValue(b, pool, byGroup);
+			expect(coverageValue([...a, x], pool, byGroup)).toBeGreaterThanOrEqual(
+				onA - 1e-9,
+			);
+			expect(
+				coverageValue([...a, x], pool, byGroup) - onA,
+			).toBeGreaterThanOrEqual(
+				coverageValue([...b, x], pool, byGroup) - onB - 1e-9,
+			);
+		}
+	});
+
+	it("never returns less than zero for a wholly negative universe", () => {
+		const pool = [rule("a", 10, -500), rule("b", 10, -20)];
+		expect(coverageValue(pool, pool, byGroup)).toBe(0);
+	});
 });
 
 describe("packRules", () => {
@@ -194,6 +238,25 @@ describe("packRules", () => {
 		const out = packRules(pool, 10);
 		expect(out.chosen).toEqual(["whale"]);
 		expect(out.value).toBe(100);
+	});
+
+	/**
+	 * REGRESSION. A rule on probation stays active carrying the negative delta
+	 * that put it there. Unclamped, covering its mode is a penalty, and the
+	 * penalty falls on whichever rule reads most like it -- so `keeper`, worth
+	 * 1,000 tokens a run and comfortably affordable, was dropped from compiled
+	 * memory on a measurement that was not its own. Verified against the real
+	 * module before the clamp: `chosen` came back empty.
+	 */
+	it("does not drop a good rule for resembling one measured negative", () => {
+		const keeper = rule("keeper", 25, 1000);
+		const onProbation = rule("probation", 25, -4000);
+		const budget = 25; // Room for exactly one of them.
+		// Worded alike: each covers most of the other's mode.
+		const alike: Similarity = (i, m) => (i.id === m.id ? 1 : 0.9);
+		expect(packRules([keeper, onProbation], budget, alike).chosen).toEqual([
+			"keeper",
+		]);
 	});
 
 	it("is deterministic for the same input", () => {
