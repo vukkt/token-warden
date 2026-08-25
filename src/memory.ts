@@ -140,12 +140,20 @@ function packToBudget(rules: RuleRow[]): RuleRow[] {
 	const candidates = rules.map((rule) => ({
 		id: String(rule.id),
 		contextCost: rule.context_cost,
-		// A rule with no recorded delta (authored, or migrated from before
-		// receipts) contributes no measured saving, so the knapsack ranks it
-		// last rather than guessing on its behalf. A rule on probation carries a
-		// NEGATIVE delta and is still active by design; the packer clamps that to
-		// zero, because a negative mode weight would break the objective it
-		// proves a bound against (knapsack.ts, non-negativity precondition).
+		// Two ways a rule reaches the packer with nothing to weigh it by, and
+		// zero is the honest answer to both: no recorded delta (defensive only --
+		// `decideRule` is the single writer of `status='active'` and always
+		// writes a number), and a NEGATIVE delta, which is reachable, because a
+		// rule on probation stays active carrying the sub-threshold measurement
+		// that put it there. The packer clamps the negative case; a negative mode
+		// weight breaks the objective it proves a bound against (knapsack.ts,
+		// non-negativity precondition).
+		//
+		// Zero does not rank a rule last, it makes it UNSELECTABLE: greedy takes
+		// a candidate only on density strictly above zero. Under a budget, a rule
+		// with no measured saving is therefore not carried at all. That is the
+		// intended reading of scarcity -- measured savings outbid unmeasured
+		// ones -- and `protected` is the documented way to override it.
 		saving: rule.measured_delta ?? 0,
 		forced: rule.protected === 1,
 	}));

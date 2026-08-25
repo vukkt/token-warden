@@ -259,6 +259,23 @@ describe("packRules", () => {
 		]);
 	});
 
+	/**
+	 * Zero saving does not rank a rule last, it makes it unselectable: greedy
+	 * takes a candidate only on density strictly above zero, and so does the
+	 * best-single-item guard. `memory.ts` states this in a comment, which is the
+	 * kind of claim this module has already been caught making without a check.
+	 */
+	it("does not carry a rule with no measured saving, even when affordable", () => {
+		const out = packRules([rule("unmeasured", 10, 0)], 1000);
+		expect(out.chosen).toEqual([]);
+		expect(out.cost).toBe(0);
+	});
+
+	it("still carries an unmeasured rule when it is protected", () => {
+		const out = packRules([rule("unmeasured", 10, 0, true)], 1000);
+		expect(out.chosen).toEqual(["unmeasured"]);
+	});
+
 	it("is deterministic for the same input", () => {
 		const pool = [rule("a", 7, 50), rule("b", 7, 50), rule("c", 9, 61)];
 		const first = packRules(pool, 16, byGroup);
