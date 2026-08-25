@@ -373,6 +373,18 @@ describe("every TypeScript directory is in scope", () => {
 			// The frozen fixture is a benchmark input, deliberately not compiled.
 			.filter((f) => !f.startsWith("benchmarks/"));
 
+		// CANARY FIRST. `unreachable` is a filter over `tracked`, so an empty
+		// `tracked` yields an empty result and this guard passes having examined
+		// nothing -- if git is absent, the cwd is not a repository, or the
+		// pathspec is ever mistyped. That is the precise failure this suite has
+		// now shipped four times, and it went into THIS test the day it was
+		// written. Assert the scan found the tree before trusting its verdict.
+		expect(
+			tracked.length,
+			"git ls-files returned no TypeScript; the scan below would pass vacuously",
+		).toBeGreaterThan(50);
+		expect(tracked).toContain("src/select.ts");
+
 		const unreachable = tracked.filter(
 			(f) => !include.some((inc) => f === inc || f.startsWith(`${inc}/`)),
 		);
