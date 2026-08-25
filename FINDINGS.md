@@ -1884,11 +1884,30 @@ of sessions* — rather than by a sweep with an unstated zero in it.
 **Nothing shipped in `src/`.** No default moved, no command was added. This is
 one parameter and one division inside a zero-token harness.
 
+**Robustness, checked rather than asserted.** Across six seed families the
+break-even is 662-752 (spread ±6% around ~707), so the headline is not a seed
+artifact. The arrival rate matters more, and it moves the number in the
+direction that strengthens the conclusion:
+
+| true-rate | 5% | 10% | 20% | 40% |
+|---|---|---|---|---|
+| break-even | 258 | 404 | 711 | 885 |
+| as one tool call | 1.8% | 2.9% | **5.1%** | 6.3% |
+
+Fewer genuine candidates means more of the loose gate's extra keeps are
+worthless, so the shipped gate wins at a LOWER harm. Across the whole plausible
+range the claim is **1.8%-6.3% of one tool call** — tighter than the single
+figure it replaces.
+
 *Limits.* `harm` is named and falsifiable now, which is strictly less than
 measured; measuring it means benchmarking agents carrying deliberately worthless
-rules, which is affordable and is the natural next burn. The table is one agent,
-one pool, one seed family, and `overlap` remains a modelling choice rather than
-a measurement — the same gap the packer's trigram proxy has.
+rules, which is affordable and is the natural next burn. `overlap` remains a
+modelling choice rather than a measurement — the same gap the packer's trigram
+proxy has. And this is **one agent, not by choice**: `backend`, `frontend` and
+`testing` refuse the harness outright (*insufficient replicate history at
+runs=2/side*), because two runs per task leave no replicate pool to permute.
+Every number here is `sql`, as is the 14,018-token tool call it is measured
+against.
 
 The full survey this came out of, including the 100 algorithms considered and
 the ten worth revisiting, is `docs/hundred-algorithms.md`. Ranks 3-10 there all

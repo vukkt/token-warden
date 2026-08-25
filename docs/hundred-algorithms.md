@@ -254,14 +254,43 @@ Nothing shipped in `src/`. No default moved. The whole of #1 is one parameter
 and one division in a harness that spends no tokens, and the reason it is worth
 having is that it converts an arbitrary constant into a measurable claim.
 
+## How much of that number is real
+
+Two of the three inputs were checked rather than asserted.
+
+**Seed** — six seed families, `z=1.5` vs `z=0` at overlap 0.85:
+
+| seed | 7 | 13 | 42 | 101 | 999 | 2026 |
+|---|---|---|---|---|---|---|
+| break-even | 711 | 725 | 686 | 752 | 705 | 662 |
+
+Spread ±6% around ~707. The headline is not a seed artifact.
+
+**Arrival rate** — the fraction of candidates carrying a genuine saving is a
+modelling choice, and unlike the seed it moves the number a lot:
+
+| true-rate | 5% | 10% | 20% | 40% |
+|---|---|---|---|---|
+| break-even | 258 | 404 | 711 | 885 |
+| as one tool call | 1.8% | 2.9% | **5.1%** | 6.3% |
+
+A 3.4x swing — but every value points the same way, and the low end points
+*harder*. Fewer genuine candidates means the loose gate's extra keeps are more
+often worthless, so the shipped gate wins at a lower harm. Across the whole
+plausible range the claim is therefore **1.8%-6.3% of one tool call**, which is
+a tighter statement than the single 5.1% figure it replaces.
+
 ## Honest limits
 
 - `harm` is still not measured. This work makes it *nameable and falsifiable*,
   which is strictly less than measuring it. Measuring it means benchmarking
   agents carrying deliberately worthless rules — affordable, and the natural
   next burn.
-- The break-even table is one agent (`sql`), one pool, one seed family. The
-  `total`-metric noise it rests on is measured on `sql` alone.
+- **One agent, and not by choice.** `backend`, `frontend` and `testing` each
+  refuse the harness outright — *insufficient replicate history at runs=2/side*.
+  They hold two runs per task, so there is no replicate pool to permute. Every
+  number here is `sql`, and so is the 14,018-token tool call it is measured
+  against.
 - `overlap` remains a modelling choice, not a measurement — the same gap the
   packer's trigram proxy has.
 - Ranks 3-10 are unbuilt on purpose. That is a judgement about workload volume,
