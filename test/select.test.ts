@@ -652,6 +652,35 @@ describe("selectForAgent", () => {
 			expect(memory).not.toContain("Search for the symbol");
 		});
 
+		/**
+		 * REGRESSION, through the real compile path rather than the packer alone.
+		 * A rule on probation is ACTIVE by design and carries the sub-threshold
+		 * delta that put it there, which can be negative. Unclamped, that made
+		 * covering its waste mode a penalty -- and the penalty landed on whichever
+		 * rule read most like it, so the good rule here was dropped on a
+		 * measurement that was not its own and memory compiled EMPTY.
+		 *
+		 * The two bodies are the ~0.57-similarity pair used above, so the discount
+		 * is real rather than contrived.
+		 */
+		it("does not let a rule on probation evict the rule it resembles", () => {
+			seedActive("Grep for the symbol before reading a whole file.", 12, 1000);
+			const bad = seedActive(
+				"Search for the symbol before opening a whole file.",
+				12,
+				-4000,
+			);
+			db.prepare("UPDATE rules SET probation = 1 WHERE id = ?").run(bad);
+
+			// Room for exactly one of them.
+			process.env.WARDEN_CONTEXT_BUDGET = "12";
+			compileActiveMemory(db, agent);
+
+			const memory = readFileSync(memoryFilePath(agent), "utf8");
+			expect(memory).toContain("Grep for the symbol");
+			expect(memory).not.toContain("Search for the symbol");
+		});
+
 		it("preserves ledger order rather than emitting greedy's selection order", () => {
 			seedActive("Rule A: cheapest to carry.", 10, 100);
 			seedActive("Rule B: the big winner.", 40, 9000);
