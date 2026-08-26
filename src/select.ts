@@ -1599,58 +1599,13 @@ function promotionPlan(
 	};
 }
 
-/**
- * Compression swap: a candidate carrying `replaces` proposes to stand in for an
- * active rule that says the same thing in more characters. Measuring it ON TOP
- * of that original would pin its marginal delta at ~0 (the agent already
- * follows the advice) and make the A/B unwinnable by construction, so the swap
- * is measured against the active set MINUS the original: same 2x-rent bar,
- * standalone. The original is untouched this pass — once the variant is active,
- * the original is redundant and exits via its own re-audits (two-strike).
- */
-function swapPlan(
-	run: SelectionRun,
-	candidate: RuleRow,
-	replaced: RuleRow,
-	activeSet: RuleRow[],
-): MeasurementPlan {
-	const reduced = activeSet.filter((rule) => rule.id !== replaced.id);
-	return {
-		rule: candidate,
-		kind: "candidate",
-		reference: lazyPass(() =>
-			run.measureSuite(reduced, `swap-base-${candidate.id}`, false),
-		),
-		measure: (suffix, allocation) =>
-			run.measureSuite(
-				[...reduced, candidate],
-				`candidate-${candidate.id}${suffix}`,
-				false,
-				allocation,
-			),
-		measuredSide: "with-rule",
-		evictWhenUncertain: true,
-		reasonPrefix: `swap for rule ${replaced.id}: `,
-		confidenceScale: 1,
-	};
-}
-
 function planForCandidate(
 	run: SelectionRun,
 	candidate: RuleRow,
 	activeSet: RuleRow[],
 	baseline: () => TaskSummary[],
 ): MeasurementPlan {
-	const replaced =
-		candidate.replaces === null
-			? undefined
-			: activeSet.find((rule) => rule.id === candidate.replaces);
-	// A `replaces` pointing at a rule that is no longer active has nothing to
-	// swap against: fall back to the ordinary on-top measurement.
-	const plan =
-		replaced === undefined
-			? promotionPlan(run, candidate, activeSet, baseline)
-			: swapPlan(run, candidate, replaced, activeSet);
+	const plan = promotionPlan(run, candidate, activeSet, baseline);
 	// A second look at an underpowered eviction is measured exactly like any
 	// other candidate — from scratch, on this invocation's runs, with its own
 	// baseline. Only the promotion threshold differs, and only upward. Nothing

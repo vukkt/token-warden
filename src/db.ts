@@ -160,10 +160,9 @@ const MIGRATIONS: readonly string[] = [
 	CREATE INDEX IF NOT EXISTS idx_runs_agent_task ON runs(agent, task_hash);
 	CREATE INDEX IF NOT EXISTS idx_rules_agent_status ON rules(agent, status);
 	`,
-	// Swap provenance for compression A/B: the rule id this candidate proposes
-	// to REPLACE. The selector measures such a candidate against the active set
-	// minus the replaced rule (a swap, not an addition) — measuring it on top of
-	// the semantically identical original would pin its marginal delta at ~0.
+	// Swap provenance for the compression A/B, which no longer exists: the rule
+	// id a candidate proposed to REPLACE. Migration kept because migrations are
+	// append-only and older ledgers carry the column with data in it.
 	`
 	ALTER TABLE rules ADD COLUMN replaces INTEGER;
 	`,
@@ -496,8 +495,10 @@ export interface RuleRow {
 	 * re-audit evicts. A passing re-audit clears the strike. Regressions ignore
 	 * probation and evict immediately (safety invariant). */
 	probation: number;
-	/** Rule id this candidate proposes to replace (compression A/B swap);
-	 * null for ordinary candidates. */
+	/** LEGACY. The rule a candidate proposed to replace, for the compression
+	 * A/B. That command, its rewriter and the selector's swap plan were all
+	 * deleted; the column stays because migrations are append-only, and this
+	 * field stays because RuleRow mirrors the table. Nothing reads it. */
 	replaces: number | null;
 	/** 1 = this rule was evicted for want of POWER, not for want of an effect:
 	 * its point estimate cleared the 2x-rent bar and only the width of the
@@ -563,8 +564,6 @@ export interface NewRule {
 	createdAt: string;
 	/** Provenance digest of the session this rule was distilled from. */
 	bornDigest?: string | null;
-	/** Rule id this candidate proposes to replace (compression A/B swap). */
-	replaces?: number | null;
 	/** The underpowered eviction this candidate is a second look at. The
 	 * candidate is measured from scratch like any other — the pointer is
 	 * provenance and a lineage cap, never a shortcut into memory. */
@@ -576,8 +575,8 @@ export interface NewRule {
 export function insertRule(db: WardenDb, rule: NewRule): number {
 	const row = db
 		.prepare<unknown[], { id: number }>(
-			`INSERT INTO rules (agent, body, status, context_cost, source_run, created_at, born_digest, replaces, recovers)
-			 VALUES (?, ?, 'candidate', ?, ?, ?, ?, ?, ?) RETURNING id`,
+			`INSERT INTO rules (agent, body, status, context_cost, source_run, created_at, born_digest, recovers)
+			 VALUES (?, ?, 'candidate', ?, ?, ?, ?, ?) RETURNING id`,
 		)
 		.get(
 			rule.agent,
@@ -586,19 +585,9 @@ export function insertRule(db: WardenDb, rule: NewRule): number {
 			rule.sourceRun,
 			rule.createdAt,
 			rule.bornDigest ?? null,
-			rule.replaces ?? null,
 			rule.recovers ?? null,
 		);
 	return requireRow(row, "insertRule").id;
-}
-
-/** Set (or clear, with null) a rule's "allowed where" scope predicate. */
-export function setRuleScope(
-	db: WardenDb,
-	id: number,
-	scope: string | null,
-): void {
-	db.prepare("UPDATE rules SET scope = ? WHERE id = ?").run(scope, id);
 }
 
 /** Set or clear a rule's re-audit probation strike. */
