@@ -2,7 +2,7 @@
 	"name": "token-warden",
 	"displayName": "Token Warden",
 	"version": "1.1.0",
-	"description": "Makes Claude Code subagents measurably cheaper over time: records token cost per session, distills candidate efficiency rules from expensive runs, benchmarks them on a frozen golden suite, and keeps only rules that save at least 2x their context rent. Also: per-tool/skill/MCP cost attribution, per-rule verdict receipts, model and prompt A/B benchmarking, cost-anomaly alerts, and team-shareable rule ledgers. 98% test coverage behind a CI-ratcheted floor.",
+	"description": "Agent memory, charged rent. A Stop hook records what each session costs; expensive runs are distilled into candidate efficiency rules; each candidate is benchmarked on a frozen golden suite and kept only if it saves at least twice its context rent. Six commands. Two theorems survived measurement and three were deleted after it.",
 	"author": {
 		"name": "Vuk Topalovic",
 		"email": "vuk.topalovic@gmail.com"

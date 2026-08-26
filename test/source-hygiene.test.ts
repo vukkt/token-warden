@@ -575,3 +575,73 @@ describe("no docstring points at a file or command that was deleted", () => {
 		expect(stale, stale.join("\n")).toEqual([]);
 	});
 });
+
+/**
+ * THE PLUGIN MANIFEST DESCRIBES THE PLUGIN THAT EXISTS.
+ *
+ * `.claude-plugin/plugin.json` holds the install-time copy -- the most widely
+ * READ text in the repository and the least often edited, which is exactly the
+ * combination that rots. After v1.0.0 it still advertised per-tool/skill/MCP
+ * cost attribution, model and prompt A/B benchmarking, and team-shareable rule
+ * ledgers: every one of those commands and modules had been deleted. It also
+ * claimed 98% test coverage against a real 96.1% lines / 89.8% branches.
+ *
+ * A docstring that lies costs a maintainer an hour. This costs a stranger
+ * their first impression, and it is the one file no test had ever looked at.
+ */
+describe("the plugin manifest is true", () => {
+	const manifest = JSON.parse(
+		readFileSync(join(repoRoot, ".claude-plugin", "plugin.json"), "utf8"),
+	);
+
+	it("states the same version as package.json", () => {
+		const pkg = JSON.parse(
+			readFileSync(join(repoRoot, "package.json"), "utf8"),
+		);
+		expect(manifest.version).toBe(pkg.version);
+	});
+
+	it("advertises no capability whose command was deleted", () => {
+		const commands = readdirSync(join(repoRoot, "commands")).filter((f) =>
+			f.endsWith(".md"),
+		);
+		expect(
+			commands.length,
+			"read no commands; the scan below would pass vacuously",
+		).toBeGreaterThan(3);
+
+		// Each word is the distinctive noun of a capability the manifest once
+		// promised and the tree no longer provides. A word is allowed back only
+		// when a command or module actually restores the feature.
+		const removed = [
+			["attribution", "attribute"],
+			["modelbench", "modelbench"],
+			["promptbench", "promptbench"],
+			["shareable", "share"],
+		] as const;
+
+		const text: string = manifest.description.toLowerCase();
+		for (const [word, slug] of removed) {
+			const restored =
+				commands.includes(`warden-${slug}.md`) ||
+				existsSync(join(repoRoot, "src", `${slug}.ts`));
+			if (restored) continue;
+			expect(
+				text,
+				`the manifest advertises "${word}" but nothing implements it — ` +
+					"this is the install-time copy a stranger reads first",
+			).not.toContain(word);
+		}
+	});
+
+	it("claims no coverage figure the suite does not meet", () => {
+		// A bare percentage in the description is a claim the CI floor must
+		// already enforce; the floor is the only number that cannot drift.
+		const claimed = /(\d{2,3})%\s*test coverage/i.exec(manifest.description);
+		if (claimed === null) return; // no claim is the safest claim
+		const config = readFileSync(join(repoRoot, "vitest.config.ts"), "utf8");
+		const floor = /lines:\s*(\d+)/.exec(config)?.[1];
+		expect(floor, "vitest.config.ts states no lines floor").toBeDefined();
+		expect(Number(claimed[1])).toBeLessThanOrEqual(Number(floor));
+	});
+});
