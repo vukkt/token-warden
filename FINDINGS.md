@@ -1527,7 +1527,7 @@ as theorem I: replace each task's raw sample variance -- 2 degrees of freedom at
 runs=3, wildly unstable -- with a posterior blend of its own variance and a
 prior fitted across the suite.
 
-It was implemented ([src/moderate.ts](src/moderate.ts)), unit-tested against
+It was implemented (`src/moderate.ts`, since deleted), unit-tested against
 closed forms, put behind `WARDEN_MODERATE_VARIANCE=1` default-off, and measured.
 **It does not ship.** This is the fourth principled-looking statistical
 improvement this project has vetoed on measurement, after robust-SE (v0.30.0),

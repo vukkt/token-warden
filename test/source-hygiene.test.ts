@@ -663,3 +663,48 @@ describe("the README's migration count is the real one", () => {
 		expect(Number((claimed as RegExpExecArray)[1])).toBe(MIGRATION_COUNT);
 	});
 });
+
+/**
+ * NO MARKDOWN LINK POINTS AT A FILE THAT IS NOT THERE.
+ *
+ * A dead link in a README is the cheapest possible way to look careless, and
+ * this repository generates them structurally: it deletes modules on purpose,
+ * and it keeps the prose that measured them. `FINDINGS.md` linked
+ * `[src/moderate.ts](src/moderate.ts)` for three releases after the module was
+ * deleted — the sentence around it was correct, the link was rubble.
+ *
+ * Prose may still NAME a deleted file (that is history, and the docstring guard
+ * above governs it). What it may not do is offer a link that 404s.
+ */
+describe("every relative markdown link resolves", () => {
+	it("finds no link to a missing file", () => {
+		const docs = execSync("git ls-files '*.md'", {
+			cwd: repoRoot,
+			encoding: "utf8",
+		})
+			.split("\n")
+			.filter(Boolean)
+			// The frozen fixture is benchmark input, not documentation.
+			.filter((f) => !f.startsWith("benchmarks/"));
+		expect(
+			docs.length,
+			"git ls-files returned no markdown; the scan below would pass vacuously",
+		).toBeGreaterThan(5);
+		expect(docs).toContain("README.md");
+
+		const broken: string[] = [];
+		for (const doc of docs) {
+			const dir = dirname(join(repoRoot, doc));
+			const body = readFileSync(join(repoRoot, doc), "utf8");
+			for (const m of body.matchAll(/\]\(([^)\s]+)\)/g)) {
+				const href = m[1] as string;
+				// External, anchor-only, and absolute links are somebody else's
+				// problem; only repo-relative paths are checkable here.
+				if (/^(https?:|mailto:|#|\/)/.test(href)) continue;
+				const target = join(dir, href.split("#")[0] as string);
+				if (!existsSync(target)) broken.push(`${doc} -> ${href}`);
+			}
+		}
+		expect(broken, broken.join("\n")).toEqual([]);
+	});
+});
