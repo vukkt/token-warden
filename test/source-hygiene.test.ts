@@ -645,3 +645,21 @@ describe("the plugin manifest is true", () => {
 		expect(Number(claimed[1])).toBeLessThanOrEqual(Number(floor));
 	});
 });
+
+/**
+ * The README's migration count is the schema's, not a memory of it.
+ *
+ * Three separate figures in that file had drifted by the time anyone looked:
+ * the test count, the source size, and this one — the README said 16 versioned
+ * migrations against a real 17. Migrations are append-only, so this number only
+ * ever grows, which is exactly the kind of figure nobody thinks to re-check.
+ */
+describe("the README's migration count is the real one", () => {
+	it("matches MIGRATION_COUNT", async () => {
+		const { MIGRATION_COUNT } = await import("../src/db.js");
+		const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
+		const claimed = /(\d+) versioned migrations/.exec(readme);
+		expect(claimed, "README states no migration count").not.toBeNull();
+		expect(Number((claimed as RegExpExecArray)[1])).toBe(MIGRATION_COUNT);
+	});
+});

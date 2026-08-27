@@ -46,7 +46,7 @@ const CS_RHO = 1; // mixture scale (tuning parameter of the normal mixture)
 const CS_SE_DRAWS = 4000; // draws used to estimate the per-audit standard error
 const CS_MC_LIVES = 2000; // Monte-Carlo rule-lifetimes per cell
 const CS_LIFE_CAP = 500; // cap a simulated life at this many cycles ("> 500")
-// Pre-declared decision criterion (see docs/specs/confidence-sequences.md): the
+// Pre-declared decision criterion (see docs/specs.md): the
 // CS policy wins only if BOTH the dead-rule expected exit is at most this many
 // cycles AND the true-earner lifetime is at least two-strike's at every effect.
 const CS_DEAD_EXIT_MAX = 8;
@@ -171,7 +171,7 @@ const SUITE_WEIGHTS = [4, 1, 1, 1, 1];
 
 /**
  * WEIGHTED-SUITE FALSE-POSITIVE CHECK — the correctness proof for the weighted
- * estimators (docs/specs/weighted-suites.md). Same synthetic model, same zero
+ * estimators (docs/specs.md). Same synthetic model, same zero
  * true effect, but the suite is weighted [4,1,1,1,1]. If the weighted
  * within-task SE were mis-propagated (e.g. still divided by K² instead of
  * (Σw)²/Σw²-adjusted), the uncertainty band would be too narrow and this FP

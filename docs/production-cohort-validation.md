@@ -1,8 +1,11 @@
 # Production-cohort validation
 
-**Status:** shipped in v0.20.0 (`src/cohort.ts`, `/warden-cohort`). This note is
-the design and rationale; for the system overview see
-[ARCHITECTURE.md](../ARCHITECTURE.md).
+**Status: REMOVED in v1.0.0.** Shipped in v0.20.0 as `src/cohort.ts` and
+`/warden-cohort`; both were deleted in the cull that cut the command surface
+from 22 to 6. This note is kept for its design and rationale — the question it
+poses, whether a rule proven on a frozen fixture also pays on the user's own
+workload, is still the project's central open question and the reason the
+dogfood loop matters. Nothing described below is currently in the tree.
 
 ## Why this exists
 

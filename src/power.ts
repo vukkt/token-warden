@@ -97,7 +97,10 @@ export function taskNoiseFromReplicates(
 	}
 	const bestPerTask = new Map<string, TaskNoise>();
 	for (const { taskId, totals } of groups.values()) {
-		if (totals.length < 2) continue;
+		// ONE guard, not two. `sampleVariance` returns null for exactly the
+		// "fewer than two observations" case, so a preceding `totals.length < 2`
+		// check made this line unreachable — the two spellings of one condition,
+		// with the second dead. Keeping the null check keeps the type honest too.
 		const variance = sampleVariance(totals);
 		if (variance === null) continue;
 		const prev = bestPerTask.get(taskId);
