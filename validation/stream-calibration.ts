@@ -43,18 +43,7 @@ import {
 	promotedAt,
 	toSummary,
 } from "./empirical-calibration.js";
-import { lcg32 } from "./rng.js";
-
-function shuffled(rng: () => number, xs: number[]): number[] {
-	const out = [...xs];
-	for (let i = out.length - 1; i > 0; i--) {
-		const j = Math.floor(rng() * (i + 1));
-		const tmp = out[i] as number;
-		out[i] = out[j] as number;
-		out[j] = tmp;
-	}
-	return out;
-}
+import { lcg32, shuffled } from "./rng.js";
 
 function resample(rng: () => number, pool: number[], n: number): number[] {
 	const out: number[] = [];

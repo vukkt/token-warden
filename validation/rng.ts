@@ -1,5 +1,6 @@
 /**
- * The deterministic PRNGs every sweep and harness in this repo draws from.
+ * The deterministic randomness every sweep and harness in this repo draws on:
+ * two seeded generators and the one shuffle that consumes them.
  *
  * Every published calibration figure here is a Monte-Carlo estimate, so the
  * generator is part of the evidence: a number nobody can redraw is not a
@@ -65,4 +66,26 @@ export function lcg32(seed: number): () => number {
 		s = (1664525 * s + 1013904223) >>> 0;
 		return s / 4294967296;
 	};
+}
+
+/**
+ * Fisher-Yates, unbiased, drawing from `rng` once per position.
+ *
+ * Here for the same reason the generators are: three copies existed, two of
+ * them byte-identical in files that both publish figures, and a shuffle is the
+ * other place a permutation test can be silently wrong. The bias lives in one
+ * character — `rng() * i` instead of `rng() * (i + 1)` never moves an element
+ * to its own position, which is not a uniform permutation and is invisible in
+ * any assertion that only checks the multiset. All three copies had it right;
+ * one definition is how it stays that way.
+ */
+export function shuffled<T>(rng: () => number, xs: readonly T[]): T[] {
+	const out = [...xs];
+	for (let i = out.length - 1; i > 0; i--) {
+		const j = Math.floor(rng() * (i + 1));
+		const tmp = out[i] as T;
+		out[i] = out[j] as T;
+		out[j] = tmp;
+	}
+	return out;
 }

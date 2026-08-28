@@ -1,3 +1,13 @@
+/**
+ * The PERSISTENCE half of tool accounting: `recordToolCosts` and
+ * `toolCostRollup` in src/db.ts.
+ *
+ * The measurement half — `classifyTool`, `footprint`, `aggregateToolCosts` in
+ * src/tool-cost.ts — is test/tool-cost.test.ts. This file was called
+ * `tool-costs.test.ts`, one plural apart from that one and covering a
+ * different module, which is a coin-flip every time somebody goes looking for
+ * where a tool-cost behaviour is asserted.
+ */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -34,7 +34,7 @@ import {
 	Z_POWER_90,
 } from "../src/power.js";
 import { confidenceZ, effectiveRent } from "../src/stats.js";
-import { mulberry32 } from "../validation/rng.js";
+import { mulberry32, shuffled } from "../validation/rng.js";
 
 /** Two-task suite with known variances: SE(n) = sqrt(250/n). */
 const NOISES: TaskNoise[] = [
@@ -145,15 +145,7 @@ describe("taskNoiseFromReplicates", () => {
 		const canonical = taskNoiseFromReplicates(rows);
 		const rand = mulberry32(4242);
 		for (let trial = 0; trial < 200; trial++) {
-			const shuffled = [...rows];
-			for (let i = shuffled.length - 1; i > 0; i--) {
-				const j = Math.floor(rand() * (i + 1));
-				[shuffled[i], shuffled[j]] = [
-					shuffled[j] as GoldenReplicateRun,
-					shuffled[i] as GoldenReplicateRun,
-				];
-			}
-			expect(taskNoiseFromReplicates(shuffled)).toEqual(canonical);
+			expect(taskNoiseFromReplicates(shuffled(rand, rows))).toEqual(canonical);
 		}
 	});
 

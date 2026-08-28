@@ -69,7 +69,7 @@ import {
 	recoveryMarginFraction,
 	recoveryStrictness,
 } from "../src/stats.js";
-import { mulberry32 } from "./rng.js";
+import { mulberry32, shuffled } from "./rng.js";
 
 const DEFAULT_TRIALS = 2000;
 /** Permutation deals 2×runs distinct totals per trial, so pools of ≥4 qualify
@@ -127,17 +127,6 @@ export function groupReplicates(
 }
 
 /** In-place Fisher-Yates on a copy. */
-function shuffled(rng: () => number, xs: number[]): number[] {
-	const out = [...xs];
-	for (let i = out.length - 1; i > 0; i--) {
-		const j = Math.floor(rng() * (i + 1));
-		const tmp = out[i] as number;
-		out[i] = out[j] as number;
-		out[j] = tmp;
-	}
-	return out;
-}
-
 /** n draws WITH replacement. */
 function resample(rng: () => number, pool: number[], n: number): number[] {
 	const out: number[] = [];
