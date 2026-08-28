@@ -1,6 +1,7 @@
 /**
  * The deterministic randomness every sweep and harness in this repo draws on:
- * two seeded generators and the one shuffle that consumes them.
+ * two seeded generators, and the shuffle and bootstrap resampler that consume
+ * them.
  *
  * Every published calibration figure here is a Monte-Carlo estimate, so the
  * generator is part of the evidence: a number nobody can redraw is not a
@@ -86,6 +87,27 @@ export function shuffled<T>(rng: () => number, xs: readonly T[]): T[] {
 		const tmp = out[i] as T;
 		out[i] = out[j] as T;
 		out[j] = tmp;
+	}
+	return out;
+}
+
+/**
+ * Draw `n` values from `pool` with replacement — the bootstrap resampler both
+ * calibration harnesses build their confidence intervals from.
+ *
+ * It was the third byte-identical copy sitting beside `shuffled` in the same
+ * two files, under a comment noting that the harness next to it was exported
+ * "for stream-calibration.ts, which needs to build samples the same way". The
+ * need was already recognised; two of the three helpers just never moved.
+ */
+export function resample<T>(
+	rng: () => number,
+	pool: readonly T[],
+	n: number,
+): T[] {
+	const out: T[] = [];
+	for (let i = 0; i < n; i++) {
+		out.push(pool[Math.floor(rng() * pool.length)] as T);
 	}
 	return out;
 }

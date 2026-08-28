@@ -43,15 +43,7 @@ import {
 	promotedAt,
 	toSummary,
 } from "./empirical-calibration.js";
-import { lcg32, shuffled } from "./rng.js";
-
-function resample(rng: () => number, pool: number[], n: number): number[] {
-	const out: number[] = [];
-	for (let i = 0; i < n; i++) {
-		out.push(pool[Math.floor(rng() * pool.length)] as number);
-	}
-	return out;
-}
+import { lcg32, resample, shuffled } from "./rng.js";
 
 interface Arrival {
 	/** Whether this arrival carries a genuine saving. */

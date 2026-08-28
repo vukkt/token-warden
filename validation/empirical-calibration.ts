@@ -69,7 +69,7 @@ import {
 	recoveryMarginFraction,
 	recoveryStrictness,
 } from "../src/stats.js";
-import { mulberry32, shuffled } from "./rng.js";
+import { mulberry32, resample, shuffled } from "./rng.js";
 
 const DEFAULT_TRIALS = 2000;
 /** Permutation deals 2×runs distinct totals per trial, so pools of ≥4 qualify
@@ -128,14 +128,6 @@ export function groupReplicates(
 
 /** In-place Fisher-Yates on a copy. */
 /** n draws WITH replacement. */
-function resample(rng: () => number, pool: number[], n: number): number[] {
-	const out: number[] = [];
-	for (let i = 0; i < n; i++) {
-		out.push(pool[Math.floor(rng() * pool.length)] as number);
-	}
-	return out;
-}
-
 /** Wrap raw token totals as a completed-run task summary; `tag` keeps
  * sessionIds unique across the sides and top-up passes of one trial (merged
  * summaries concatenate result lists).
