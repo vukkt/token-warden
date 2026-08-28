@@ -27,16 +27,7 @@ import {
 	recoveryStrictness,
 	sampleVariance,
 } from "../src/stats.js";
-
-/** Deterministic LCG so the property sweeps below are reproducible — a flaky
- * statistical test is worse than no test. */
-function lcg(seed: number): () => number {
-	let s = seed;
-	return () => {
-		s = (s * 1103515245 + 12345) % 2147483648;
-		return s / 2147483648;
-	};
-}
+import { mulberry32 } from "../validation/rng.js";
 
 function summary(
 	taskId: string,
@@ -67,7 +58,7 @@ function summary(
 
 describe("variance estimators: numerical robustness (regression pins)", () => {
 	it("sampleVariance is NEVER negative and never NaN on finite input", () => {
-		const rand = lcg(101);
+		const rand = mulberry32(101);
 		for (let trial = 0; trial < 1000; trial++) {
 			const offset = 10 ** Math.floor(rand() * 13);
 			const xs = Array.from(
@@ -102,7 +93,7 @@ describe("variance estimators: numerical robustness (regression pins)", () => {
 	});
 
 	it("is shift-invariant: adding a constant does not change the variance", () => {
-		const rand = lcg(103);
+		const rand = mulberry32(103);
 		for (let trial = 0; trial < 300; trial++) {
 			const xs = Array.from({ length: 2 + Math.floor(rand() * 5) }, () =>
 				Math.round(rand() * 5000),
@@ -116,7 +107,7 @@ describe("variance estimators: numerical robustness (regression pins)", () => {
 	});
 
 	it("pooledVariance is non-negative and lies within the per-vector range", () => {
-		const rand = lcg(107);
+		const rand = mulberry32(107);
 		for (let trial = 0; trial < 300; trial++) {
 			const vectors = Array.from({ length: 2 + Math.floor(rand() * 3) }, () =>
 				Array.from({ length: 2 + Math.floor(rand() * 4) }, () =>
@@ -165,7 +156,7 @@ describe("assessDelta SE matches an independent closed-form reimplementation", (
 	}
 
 	it("agrees to floating-point tolerance over randomized weighted suites", () => {
-		const rand = lcg(109);
+		const rand = mulberry32(109);
 		for (let trial = 0; trial < 200; trial++) {
 			const pairs = Array.from(
 				{ length: 2 + Math.floor(rand() * 4) },
@@ -191,7 +182,7 @@ describe("assessDelta SE matches an independent closed-form reimplementation", (
 	});
 
 	it("never produces a negative or NaN standard error", () => {
-		const rand = lcg(113);
+		const rand = mulberry32(113);
 		for (let trial = 0; trial < 300; trial++) {
 			const pairs = Array.from(
 				{ length: 1 + Math.floor(rand() * 4) },
@@ -222,7 +213,7 @@ describe("assessDelta SE matches an independent closed-form reimplementation", (
 
 describe("effective-DoF inflation is a tighten-only factor (property)", () => {
 	it("withinTaskDofInflation is always >= 1 over randomized weights", () => {
-		const rand = lcg(127);
+		const rand = mulberry32(127);
 		for (let trial = 0; trial < 300; trial++) {
 			const k = 2 + Math.floor(rand() * 5);
 			const pairs = Array.from({ length: k }, () => ({
@@ -244,7 +235,7 @@ describe("effective-DoF inflation is a tighten-only factor (property)", () => {
 	});
 
 	it("betweenTaskDofInflation is always >= 1 over randomized weights", () => {
-		const rand = lcg(131);
+		const rand = mulberry32(131);
 		for (let trial = 0; trial < 500; trial++) {
 			const weights = Array.from(
 				{ length: 2 + Math.floor(rand() * 6) },
@@ -257,7 +248,7 @@ describe("effective-DoF inflation is a tighten-only factor (property)", () => {
 	});
 
 	it("is EXACTLY 1 for every uniform weight value (bit-identical unweighted)", () => {
-		const rand = lcg(137);
+		const rand = mulberry32(137);
 		const pairs = Array.from({ length: 4 }, () => ({
 			without: Array.from({ length: 3 }, () =>
 				Math.round(1000 + rand() * 4000),
@@ -286,7 +277,7 @@ describe("uniform weights reproduce the unweighted verdict (property)", () => {
 			base: ReturnType<typeof assessDelta>,
 		) => void,
 	): void {
-		const rand = lcg(139);
+		const rand = mulberry32(139);
 		for (let trial = 0; trial < 100; trial++) {
 			const pairs = Array.from(
 				{ length: 2 + Math.floor(rand() * 3) },
@@ -1055,7 +1046,7 @@ describe("retentionRounds (variance-proportional re-audit budget)", () => {
 		it("is always an integer in 0..MAX over a wide random sweep", () => {
 			// A fractional or out-of-range budget would survive `Math.min` in
 			// `extraRoundsFor` and be spent as if it were a round count.
-			const rand = lcg(4242);
+			const rand = mulberry32(4242);
 			for (let trial = 0; trial < 2000; trial++) {
 				const banked = (rand() - 0.2) * 10 ** Math.floor(rand() * 7);
 				const se = (rand() - 0.1) * 10 ** Math.floor(rand() * 8);

@@ -43,15 +43,7 @@ import {
 	promotedAt,
 	toSummary,
 } from "./empirical-calibration.js";
-
-/** Deterministic LCG so a reported number can be reproduced exactly. */
-function lcg(seed: number): () => number {
-	let s = seed >>> 0;
-	return () => {
-		s = (1664525 * s + 1013904223) >>> 0;
-		return s / 4294967296;
-	};
-}
+import { lcg32 } from "./rng.js";
 
 function shuffled(rng: () => number, xs: number[]): number[] {
 	const out = [...xs];
@@ -264,7 +256,7 @@ export function runStreams(
 	for (let trial = 0; trial < options.trials; trial++) {
 		// One RNG per trial, seeded from the trial index, so both arms replay the
 		// identical arrival sequence and any difference is the decision rule.
-		const rng = lcg(options.seed + trial * 7919);
+		const rng = lcg32(options.seed + trial * 7919);
 		let altFalse = 0;
 		let altTotal = 0;
 		let baseFalse = 0;

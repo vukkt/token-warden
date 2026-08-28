@@ -5,6 +5,7 @@ import {
 	packRules,
 	type Similarity,
 } from "../src/knapsack.js";
+import { lcg32 } from "../validation/rng.js";
 
 const rule = (
 	id: string,
@@ -12,14 +13,6 @@ const rule = (
 	saving: number,
 	forced = false,
 ): PackCandidate => ({ id, contextCost, saving, forced });
-
-function lcg(seed: number): () => number {
-	let s = seed >>> 0;
-	return () => {
-		s = (1664525 * s + 1013904223) >>> 0;
-		return s / 4294967296;
-	};
-}
 
 /** Rules sharing a group prefix overlap heavily; across groups, not at all. */
 const byGroup: Similarity = (i, m) => {
@@ -51,7 +44,7 @@ describe("coverageValue", () => {
 	 * the module's docstring cites.
 	 */
 	it("is monotone under set inclusion", () => {
-		const rand = lcg(7);
+		const rand = lcg32(7);
 		for (let trial = 0; trial < 200; trial++) {
 			const pool = Array.from({ length: 6 }, (_, i) =>
 				rule(`${"xy"[i % 2]}${i}`, 1 + rand() * 20, rand() * 100),
@@ -73,7 +66,7 @@ describe("coverageValue", () => {
 	 * discount rule instead of a facility-location function.
 	 */
 	it("has diminishing returns -- the submodularity inequality holds", () => {
-		const rand = lcg(99);
+		const rand = lcg32(99);
 		for (let trial = 0; trial < 500; trial++) {
 			const pool = Array.from({ length: 7 }, (_, i) =>
 				rule(`${"xyz"[i % 3]}${i}`, 1 + rand() * 20, rand() * 100),
@@ -110,7 +103,7 @@ describe("coverageValue", () => {
 	 * trials carry at least one.
 	 */
 	it("stays monotone and submodular when a mode was measured negative", () => {
-		const rand = lcg(31);
+		const rand = lcg32(31);
 		for (let trial = 0; trial < 500; trial++) {
 			const pool = Array.from({ length: 6 }, (_, i) =>
 				rule(`${"xy"[i % 2]}${i}`, 1 + rand() * 20, rand() * 150 - 50),
@@ -152,7 +145,7 @@ describe("packRules", () => {
 	});
 
 	it("never exceeds the budget", () => {
-		const rand = lcg(31);
+		const rand = lcg32(31);
 		for (let trial = 0; trial < 300; trial++) {
 			const pool = Array.from({ length: 8 }, (_, i) =>
 				rule(`r${i}`, 1 + Math.floor(rand() * 30), rand() * 200),
@@ -317,7 +310,7 @@ describe("the Khuller-Moss-Naor bound holds against brute force", () => {
 	const BOUND = (1 - 1 / Math.E) / 2;
 
 	function sweep(similarity: Similarity, seed: number, label: string): void {
-		const rand = lcg(seed);
+		const rand = lcg32(seed);
 		let worstRatio = Number.POSITIVE_INFINITY;
 		for (let trial = 0; trial < 400; trial++) {
 			const n = 4 + Math.floor(rand() * 7);
@@ -352,7 +345,7 @@ describe("the Khuller-Moss-Naor bound holds against brute force", () => {
 	 * ever regresses to near 0.316 the implementation has degraded even though
 	 * the guarantee still technically holds. */
 	it("comfortably beats the worst-case bound in practice", () => {
-		const rand = lcg(555);
+		const rand = lcg32(555);
 		let total = 0;
 		let count = 0;
 		for (let trial = 0; trial < 300; trial++) {

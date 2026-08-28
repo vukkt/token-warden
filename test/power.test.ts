@@ -34,6 +34,7 @@ import {
 	Z_POWER_90,
 } from "../src/power.js";
 import { confidenceZ, effectiveRent } from "../src/stats.js";
+import { mulberry32 } from "../validation/rng.js";
 
 /** Two-task suite with known variances: SE(n) = sqrt(250/n). */
 const NOISES: TaskNoise[] = [
@@ -66,7 +67,7 @@ describe("normalCdf", () => {
 	it("is total at the infinities and stays a probability everywhere", () => {
 		expect(normalCdf(Number.POSITIVE_INFINITY)).toBe(1);
 		expect(normalCdf(Number.NEGATIVE_INFINITY)).toBe(0);
-		const rand = lcg(31);
+		const rand = mulberry32(31);
 		for (let trial = 0; trial < 2000; trial++) {
 			const p = normalCdf((rand() - 0.5) * 80);
 			expect(p).toBeGreaterThanOrEqual(0);
@@ -83,16 +84,6 @@ describe("normalCdf", () => {
 		}
 	});
 });
-
-/** Deterministic LCG so the property sweeps below are reproducible — a
- * flaky statistical test is worse than no test. */
-function lcg(seed: number): () => number {
-	let s = seed;
-	return () => {
-		s = (s * 1103515245 + 12345) % 2147483648;
-		return s / 2147483648;
-	};
-}
 
 describe("taskNoiseFromReplicates", () => {
 	it("keeps the largest identical-configuration group per task", () => {
@@ -152,7 +143,7 @@ describe("taskNoiseFromReplicates", () => {
 			replicate("u", 1, "sonnet", 70),
 		];
 		const canonical = taskNoiseFromReplicates(rows);
-		const rand = lcg(4242);
+		const rand = mulberry32(4242);
 		for (let trial = 0; trial < 200; trial++) {
 			const shuffled = [...rows];
 			for (let i = shuffled.length - 1; i > 0; i--) {
@@ -167,7 +158,7 @@ describe("taskNoiseFromReplicates", () => {
 	});
 
 	it("never reports a negative variance (sum of squared deviations)", () => {
-		const rand = lcg(99);
+		const rand = mulberry32(99);
 		for (let trial = 0; trial < 300; trial++) {
 			// Large offsets with a small spread: the regime where a naive
 			// one-pass sum-of-squares variance loses all precision and can even
@@ -210,7 +201,7 @@ describe("seAt", () => {
 	});
 
 	it("matches the closed form sqrt(2*sum(var)/(n*K^2)) exactly", () => {
-		const rand = lcg(7);
+		const rand = mulberry32(7);
 		for (let trial = 0; trial < 500; trial++) {
 			const noises: TaskNoise[] = Array.from(
 				{ length: 1 + Math.floor(rand() * 6) },
@@ -230,7 +221,7 @@ describe("seAt", () => {
 	});
 
 	it("shrinks exactly as 1/sqrt(n) for every run-count pair", () => {
-		const rand = lcg(11);
+		const rand = mulberry32(11);
 		const noises: TaskNoise[] = Array.from({ length: 4 }, (_, i) => ({
 			taskId: `t${i}`,
 			n: 3,
@@ -245,7 +236,7 @@ describe("seAt", () => {
 	});
 
 	it("is non-negative and finite for every valid input (never NaN)", () => {
-		const rand = lcg(13);
+		const rand = mulberry32(13);
 		for (let trial = 0; trial < 500; trial++) {
 			const noises: TaskNoise[] = Array.from(
 				{ length: 1 + Math.floor(rand() * 5) },
@@ -297,7 +288,7 @@ describe("minDetectableSaving / requiredRunsPerSide / powerAt", () => {
 	});
 
 	it("MDS is monotone decreasing in n across randomized suites", () => {
-		const rand = lcg(17);
+		const rand = mulberry32(17);
 		for (let trial = 0; trial < 200; trial++) {
 			const noises: TaskNoise[] = Array.from(
 				{ length: 1 + Math.floor(rand() * 5) },
@@ -313,7 +304,7 @@ describe("minDetectableSaving / requiredRunsPerSide / powerAt", () => {
 	});
 
 	it("MDS is always >= the bar, and MDS@90 >= MDS@80 (more power costs more)", () => {
-		const rand = lcg(19);
+		const rand = mulberry32(19);
 		for (let trial = 0; trial < 300; trial++) {
 			const noises: TaskNoise[] = Array.from(
 				{ length: 1 + Math.floor(rand() * 4) },
@@ -330,7 +321,7 @@ describe("minDetectableSaving / requiredRunsPerSide / powerAt", () => {
 	});
 
 	it("requiredRunsPerSide returns the MINIMAL sufficient n (sound + tight)", () => {
-		const rand = lcg(23);
+		const rand = mulberry32(23);
 		for (let trial = 0; trial < 300; trial++) {
 			const noises: TaskNoise[] = Array.from(
 				{ length: 1 + Math.floor(rand() * 4) },
@@ -354,7 +345,7 @@ describe("minDetectableSaving / requiredRunsPerSide / powerAt", () => {
 	});
 
 	it("powerAt is a probability, monotone increasing in the true saving", () => {
-		const rand = lcg(29);
+		const rand = mulberry32(29);
 		for (let trial = 0; trial < 300; trial++) {
 			const noises: TaskNoise[] = Array.from(
 				{ length: 1 + Math.floor(rand() * 4) },
@@ -377,7 +368,7 @@ describe("minDetectableSaving / requiredRunsPerSide / powerAt", () => {
 		// detection, below it they buy PROTECTION — the probability of promoting
 		// a rule that does not really clear 2x rent falls as the measurement
 		// sharpens. Monotone-increasing-in-n holds only on the upper branch.
-		const rand = lcg(37);
+		const rand = mulberry32(37);
 		for (let trial = 0; trial < 200; trial++) {
 			const noises: TaskNoise[] = Array.from(
 				{ length: 1 + Math.floor(rand() * 4) },

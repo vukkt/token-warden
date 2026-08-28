@@ -708,3 +708,70 @@ describe("every relative markdown link resolves", () => {
 		expect(broken, broken.join("\n")).toEqual([]);
 	});
 });
+
+/**
+ * EVERY RANDOM STREAM COMES FROM validation/rng.ts.
+ *
+ * This is the one duplication in the repository that has already caused a
+ * measurable defect twice. `validation/rng.ts` exists because three private
+ * copies of `mulberry32` had drifted apart; two further copies were then found
+ * under the name `lcg`, sharing that name while using different constants —
+ * and one of the two was broken. It used glibc's LCG with no mask, so the
+ * product exceeded 2^53 and the retained low bits were double-rounding
+ * artifacts: a 10,466-value cycle and 15,824 distinct draws in 100,000, behind
+ * property sweeps that claimed hundreds of independent ones.
+ *
+ * A PRNG is the failure mode where copies are least visible. It cannot throw,
+ * cannot fail a type check, and a broken one still returns numbers in [0, 1)
+ * forever — so every test it feeds goes on passing while quietly searching a
+ * fraction of the space it reports. Nothing catches that but this.
+ *
+ * Keyed on the multiplier constants rather than on shape: a generator is
+ * defined by its constants, and copying one without them is not copying it.
+ */
+describe("no file grows its own PRNG", () => {
+	/** Multipliers of every generator this repo has ever had a copy of. */
+	const PRNG_CONSTANTS = [
+		"1103515245", // glibc LCG — the broken copies
+		"1664525", // Numerical Recipes LCG — lcg32
+		"0x6d2b79f5", // mulberry32
+	];
+	const home = join(repoRoot, "validation", "rng.ts");
+	// This file names all three constants to look for them, so it matches
+	// itself. That is not a hole worth closing cleverly: the first run of this
+	// guard failed ON THIS FILE with all three names, which is the clearest
+	// possible demonstration that the scan reads real bytes and reports them.
+	const self = join(repoRoot, "test", "source-hygiene.test.ts");
+
+	it("finds the constants in rng.ts, so the scan below is not vacuous", () => {
+		const body = readFileSync(home, "utf8");
+		// glibc's is quoted in a docstring there, deliberately: the guard must
+		// still see the two live ones or it is asserting nothing.
+		expect(PRNG_CONSTANTS.filter((c) => body.includes(c))).toEqual(
+			PRNG_CONSTANTS,
+		);
+	});
+
+	it("finds no generator defined outside it", () => {
+		const files = [
+			...tsFiles(join(repoRoot, "src")),
+			...tsFiles(join(repoRoot, "test")),
+			...tsFiles(join(repoRoot, "validation")),
+		].filter((f) => f !== home && f !== self);
+		expect(files.length).toBeGreaterThan(50);
+
+		const offenders: string[] = [];
+		for (const file of files) {
+			const body = readFileSync(file, "utf8");
+			for (const constant of PRNG_CONSTANTS) {
+				if (body.includes(constant)) {
+					offenders.push(`${file.slice(repoRoot.length + 1)}: ${constant}`);
+				}
+			}
+		}
+		expect(
+			offenders,
+			`import from validation/rng.js instead:\n${offenders.join("\n")}`,
+		).toEqual([]);
+	});
+});
