@@ -36,7 +36,7 @@
 		"@types/node": "^26.2.0",
 		"@vitest/coverage-v8": "^4.1.10",
 		"knip": "^6.32.1",
-		"tsx": "^4.20.6",
+		"tsx": "^4.23.12",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.8"
 	}
