@@ -1833,8 +1833,16 @@ v1.0.0 included — priced a kept worthless rule at exactly its rent, 25 tokens 
 run, and nothing more. That assumption was never written down, and it decided
 the answer.
 
-Sweeping the confidence multiple on the recorded `sql` pool (357 candidate runs,
-200 trials x 40 arrivals, overlap 0.85):
+Sweeping the confidence multiple on the recorded `sql` pool (200 trials x 40
+arrivals, overlap 0.85):
+
+> *Corrected 2026-09-06.* This line originally said "357 candidate runs", which
+> described the wrong rows. `goldenReplicateRuns` restricts to `config =
+> 'active'`, so the pool every figure below was drawn from is **13 runs across 3
+> tasks** (sql-01 x 5, sql-02 x 4, sql-03 x 4) — the same 13 the empirical
+> calibration above reports. The 357 `candidate` rows are never read by any
+> calibration harness. No number in the table moved; the pool was mis-described,
+> and a mis-described pool is how a small result gets read as a large one.
 
 | z | stream FDR | kept | real kept | real missed | NET tok/run |
 |---|---|---|---|---|---|
