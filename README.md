@@ -9,7 +9,7 @@
 **that it saves more than it costs to carry.**
 
 ```text
-  version    1.1.0             tests       ~960 across 36 files
+  version    1.1.0             tests       ~980 across 37 files
   license    MIT               coverage    96% lines, CI-enforced floor
   source     24 modules        commands    6
               9.5k lines       built       2026-06 to 2026-08
@@ -109,7 +109,7 @@ instead of quietly accumulating.
 
 | | |
 |---|---|
-| **Tests** | 960 across 36 files — 15.6k lines of test against 9.5k of source |
+| **Tests** | 983 across 37 files — 16.0k lines of test against 9.5k of source |
 | **Coverage** | 96% lines, 90% branches, behind a floor CI fails on |
 | **Types** | Strict TypeScript. Zero `any`, zero `@ts-ignore`, zero non-null assertions |
 | **Data** | SQLite, 17 versioned migrations under `BEGIN IMMEDIATE` |
@@ -136,8 +136,12 @@ false-positive rate — survives only as an advisory flag, never as a gate input
   question, and it is open.
 - Only work routed through an agent with a golden suite can be learned from.
 - The packer's redundancy signal is textual similarity, not measured savings overlap.
-- The gate-loosening result rests on one agent's replicate pool. The direction is robust;
-  the exact optimum is not.
+- The gate-loosening result was re-run on a second recorded pool. Its **direction
+  replicated** — a looser gate nets more tokens, at every overlap. Its **upper bracket did
+  not**: the published claim that returning to `z = 2.0` would need an absurd harm was a
+  near-zero denominator on one pool, and on the second the same number is ~a fifth of one
+  tool call. `z = 1.5` is defended against looser gates by evidence and against `z = 2.0`
+  by much less than was published. No default moved.
 - The rule-compression experiment is **closed as unconfirmable** — three token burns, each
   killed by quota exhaustion.
 - The shipped agents are already well optimized, so the largest measured savings come from

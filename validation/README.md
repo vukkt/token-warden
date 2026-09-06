@@ -77,6 +77,28 @@ redesign — what a fixed token budget buys on narrower subsets. Scope with
 `--config`/`--ruleset` to a single A/B burn to also get its two arms
 differenced. See FINDINGS.md, "Where the variance actually lives".
 
+## Does the gate's calibration hold on a second pool? (no tokens)
+
+```bash
+npx tsx validation/cross-pool-gate.ts --seeds 6 --trials 200 --length 40 \
+  --overlap 0.85 \
+  --pool live-ledger=$HOME/.token-warden/warden.db \
+  --pool dogfood-sql=validation/warden-dogfood-sql.db \
+  --pool full-loop=validation/warden-fullloop.db \
+  --pool naive-headroom=validation/warden-naive-headroom.db
+```
+
+Runs the z-sweep and break-even solve that set the shipped `z = 1.5`
+(`stream-calibration.ts`) on every recorded ledger at once, inventories each
+one's replicate depth first, and SKIPS the pools too thin to support a
+permutation A/A rather than quietly producing a number from them. Every pool is
+COPIED before it is opened — `openDb` migrates on open, so pointing a harness at
+the live ledger would otherwise be a write. `--max-tasks` / `--max-depth` thin a
+deep pool to a shallow one's shape, which is how "different agent" is separated
+from "different amount of evidence". `validation/*.db` is gitignored, so a fresh
+clone will report the burn ledgers ABSENT. See FINDINGS.md, "The gate-loosening
+result on a second pool".
+
 ## Prove the harness works *without* spending tokens
 
 ```bash

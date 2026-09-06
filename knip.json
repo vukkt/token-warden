@@ -10,6 +10,7 @@
 		"src/cost.ts",
 		"scripts/*.mjs",
 		"validation/calibration.ts",
+		"validation/cross-pool-gate.ts",
 		"validation/dress-rehearsal.ts",
 		"validation/empirical-calibration.ts",
 		"validation/full-loop-experiment.ts",

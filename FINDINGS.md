@@ -1833,8 +1833,16 @@ v1.0.0 included — priced a kept worthless rule at exactly its rent, 25 tokens 
 run, and nothing more. That assumption was never written down, and it decided
 the answer.
 
-Sweeping the confidence multiple on the recorded `sql` pool (357 candidate runs,
-200 trials x 40 arrivals, overlap 0.85):
+Sweeping the confidence multiple on the recorded `sql` pool (200 trials x 40
+arrivals, overlap 0.85):
+
+> *Corrected 2026-09-06.* This line originally said "357 candidate runs", which
+> described the wrong rows. `goldenReplicateRuns` restricts to `config =
+> 'active'`, so the pool every figure below was drawn from is **13 runs across 3
+> tasks** (sql-01 x 5, sql-02 x 4, sql-03 x 4) — the same 13 the empirical
+> calibration above reports. The 357 `candidate` rows are never read by any
+> calibration harness. No number in the table moved; the pool was mis-described,
+> and a mis-described pool is how a small result gets read as a large one.
 
 | z | stream FDR | kept | real kept | real missed | NET tok/run |
 |---|---|---|---|---|---|
@@ -1915,3 +1923,189 @@ optimise allocation ACROSS candidate rules, and every one is held back for the
 same reason: the ledger has measured six rules in ten weeks, and building for a
 candidate volume that does not exist is the error that put four theorems in the
 tree and then took three back out.
+
+## The gate-loosening result on a second pool (2026-09-06)
+
+README listed under Limits that "the gate-loosening result rests on one agent's
+replicate pool. The direction is robust; the exact optimum is not." That
+sentence was an **assertion**. Nothing had been run on a second pool, so neither
+half of it was evidence. `validation/cross-pool-gate.ts` runs the published
+z-sweep and break-even solve on every recorded ledger this project has, through
+the same `runStreams` that produced the published figures, so the only thing
+that changes between pools is the noise.
+
+### The inventory, which is half the result
+
+`goldenReplicateRuns` — the pool every calibration harness here draws from —
+takes completed golden runs at `config = 'active'`, and `groupReplicates` keeps
+the deepest `(task, ruleset version, model)` cell per task. Four ledgers exist:
+
+| ledger | agent | usable shape | verdict |
+|---|---|---|---|
+| `~/.token-warden/warden.db` (live) | `sql` | 3 tasks x 5/4/4 replicates | USED — the published pool |
+| `validation/warden-dogfood-sql.db` | `sql` (sonnet) | 5 tasks x 6 replicates | USED — deeper than the published one |
+| `validation/warden-fullloop.db` | `sql` | none | SKIPPED |
+| `validation/warden-naive-headroom.db` | `sql` | none | SKIPPED |
+
+**The two skipped pools are a result, not a gap.** Both burns wrote every run as
+`config = 'candidate'`, so the active-set filter sees nothing in either. Nor can
+the candidate rows be promoted honestly: in both ledgers the two ruleset
+versions ARE the two arms of a real A/B — the naive-headroom burn's whole point
+was a +10,699 tok/run effect between them — so pooling them would inject the
+very effect an A/A null is defined by not having, and each arm alone is 2
+replicates deep against the 4 a permutation at runs=2/side needs. The
+naive-headroom agent was the one genuinely different noise structure available,
+and **it cannot be used for this**. That is worth saying plainly rather than
+working around.
+
+So this is a **second pool, not a second agent**: same `sql` suite, a different
+model pinning and a different burn. It is a weaker test than a second agent
+would be, and it is the strongest one the recorded evidence supports.
+
+### The direction replicates
+
+Grid z in {0, 0.5, 1.0, 1.5, 2.0}, overlap 0.85, 200 trials x 40 arrivals,
+runs 2/side, 20% of arrivals carrying a real 10% saving, six seed families:
+
+| z | live: FDR / kept / NET | dogfood: FDR / kept / NET |
+|---|---|---|
+| 0.0 | 69.7% / 22.7 / **20,825** | 67.4% / 23.3 / **22,551** |
+| 0.5 | 67.2% / 17.3 / 18,703 | 58.7% / 17.0 / 21,719 |
+| 1.0 | 55.5% / 9.4 / 15,388 | 47.2% / 11.3 / 19,899 |
+| **1.5 (shipped)** | 48.3% / 5.4 / 11,456 | 34.2% / 7.0 / 17,042 |
+| 2.0 | 56.4% / 4.6 / 8,603 | 21.9% / 4.2 / 13,305 |
+
+Monotone on both, at overlap 1.0, 0.85 and 0.7 alike, with the net-token optimum
+at z=0 under `harm = 0`. Seed spread inside a pool is 700-1,600 tok/run against
+between-z steps of 3,000-4,000, so the ordering is not seed noise. **The
+direction is confirmed on a second pool.**
+
+The live column also reproduces the published sweep it was checked against
+(published 9,047 / 12,492 / 18,188 / 23,795 / 27,533 at overlap 0.85 for
+z = 2 / 1.5 / 1 / 0.5 / 0 — same shape, same monotonicity, the level differing
+with the seed families).
+
+### One half of the defence does not replicate
+
+Break-even harm for the shipped `z = 1.5` against each alternative — the harm at
+which the two arms tie — as a percentage of the 14,018 tokens one extra tool
+call costs. Medians over six seed families:
+
+| overlap | pool | vs z=0 | vs z=0.5 | vs z=1.0 | vs z=2.0 |
+|---|---|---|---|---|---|
+| 1.0 | live | 10.5% | 10.7% | 18.1% | **1130%** (1 seed unresolved) |
+| 1.0 | dogfood | 7.6% | 10.5% | 15.4% | **31.5%** |
+| 0.85 | live | 5.0% | 5.7% | 11.0% | **845%** (1 seed unresolved) |
+| 0.85 | dogfood | 2.9% | 4.3% | 7.0% | **18.4%** |
+| 0.7 | live | 2.2% | 2.7% | 6.0% | **597%** (1 seed unresolved) |
+| 0.7 | dogfood | 0.9% | 1.4% | 2.6% | **9.2%** |
+
+Against every LOOSER gate the published claim holds and slightly improves: the
+break-even is 0.9%-11.0% of a tool call on both pools, and it is *lower* on the
+deeper pool, meaning `z = 1.5` beats `z = 0` there at an even smaller harm.
+
+Against the TIGHTER gate it does not. The published finding read the vs-z=2.0
+column as 460%-902% of a tool call and concluded that returning to `z = 2.0`
+"would need a worthless rule to cost four to nine extra tool calls per session,
+which nothing supports." **On the second pool the same number is 9.2%-31.5%** —
+about a fifth of one tool call, which is squarely inside the range the looser
+side of the bracket already treats as plausible.
+
+### Why: a denominator that nearly vanishes
+
+The break-even is `(netBeforeHarm_a - netBeforeHarm_b) / (falseKept_a -
+falseKept_b)`. On the live pool, tightening from 1.5 to 2.0 removes real
+discoveries (2.8 -> 2.0) while keeping **the same 2.6 worthless ones** — its
+stream FDR actually RISES, 48.3% to 56.4%. The denominator is ~0, so the ratio
+explodes, and on one of the six seed families it is exactly parallel and has no
+crossing at all. The published 664% was that division, not a bracket.
+
+On the dogfood pool the FDR falls monotonically (34.2% -> 21.9%), the two arms
+separate properly, and the crossing is finite and stable: 2,267-2,889 tok/run
+across seeds.
+
+**It is not depth.** The obvious confound is that the live pool is 3 x 4-5 and
+the second is 5 x 6, so `--max-tasks` / `--max-depth` thin the deeper pool to
+the shallower one's shape and re-run it — same agent, same tasks, same noise,
+only the evidence per decision cut:
+
+| dogfood thinned to | vs z=2.0 break-even |
+|---|---|
+| 3 tasks x 5 replicates | 19.5% |
+| 3 tasks x 6 replicates | 23.8% |
+| 4 tasks x 4 replicates | 16.3% |
+| 5 tasks x 4 replicates | 8.5% |
+| 5 tasks x 6 (full) | 18.4% |
+| 3 tasks x 4 replicates | no crossing on any seed — z=1.5 dominates z=2.0 outright |
+
+Thinned all the way to the live pool's shape it stays at 19.5%-23.8%, nowhere
+near 845%. The divergence is a property of the live pool's noise, not of its
+size, and the one thinned cell that does degenerate degenerates the *other* way.
+
+### The one-decision calibration agrees, which is the reassuring half
+
+`validation/empirical-calibration.ts`, both pools, 3,000 trials, runs=2/side,
+seed 42, shipped z=1.5:
+
+| | live ledger | dogfood |
+|---|---|---|
+| permutation A/A false positive | 9.8% [8.8%, 11.0%] | 10.3% [9.3%, 11.4%] |
+| bootstrap A/A false positive | 16.3% [15.0%, 17.7%] | 14.1% [12.9%, 15.4%] |
+| power @ 10% saving | 46.1% [44.3%, 47.9%] | 78.6% [77.1%, 80.0%] |
+| power @ 20% saving | 79.8% [78.3%, 81.2%] | 99.6% [99.3%, 99.8%] |
+| false eviction @ 2% saving | 79.1% [77.6%, 80.5%] | 78.1% [76.6%, 79.5%] |
+| false eviction @ 10% saving | 17.7% [16.4%, 19.1%] | 2.3% [1.8%, 2.9%] |
+
+The **false-positive rate replicates** — Wilson intervals overlap on the
+permutation arm — and so does the false-eviction rate at the 2% effect size that
+README quotes. Power is far higher on the deeper pool, which is the run-count
+lever behaving exactly as designed and not a finding about the gate. Nothing
+here suggests the live pool is unrepresentative in general; the divergence is
+narrowly about which rules the two arms of a z=1.5-vs-2.0 comparison drop.
+
+### What changed, and what did not
+
+**No default moved.** `z` stays at 1.5. Nothing shipped in `src/`. The evidence
+does not justify a change in either direction: `z = 1.5` still beats every
+looser gate on both pools at a plausible harm, and the second pool weakens the
+case against `z = 2.0` without making it. Moving a default on the pool that
+happens to be less flattering would be exactly the tuning this project refuses.
+
+What changed is the strength of a claim. The published result was **one
+statement**, "z=1.5 sits in a defensible interior bracketed by a plausible harm
+on one side and an absurd one on the other." It is now two, with different
+support:
+
+- **Replicated:** looser gates are only better if a worthless rule is almost
+  free. Both pools, every overlap.
+- **Not replicated:** the upper bracket. `z = 2.0` is not absurd — on a second
+  pool it costs the shipped gate its win at 9%-32% of one tool call. `z = 1.5`
+  is defended against looser gates by evidence and against `z = 2.0` only by a
+  ratio that one pool inflated.
+
+*Limits.* Two pools, one agent, one suite — the second pool is a different burn
+and model pinning, not a different agent, and the only genuinely different agent
+on record (naive-headroom) has no active-set rows to permute. `harm` is still
+unmeasured on both. The two skipped ledgers are recoverable in principle: a burn
+that recorded golden runs at `config = 'active'` for the naive agent would give
+this comparison the second noise structure it actually wants, and that is the
+cheapest experiment on the list.
+
+*Reproduce it.* Zero tokens. Copy any ledger you want checked; the harness also
+copies each pool before opening it, because `openDb` migrates on open:
+
+```bash
+npx tsx validation/cross-pool-gate.ts --seeds 6 --trials 200 --length 40 \
+  --overlap 0.85 \
+  --pool live-ledger=$HOME/.token-warden/warden.db \
+  --pool dogfood-sql=validation/warden-dogfood-sql.db \
+  --pool full-loop=validation/warden-fullloop.db \
+  --pool naive-headroom=validation/warden-naive-headroom.db
+
+# the depth control
+npx tsx validation/cross-pool-gate.ts --max-tasks 3 --max-depth 5 \
+  --pool dogfood-sql=validation/warden-dogfood-sql.db
+```
+
+`validation/*.db` is gitignored, so a fresh clone sees two ABSENT lines and the
+live ledger; the burn ledgers live on the machine that ran the burns.
