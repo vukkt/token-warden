@@ -1915,3 +1915,113 @@ optimise allocation ACROSS candidate rules, and every one is held back for the
 same reason: the ledger has measured six rules in ten weeks, and building for a
 candidate volume that does not exist is the error that put four theorems in the
 tree and then took three back out.
+
+## Covariate adjustment (2026-09): the variance is real, and it cannot be borrowed
+
+The 2026-08-13 variance decomposition above ends on a single integer:
+`tool_calls` explains 94.6% of the golden suite's within-task spread, at roughly
+14,018 tokens per agentic turn, and nothing in this repository controls how many
+turns an agent takes. That section concluded the turn count is the only quantity
+that would move the noise floor.
+
+There is a statistical version of that sentence, and it is the obvious next
+move: you cannot reduce turn-count variability, but you can CONDITION ON IT.
+That is CUPED (Deng et al. 2013) / ANCOVA / regression adjustment -- subtract
+from each run the part a covariate predicts, keep the treatment contrast
+unbiased, and pocket the smaller error bar. At R^2 = 0.83 on the pool measured
+here the textbook ceiling is a 2.4x tighter SE, which is the order of magnitude
+the compression A/B and the real-work-headroom question both need.
+
+**It does not ship, and the reason is not a small sample.** This is the fifth
+principled statistical improvement vetoed on measurement here, after robust-SE
+(v0.30.0), confidence sequences (v0.36.0), weighted suites pre-t-correction
+(v0.37.0) and variance moderation (v1.0.0).
+
+### Why it fails: the covariate is the channel, not a nuisance
+
+CUPED is unbiased only for a covariate the treatment cannot move. `tool_calls`
+is not that. It is the mechanism a memory rule saves THROUGH -- "grep before
+reading" saves tokens by taking fewer turns -- so adjusting it away removes the
+effect along with the noise. Textbook post-treatment bias, and the point of
+`validation/covariate-adjustment.ts` is that it measures the size of that bias
+here instead of asserting it.
+
+The naive-headroom positive control is the one real rule effect this project has
+ever measured surviving the gate (+10,699 tokens/run). Differencing its two
+recorded arms, task by task:
+
+| task | delta tokens | delta calls | theta x delta calls |
+| --- | --- | --- | --- |
+| sql-01 | -3,820 | 0.50 | 5,128 |
+| sql-02 | 5,181 | 0.50 | 5,128 |
+| sql-03 | 2,619 | -0.50 | -5,128 |
+| sql-04 | 14,213 | 1.00 | 10,256 |
+| sql-05 | 35,304 | 4.00 | 41,025 |
+| **suite mean** | **10,699** | 1.10 | **11,282** |
+
+A CUPED adjustment on tool calls subtracts **105.4% of that recorded saving**
+away as noise. Not most of it. All of it, and then some.
+
+### The simulation, and why it runs two injection channels
+
+Every existing harness in this repository injects a saving ADDITIVELY: subtract
+a constant from the with-side token total, leave the covariate alone. That
+channel is a fiction, but it is kept here as the positive control -- a correctly
+implemented CUPED must show a large power gain under it, so if it does not, the
+estimator is broken rather than merely inapplicable. The `mechanistic` channel
+subtracts the same constant AND moves `tool_calls` by `saving / theta`, which is
+what the table above says a real rule does. The two arms are matched on the TRUE
+effect and differ only in whether the covariate moves with it, so the gap
+between them IS the bad-control bias.
+
+Naive-headroom pool, 5 tasks x 2 replicates, runs=3/side, 200 trials, seed 7.
+Minimum detectable saving at 80% power, tokens per run:
+
+| estimator | additive (fiction) | mechanistic (real) |
+| --- | --- | --- |
+| baseline | 12,330 | 12,330 |
+| cuped | **5,677** | **> 33,626** |
+| cuped-oracle | 5,499 | > 33,626 |
+| ratio | 10,739 | 10,739 |
+
+CUPED more than halves the minimum detectable saving on an effect that does not
+exist, and cannot detect the effect that does. Under the mechanistic channel its
+power is FLAT in the true saving -- 12.5% at 2% and 25.0% at 50% -- which is the
+signature of an estimator measuring the residual rather than the effect.
+
+### The screen that catches it is not the false-positive rate
+
+A/A false positives are identical across arms (0.0% permutation, 8.5-14.5%
+bootstrap, intervals overlapping). They have to be: a multiplicative bias is
+exactly zero under a null with no effect to multiply. So the harness reports the
+mean point estimate against the injected truth, at a 10% saving:
+
+| estimator | additive | mechanistic |
+| --- | --- | --- |
+| baseline | 1.00x | 1.00x |
+| cuped | 0.95x | **-0.02x** |
+| cuped-oracle | 0.99x | -0.09x |
+| ratio | 1.01x | 1.01x |
+
+The adjusted estimate of a real 6,725-token saving is **-161 tokens**. An A/A
+harness alone would have signed off on this.
+
+### What survives, and what it costs
+
+The `ratio` arm -- rescale each task's saving to the suite mean before averaging
+-- is unbiased under both channels (1.01x) and lowers the mechanistic MDS from
+12,330 to 10,739 tokens/run, ~13%. That is a real but modest gain at overlapping
+intervals, and it is not free: rescaling CHANGES THE ESTIMAND. It answers "how
+much does this rule save proportionally" where the gate asks "how many tokens
+does this rule save", and the gate's rent is denominated in tokens. It is
+recorded here, not shipped, on the same discipline that kept robust-SE advisory.
+
+Nothing in `src/` changed. `validation/covariate-adjustment.ts` is the harness;
+`test/covariate-published.test.ts` pins the 105.4% figure against a frozen
+extract of the 20 runs it was computed from, because a published headline was
+wrong for weeks here while an accurate caveat travelled beside it.
+
+**What would actually move the floor** is unchanged and now sharper: not a
+better estimator over the same runs, but an experiment whose noise is smaller --
+tasks whose turn count does not wander, or savings large against per-task run
+noise. The variance is real. It cannot be borrowed away.
