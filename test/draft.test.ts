@@ -24,7 +24,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -839,5 +839,149 @@ describe("main (end to end)", () => {
 		expect(out).toContain("NO: nothing could be drafted");
 		expect(out).toContain("3 recorded session");
 		expect(existsSync(join(benchmarksDir, "payments", "drafts"))).toBe(false);
+	});
+});
+
+/**
+ * The malformed-transcript branches. A transcript is a file another program
+ * writes, so every one of these shapes is reachable in production and none of
+ * them may throw: a draft run that dies on one bad line has refused a whole
+ * agent's history over a single record.
+ */
+describe("parsing hostile transcript lines", () => {
+	it("skips lines that are not JSON at all", () => {
+		expect(extractOpeningPrompt("not json\n{oops\n")).toBeNull();
+		expect(extractVerificationCommands("not json\n{oops\n")).toEqual([]);
+	});
+
+	it("skips JSON that is not an object", () => {
+		const lines = ["null", "42", '"a string"', "[1, 2]"].join("\n");
+		expect(extractOpeningPrompt(lines)).toBeNull();
+		expect(extractVerificationCommands(lines)).toEqual([]);
+	});
+
+	it("skips user entries whose message is missing or not an object", () => {
+		const lines = [
+			JSON.stringify({ type: "user" }),
+			JSON.stringify({ type: "user", message: null }),
+			JSON.stringify({ type: "user", message: "a string" }),
+		].join("\n");
+		expect(extractOpeningPrompt(lines)).toBeNull();
+	});
+
+	it("skips user entries written by something other than the user", () => {
+		const line = JSON.stringify({
+			type: "user",
+			message: {
+				role: "assistant",
+				content: "a prompt long enough to clear the minimum length gate",
+			},
+		});
+		expect(extractOpeningPrompt(line)).toBeNull();
+	});
+
+	it("reads a bare-string content as well as a block array", () => {
+		const bare = JSON.stringify({
+			type: "user",
+			message: {
+				role: "user",
+				content: "add pagination to the reporting endpoint, please",
+			},
+		});
+		expect(extractOpeningPrompt(bare)).toContain("pagination");
+	});
+
+	it("ignores content blocks that are not text blocks", () => {
+		const line = JSON.stringify({
+			type: "user",
+			message: {
+				role: "user",
+				content: [
+					null,
+					"a bare string inside the array",
+					{ type: "image", source: "..." },
+					{ type: "text", text: 42 },
+					{ type: "text", text: "add pagination to the reporting endpoint" },
+				],
+			},
+		});
+		expect(extractOpeningPrompt(line)).toBe(
+			"add pagination to the reporting endpoint",
+		);
+	});
+
+	it("ignores tool blocks with no usable id, input or command", () => {
+		const lines = [
+			JSON.stringify({
+				type: "assistant",
+				message: { content: "a string, not an array" },
+			}),
+			JSON.stringify({ type: "assistant", message: { content: [null, 7] } }),
+			JSON.stringify({
+				type: "assistant",
+				message: {
+					content: [
+						{ type: "tool_use", name: "Bash", id: 99, input: { command: "x" } },
+						{ type: "tool_use", name: "Bash", id: "a", input: null },
+						{ type: "tool_use", name: "Bash", id: "b", input: { command: 7 } },
+						{ type: "tool_use", name: "Read", id: "c", input: {} },
+					],
+				},
+			}),
+			JSON.stringify({
+				type: "user",
+				message: { content: [{ type: "tool_result", tool_use_id: 5 }] },
+			}),
+		].join("\n");
+		expect(extractVerificationCommands(lines)).toEqual([]);
+	});
+
+	it("drops a command whose tool call failed, and one that never returned", () => {
+		const lines = [
+			JSON.stringify({
+				type: "assistant",
+				message: {
+					content: [
+						{
+							type: "tool_use",
+							name: "Bash",
+							id: "failed",
+							input: { command: "npm test" },
+						},
+						{
+							type: "tool_use",
+							name: "Bash",
+							id: "silent",
+							input: { command: "npm run lint" },
+						},
+					],
+				},
+			}),
+			JSON.stringify({
+				type: "user",
+				message: {
+					content: [
+						{ type: "tool_result", tool_use_id: "failed", is_error: true },
+					],
+				},
+			}),
+		].join("\n");
+		expect(extractVerificationCommands(lines)).toEqual([]);
+	});
+});
+
+describe("redactSensitive", () => {
+	it("rewrites both this machine's home and the conventional layouts", () => {
+		const text = `${homedir()}/work/app and /Users/someone/other and /home/ci/build`;
+		const out = redactSensitive(text);
+		expect(out).not.toContain(homedir());
+		expect(out).not.toContain("/Users/someone");
+		expect(out).not.toContain("/home/ci");
+	});
+
+	it("leaves text with nothing sensitive in it alone", () => {
+		expect(redactSensitive("add pagination to /api/reports")).toBe(
+			"add pagination to /api/reports",
+		);
 	});
 });

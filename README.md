@@ -9,10 +9,10 @@
 **that it saves more than it costs to carry.**
 
 ```text
-  version    1.1.0             tests       ~980 across 37 files
+  version    1.1.0             tests       ~1,120 across 41 files
   license    MIT               coverage    96% lines, CI-enforced floor
-  source     24 modules        commands    6
-              9.5k lines       built       2026-06 to 2026-08
+  source     25 modules        commands    7
+              10.7k lines      built       2026-06 to 2026-09
 ```
 
 ---
@@ -38,9 +38,9 @@ times a week, silently.
                   silently dropped         two strikes and out
 ```
 
-Six commands. That is the whole surface.
+Seven commands. That is the whole surface.
 
-`/warden-status` · `/warden-power` · `/warden-bench` · `/warden-select` · `/warden-receipt` · `/warden-cost`
+`/warden-status` · `/warden-power` · `/warden-bench` · `/warden-select` · `/warden-receipt` · `/warden-cost` · `/warden-draft`
 
 ---
 
@@ -67,7 +67,8 @@ for memory rules.
 A later survey scored **100 algorithms** the same way. Most die *structurally*: adjusting
 for tool calls would cut the standard error 4.3x and is invalid, because a turn-reducing
 rule works *through* tool calls — so controlling for them deletes the effect along with the
-noise.
+noise. That one was then built and measured rather than left as an argument: on the one real
+rule effect on record, the adjustment subtracts **105.4%** of the saving away.
 
 → [The four theorems](docs/four-theorems.md) · [The hundred](docs/hundred-algorithms.md)
 
@@ -109,7 +110,7 @@ instead of quietly accumulating.
 
 | | |
 |---|---|
-| **Tests** | 983 across 37 files — 16.0k lines of test against 9.5k of source |
+| **Tests** | 1,116 across 41 files — 17.8k lines of test against 10.7k of source |
 | **Coverage** | 96% lines, 90% branches, behind a floor CI fails on |
 | **Types** | Strict TypeScript. Zero `any`, zero `@ts-ignore`, zero non-null assertions |
 | **Data** | SQLite, 17 versioned migrations under `BEGIN IMMEDIATE` |
@@ -121,9 +122,12 @@ docs. False *negatives* went unmeasured until v0.42.0, and the roadmap forbade f
 had not been measured; a rule saving 2% is falsely evicted **78.2%** of the time. That
 figure was published at 79.8% and corrected downward — a retraction, not a quiet edit.
 
-It has rejected **four of its own features** on measurement. Three had their code deleted
-once the result was recorded; the fourth — a tail-robust estimator that raised the
-false-positive rate — survives only as an advisory flag, never as a gate input.
+It has rejected **six of its own features** on measurement. Three had their code deleted
+once the result was recorded; a tail-robust estimator that raised the false-positive rate
+survives only as an advisory flag, never as a gate input; and two more were built, measured
+and left out in the open — a measured replacement for the packer's redundancy signal, and a
+covariate adjustment that halves the error bar on an effect that does not exist and cannot
+see the one that does.
 
 → [Every measurement, with the sweeps](FINDINGS.md)
 
@@ -134,16 +138,31 @@ false-positive rate — survives only as an advisory flag, never as a gate input
 - **No rule distilled from real production work has yet survived the gate.** Survivors so
   far come from benchmark runs. Whether real workloads hold catchable waste is the open
   question, and it is open.
-- Only work routed through an agent with a golden suite can be learned from.
-- The packer's redundancy signal is textual similarity, not measured savings overlap.
-- The gate-loosening result was re-run on a second recorded pool. Its **direction
-  replicated** — a looser gate nets more tokens, at every overlap. Its **upper bracket did
-  not**: the published claim that returning to `z = 2.0` would need an absurd harm was a
-  near-zero denominator on one pool, and on the second the same number is ~a fifth of one
-  tool call. `z = 1.5` is defended against looser gates by evidence and against `z = 2.0`
-  by much less than was published. No default moved.
-- The rule-compression experiment is **closed as unconfirmable** — three token burns, each
-  killed by quota exhaustion.
+- **The noise floor is the binding constraint, and it cannot be borrowed away.** One
+  integer — the agent's turn count — explains ~94% of within-task spread. Conditioning on
+  it (CUPED/ANCOVA) halves the minimum detectable saving under the additive effect every
+  harness here simulates, and is useless against a real one: on the only rule effect this
+  project has measured surviving the gate, the adjustment subtracts **105.4%** of the
+  recorded saving away as noise, because turn count is the channel a rule saves through,
+  not a nuisance beside it. That is why the rule-compression experiment stays **closed as
+  unconfirmable** — three token burns, each killed by quota exhaustion, on an effect below
+  a floor no estimator can lower.
+- **An agent with no golden suite can now have one drafted** from its recorded sessions,
+  which refuses more clusters than it emits — too-noisy, no derivable success check, or a
+  check that already passes on the pristine fixture. A drafted suite is still
+  **unvalidated**: whether the task is measurable under benchmark conditions costs tokens
+  to learn, so drafts land where the benchmark does not read them until a human promotes
+  one.
+- **The packer's redundancy signal is still textual similarity** — and now for a measured
+  reason rather than an unrun one. The savings-overlap replacement was built: `runs` carries
+  no rule id, every rule is measured against one shared baseline so any two saving vectors
+  correlate at 1/2 under a no-effect null at every depth, and the one recoverable pair's
+  measured overlap sits at the 44th percentile of that null. A signal biased toward
+  "redundant" would evict measured savings on an artifact.
+- **The gate-loosening result replicated in direction on a second pool, not in bracket.** A
+  looser gate nets more tokens at every overlap, on both pools. But the published claim that
+  returning to `z = 2.0` would need an absurd harm was a near-zero denominator on one pool;
+  on the second the same number is ~a fifth of one tool call. No default moved.
 - The shipped agents are already well optimized, so the largest measured savings come from
   a deliberately naive positive control, built to prove the engine detects a real effect.
 
