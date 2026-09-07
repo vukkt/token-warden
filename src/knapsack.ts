@@ -76,6 +76,38 @@
  * limits and an assumption known to be wrong, the proxy is the more honest
  * default for a caller that has bodies to compare.
  *
+ * THE MEASURED ALTERNATIVE WAS BUILT, AND IT DOES NOT WORK -- which is a result,
+ * not an unrun experiment, and it is why the sentence above still says "which
+ * nobody has run" rather than being deleted. The obvious replacement is a
+ * per-task SAVING VECTOR per rule -- (without-rule cost minus with-rule cost)
+ * over the golden tasks -- with cosine between two such vectors as the overlap.
+ * `validation/savings-overlap.ts` derives exactly that from the recorded pool,
+ * zero-token, and reports three separate reasons it cannot be trusted:
+ *
+ *   ATTRIBUTION. `runs` has no rule column. A pass is tied to the rule it
+ *   measured only by falling between two `rules.decided_at` stamps, and on the
+ *   live ledger 3 of 6 decided rules cannot be recovered even that way -- the
+ *   swap A/B recorded both of its sides as `config='candidate'` in one block.
+ *
+ *   SHARED BASELINE. Every rule is measured against the same baseline pass, so
+ *   its saving vector carries that pass's error as a term the OTHER rule's
+ *   vector carries too. Under a null where neither rule does anything the two
+ *   vectors correlate at exactly 1/2, and both terms shrink as 1/n, so the
+ *   correlation is a constant: more runs do not separate a redundant pair from
+ *   an independent one.
+ *
+ *   NO SIGNAL LEFT. On the one recoverable pair the measured overlap (0.937)
+ *   and the textual one (0.074) disagree completely, which is the case this
+ *   whole idea exists for -- and the measured value sits at the 44th percentile
+ *   of that no-effect null. It is baseline noise wearing the shape of an answer.
+ *
+ * A similarity that is biased toward "redundant" under the measurement design
+ * that produces its own input is worse than a proxy that is merely coarse: it
+ * would evict measured savings on an artifact. So the proxy stays, and what
+ * would change the answer is a different EXPERIMENT (independent baselines per
+ * rule, or savings large against per-task run noise), not a bigger one.
+ * `test/savings-overlap.test.ts` pins all three findings.
+ *
  * THE GUARANTEE (Khuller, Moss & Naor, IPL 1999). Greedy by density -- always
  * take the feasible item with the best marginal-gain-per-token -- and then
  * return the better of that set and the single best feasible item. For monotone

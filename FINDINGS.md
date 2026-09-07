@@ -2109,3 +2109,126 @@ npx tsx validation/cross-pool-gate.ts --max-tasks 3 --max-depth 5 \
 
 `validation/*.db` is gitignored, so a fresh clone sees two ABSENT lines and the
 live ledger; the burn ledgers live on the machine that ran the burns.
+## The packer's redundancy proxy: the measured replacement is worse (2026-09-06)
+
+The packer's stated limit — *"the redundancy signal is textual similarity, not
+measured savings overlap"* — carried a diagnosis inside it. Both `knapsack.ts`
+and `memory.ts#packToBudget` explained the proxy the same way: measuring real
+pairwise savings overlap is **a token burn nobody has run**. That says the only
+obstacle is money.
+
+It is not, and the recorded ledger was enough to show it. **Zero tokens spent**;
+`validation/savings-overlap.ts` reproduces every number below from a read-only
+copy of a ledger.
+
+### The idea, which is a good one
+
+The `runs` table holds per-task token totals tagged with agent, task, ruleset
+version and config. A rule's **saving profile** — a vector over tasks of
+(without-rule cost − with-rule cost) — therefore looks derivable from runs
+already paid for. Two rules that save on the SAME tasks are redundant in the way
+the facility-location objective actually weighs; two that save on DISJOINT tasks
+are complementary however alike they read. Cosine between those vectors, mapped
+`(c+1)/2` into `[0, 1]`, meets the packer's preconditions exactly.
+
+### 1. No recorded run says which rule it measured
+
+`runs` has no rule column. A candidate pass is tied to its rule only by falling
+between two `rules.decided_at` stamps. Cutting the run log at every decision
+boundary — the strongest attribution the schema permits — recovers **3 of the 6
+decided rules** on the live `sql` ledger, and only because each recovery can be
+validated by re-deriving the mean saving and matching it to the banked
+`measured_delta`:
+
+| rule | banked | re-derived | separable |
+|---|---|---|---|
+| 1 | −9,215 | −9,263 | yes (its re-audit was a lone `audit` block) |
+| 2 | −6,134 | −2,152 | **no** — recovered runs are not the ones the verdict used |
+| 3 | +622 | +670 | yes |
+| 4 | +5,731 | +5,778 | yes |
+| 5 | +10,851 | −30,028 | **no** |
+| 6 | −71,998 | −20,935 | **no** |
+
+Rules 5 and 6 are the two largest deltas and **333 of the ledger's 397 `sql`
+runs**. Their compression A/B was a swap, so both of its sides were recorded as
+`config='candidate'` inside one block and nothing separates them. The three
+`validation/warden-*.db` pools add nothing: each holds a single undecided
+candidate.
+
+### 2. Where a pair IS recoverable, measured and textual overlap disagree completely
+
+Rules 3 and 4 are the only two ACTIVE rules, which is also the only pair the
+packer would ever weigh:
+
+| | measured cosine | as a similarity | trigram |
+|---|---|---|---|
+| rule 3 vs rule 4 | +0.873 | **0.937** | **0.074** |
+| rule 1 vs rule 4 | −0.975 | 0.012 | 0.013 |
+
+That first row is the case the whole feature exists for: two rules that read as
+unrelated, measured as near-duplicates. Under a binding budget it changes which
+rule gets carried.
+
+### 3. It is baseline noise, and more runs do not help
+
+Every rule is measured against **the same baseline pass**, so its saving vector
+is `s_r,t = true_r,t + (e_W,t − e_r,t)` where `e_W,t` is **the same draw** in
+every rule's vector. Under a null where no rule does anything:
+
+```text
+cov(s_A,t, s_B,t) = Var(e_W,t)        Var(s_r,t) = Var(e_W,t) + Var(e_r,t)
+```
+
+which at equal depth is a correlation of **exactly 1/2**. Both terms shrink as
+`1/n`, so the ratio is a constant.
+
+A permutation null over the recorded runs (50,000 draws, within-task
+exchangeability) says the same thing:
+
+- median null cosine **0.929**; `P(null cosine ≥ 0.5) = 66.0%` — a pair of rules
+  that do **nothing at all** reads as half-redundant two times in three;
+- the observed 0.873 sits at the **44th percentile** of that null
+  (`P(null ≥ observed) = 56.4%`).
+
+And the parametric sweep at the recorded per-task spread:
+
+| runs/side | 2 | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---|---|---|---|---|---|---|
+| `P(null cosine ≥ 0.5)` | 63.0% | 62.7% | 63.5% | 63.2% | 63.7% | 63.0% | 63.1% |
+
+Flat. The measurement that would have justified the feature is the one thing a
+bigger burn cannot buy.
+
+The mechanism is visible in the raw numbers: on `sql-02` the baseline pass spread
+19,805 tokens across two runs (SD 14,004, **19.8%** of its mean) while the two
+rules' savings on that task were 3,648 and 16,518. Both rules "save on sql-02"
+because the shared baseline happened to include one 80,664-token run.
+
+### Verdict: the proxy stays, and the limit line was wrong about why
+
+Nothing shipped in `src/` but documentation. A measured similarity that is
+**biased toward "redundant" under the measurement design that produces its own
+input** is worse than a proxy that is merely coarse: the proxy is silent about
+savings, while the measured version would evict measured savings on an artifact.
+
+What would change the answer is a different **experiment**, not a longer one:
+
+- an **independent baseline pass per rule**, which removes the shared `e_W,t`
+  term (and costs one extra baseline pass per candidate); or
+- per-task savings large against per-task run noise, which on `sql-02` means
+  closing a 19.8% baseline spread; or
+- a `rule_id` on `runs`, which is the cheap half and makes the attribution a
+  recorded fact instead of timestamp archaeology.
+
+The first two are the same conclusion the variance work keeps reaching from
+other directions. The third is a one-column migration and is the only piece of
+this worth doing before there is a reason to want the signal.
+
+*Reproduce (no tokens):*
+
+```bash
+cp ~/.token-warden/warden.db /tmp/ledger.db   # never point it at the original
+npx tsx validation/savings-overlap.ts --db /tmp/ledger.db --agent sql
+```
+
+The three findings are pinned in `test/savings-overlap.test.ts`.

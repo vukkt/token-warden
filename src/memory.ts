@@ -139,8 +139,34 @@ function memorySafeRules(rules: RuleRow[]): RuleRow[] {
  * address the same waste, which this will miss, or be worded alike and address
  * different waste, which this will over-discount. It is a proxy. It is a better
  * proxy than assuming independence, which is the alternative and is known to be
- * false -- but measuring real pairwise savings overlap is a token burn nobody
- * has run, and this stays a proxy until someone does.
+ * false.
+ *
+ * WHAT IS NOW MEASURED ABOUT THAT LIMIT, and what is still a proxy. This
+ * paragraph used to end "measuring real pairwise savings overlap is a token burn
+ * nobody has run, and this stays a proxy until someone does", which quietly
+ * assumed the only obstacle was money. It is not. `validation/savings-overlap.ts`
+ * built the measured alternative -- cosine between per-task saving vectors -- out
+ * of the runs already recorded, spending nothing, and it fails for reasons a
+ * bigger burn does not fix:
+ *
+ *   - `runs` records no rule id, so which rule a candidate pass measured is
+ *     recoverable only from `decided_at` timestamps, and on the live ledger
+ *     that recovery fails for half the decided rules.
+ *   - every rule is measured against the SAME baseline pass, so any two rules'
+ *     saving vectors share that pass's error term and correlate at 1/2 under a
+ *     null where neither rule does anything -- at every run depth, since more
+ *     runs shrink the shared and private terms alike.
+ *   - on the one pair the ledger can support, measured overlap says 0.937 and
+ *     trigram says 0.074, and the measured value sits at the 44th percentile of
+ *     that no-effect null.
+ *
+ * So the measured signal is not merely unavailable, it is BIASED TOWARD
+ * "redundant" under the design that generates it, and swapping it in here would
+ * discard measured savings on an artifact. The proxy stays. What would change
+ * the answer is a different experiment -- an independent baseline per rule, or
+ * per-task savings large against per-task run noise -- not a longer one.
+ * `knapsack.ts` carries the same finding at the objective; the numbers are
+ * pinned in `test/savings-overlap.test.ts`.
  */
 function packToBudget(rules: RuleRow[]): RuleRow[] {
 	const budget = memoryContextBudget();
