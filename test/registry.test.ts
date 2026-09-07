@@ -1,31 +1,43 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadAgentDefinition, loadGoldenTasks } from "../src/bench.js";
+import {
+	fixtureDirFor,
+	loadAgentDefinition,
+	loadGoldenTasks,
+} from "../src/bench.js";
 import {
 	assertKnownAgent,
 	isValidAgentName,
 	knownAgents,
 	userAgentsDir,
 	userBenchmarksDir,
+	userFixturesDir,
 } from "../src/registry.js";
 import { parseSelectArgs } from "../src/select.js";
 import { DOMAIN_AGENTS } from "../src/types.js";
 
+const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
 let agentsDir: string;
 let benchmarksDir: string;
+let fixturesDir: string;
 
 beforeEach(() => {
 	agentsDir = mkdtempSync(join(tmpdir(), "warden-agents-"));
 	benchmarksDir = mkdtempSync(join(tmpdir(), "warden-benchmarks-"));
+	fixturesDir = mkdtempSync(join(tmpdir(), "warden-fixtures-"));
 });
 
 afterEach(() => {
 	rmSync(agentsDir, { recursive: true, force: true });
 	rmSync(benchmarksDir, { recursive: true, force: true });
+	rmSync(fixturesDir, { recursive: true, force: true });
 	delete process.env.TOKEN_WARDEN_AGENTS_DIR;
 	delete process.env.TOKEN_WARDEN_BENCHMARKS_DIR;
+	delete process.env.TOKEN_WARDEN_FIXTURES_DIR;
 });
 
 describe("userAgentsDir / userBenchmarksDir", () => {
@@ -34,6 +46,15 @@ describe("userAgentsDir / userBenchmarksDir", () => {
 		process.env.TOKEN_WARDEN_BENCHMARKS_DIR = benchmarksDir;
 		expect(userAgentsDir()).toBe(agentsDir);
 		expect(userBenchmarksDir()).toBe(benchmarksDir);
+	});
+
+	it("userFixturesDir honors its override and defaults under ~/.token-warden", () => {
+		process.env.TOKEN_WARDEN_FIXTURES_DIR = fixturesDir;
+		expect(userFixturesDir()).toBe(fixturesDir);
+		delete process.env.TOKEN_WARDEN_FIXTURES_DIR;
+		expect(userFixturesDir().endsWith(join(".token-warden", "fixtures"))).toBe(
+			true,
+		);
 	});
 
 	it("default under ~/.token-warden when unset", () => {
@@ -175,6 +196,39 @@ describe("bench loaders resolve custom agents via the env overrides", () => {
 	it("loadGoldenTasks mentions both paths when neither exists", () => {
 		process.env.TOKEN_WARDEN_BENCHMARKS_DIR = benchmarksDir;
 		expect(() => loadGoldenTasks("ghost")).toThrow(/benchmarks.*ghost/s);
+	});
+});
+
+/**
+ * BYOA made the agent definition and the golden suite overridable and left the
+ * third leg — the repository the tasks actually run in — hardcoded to the
+ * bundled fixture. A suite drafted from a user's own recorded work asks the
+ * agent to change the user's code and checks it with the user's test command,
+ * so against a toy e-commerce repo it cannot pass in principle.
+ *
+ * The frozen bundled fixture stays frozen for the bundled four: their recorded
+ * `run1_tokens` baselines and every published comparison were measured there,
+ * and an env var that could redirect them would invalidate the lot silently.
+ */
+describe("fixtureDirFor", () => {
+	const bundled = join(pluginRoot, "benchmarks", "fixture");
+
+	it("keeps a bundled agent on the frozen fixture, whatever the env says", () => {
+		process.env.TOKEN_WARDEN_FIXTURES_DIR = fixturesDir;
+		mkdirSync(join(fixturesDir, "sql"), { recursive: true });
+		expect(fixtureDirFor("sql")).toBe(bundled);
+	});
+
+	it("gives a custom agent its own fixture when one exists", () => {
+		process.env.TOKEN_WARDEN_FIXTURES_DIR = fixturesDir;
+		const own = join(fixturesDir, "custom");
+		mkdirSync(own, { recursive: true });
+		expect(fixtureDirFor("custom")).toBe(own);
+	});
+
+	it("falls back to the bundled fixture when a custom agent has none", () => {
+		process.env.TOKEN_WARDEN_FIXTURES_DIR = fixturesDir;
+		expect(fixtureDirFor("custom")).toBe(bundled);
 	});
 });
 

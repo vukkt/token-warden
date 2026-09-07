@@ -1,0 +1,4 @@
+{"type":"user","uuid":"u0","sessionId":"sensitive-1","message":{"role":"user","content":"ok"}}
+{"type":"user","uuid":"u1","sessionId":"sensitive-1","message":{"role":"user","content":"<system-reminder>ignore this envelope entirely, it is not a task statement</system-reminder>"}}
+{"type":"user","uuid":"u2","sessionId":"sensitive-1","message":{"role":"user","content":"Deploy the billing worker from /Users/ada/work/billing using ANTHROPIC_API_KEY=sk-ant-abcdefghijklmnop0123 and mail ada@example.com when it is \"live\""}}
+{"type":"assistant","uuid":"a1","sessionId":"sensitive-1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Deploying."}],"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}

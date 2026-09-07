@@ -42,7 +42,12 @@ import {
 	withDb,
 } from "./db.js";
 import { compileMemoryMd } from "./memory.js";
-import { knownAgents, userAgentsDir, userBenchmarksDir } from "./registry.js";
+import {
+	knownAgents,
+	userAgentsDir,
+	userBenchmarksDir,
+	userFixturesDir,
+} from "./registry.js";
 import { parseTranscript } from "./transcript.js";
 import type { ParsedRun } from "./types.js";
 
@@ -352,23 +357,50 @@ export function shouldCopyFixtureEntry(source: string): boolean {
 	return !COPY_EXCLUDES.has(name) && !name.endsWith(".db");
 }
 
-function copyFixture(dest: string): void {
-	cpSync(fixtureDir, dest, {
+/**
+ * The repository snapshot `agent`'s golden tasks run against.
+ *
+ * A BUNDLED agent always gets the frozen `benchmarks/fixture` — its recorded
+ * baselines and every published comparison were measured there, and letting an
+ * env var redirect them would silently invalidate the lot. A CUSTOM agent gets
+ * `<userFixturesDir()>/<agent>` when that directory exists, so a suite drafted
+ * from the user's own recorded work can run against the user's own code; with
+ * no such directory it falls back to the bundled fixture, which is exactly what
+ * BYOA did before this existed. Unset env, no directory: byte-identical.
+ */
+export function fixtureDirFor(agent: string): string {
+	if (existsSync(join(pluginRoot, "benchmarks", agent))) return fixtureDir;
+	const custom = join(userFixturesDir(), agent);
+	return existsSync(custom) ? custom : fixtureDir;
+}
+
+function copyFixture(dest: string, agent: string): void {
+	const source = fixtureDirFor(agent);
+	cpSync(source, dest, {
 		recursive: true,
 		filter: shouldCopyFixtureEntry,
 	});
-	symlinkSync(
-		join(fixtureDir, "node_modules"),
-		join(dest, "node_modules"),
-		"dir",
-	);
+	// A custom fixture need not be a Node project at all (a Python or Go repo
+	// has no node_modules to share), so the symlink is conditional. The bundled
+	// fixture always has one by the time this runs — ensureFixtureDeps
+	// installed it.
+	if (existsSync(join(source, "node_modules"))) {
+		symlinkSync(
+			join(source, "node_modules"),
+			join(dest, "node_modules"),
+			"dir",
+		);
+	}
 }
 
-function ensureFixtureDeps(): void {
-	if (existsSync(join(fixtureDir, "node_modules"))) return;
+function ensureFixtureDeps(agent: string): void {
+	const source = fixtureDirFor(agent);
+	if (existsSync(join(source, "node_modules"))) return;
+	// Nothing to install: a custom fixture that is not a Node project.
+	if (!existsSync(join(source, "package.json"))) return;
 	console.log("Installing fixture dependencies (first run only)…");
 	const result = spawnSync("npm", ["install", "--no-audit", "--no-fund"], {
-		cwd: fixtureDir,
+		cwd: source,
 		stdio: "inherit",
 		timeout: CHECK_TIMEOUT_MS,
 	});
@@ -748,7 +780,7 @@ export interface RunOnceDeps {
 	spawn: SpawnFn;
 	makeWorkDir: (task: GoldenTask) => string;
 	disposeWorkDir: (dir: string) => void;
-	copyFixture: (dest: string) => void;
+	copyFixture: (dest: string, agent: string) => void;
 	installAgent: (
 		workDir: string,
 		agent: string,
@@ -840,7 +872,7 @@ export function runOnce(
 ): RunResult {
 	const workDir = deps.makeWorkDir(task);
 	try {
-		deps.copyFixture(workDir);
+		deps.copyFixture(workDir, task.agent);
 		deps.installAgent(workDir, task.agent, definition, rules);
 
 		const model = options.model ?? definition.model;
@@ -1176,7 +1208,7 @@ export function runSuite(
 	}
 	// Fixture deps are only needed by the real runner; an injected fake
 	// (tests) must not trigger an npm install.
-	if (single === runOnce) ensureFixtureDeps();
+	if (single === runOnce) ensureFixtureDeps(agent);
 	const definition = options.definitionOverride ?? loadAgentDefinition(agent);
 	const summaries: TaskSummary[] = [];
 	// Consecutive environment failures (zero-token failed runs) span task
