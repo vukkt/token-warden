@@ -8,6 +8,7 @@
 		"src/receipt.ts",
 		"src/power.ts",
 		"src/cost.ts",
+		"src/draft.ts",
 		"scripts/*.mjs",
 		"validation/calibration.ts",
 		"validation/cross-pool-gate.ts",

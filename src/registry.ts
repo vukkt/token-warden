@@ -47,6 +47,29 @@ export function userBenchmarksDir(): string {
 	);
 }
 
+/**
+ * Directory scanned for user-supplied `<name>/` FIXTURES — the repository
+ * snapshot a custom agent's golden tasks run against.
+ *
+ * BYOA shipped the agent definition and the suite as overridable, and left the
+ * third leg hardcoded: every task, bundled or custom, was copied into
+ * `benchmarks/fixture` (the toy e-commerce repo). A task mined from a user's
+ * own work says "fix the N+1 in the orders repository" and its check runs the
+ * user's own test command, so against the bundled fixture it can only ever
+ * fail. Without this directory a custom suite is unrunnable in principle, not
+ * merely unvalidated.
+ *
+ * Bundled agents are deliberately NOT affected — `benchmarks/fixture` is a
+ * frozen fixture the project's published results depend on; see
+ * `fixtureDirFor` in bench.ts.
+ */
+export function userFixturesDir(): string {
+	return (
+		process.env.TOKEN_WARDEN_FIXTURES_DIR ??
+		join(homedir(), ".token-warden", "fixtures")
+	);
+}
+
 /** The full set of agents token-warden knows about: the bundled defaults first
  * (in their shipped order), then the basenames of valid `<name>.md` files in
  * `userAgentsDir()`, sorted and deduped. A missing or unreadable directory

@@ -858,6 +858,46 @@ export function realWorkTotalsByVersion(
 		.all(...params);
 }
 
+export interface RealWorkSession {
+	sessionId: string;
+	project: string | null;
+	total: number;
+	toolCalls: number;
+	fileRereads: number;
+	/** Wall-clock milliseconds, or null on rows recorded before v0.31.0. */
+	durationMs: number | null;
+	completed: number;
+}
+
+/**
+ * Every recorded real-work session for one agent, oldest first, INCLUDING the
+ * incomplete ones.
+ *
+ * Every other real-work query in this file filters `completed = 1`, because
+ * every other consumer is measuring cost and an aborted session is not a cost
+ * observation. This one is the raw material for the golden-suite drafter, whose
+ * question is the opposite: "is this task repeatable?" A recurring task the
+ * agent finished four times out of seven is a task the drafter must REFUSE, and
+ * it can only see that if the failures are in the rows. Filtering here would
+ * hand the caller a clean subset of a dirty task and call it stable.
+ */
+export function realWorkSessions(
+	db: WardenDb,
+	agent: string,
+): RealWorkSession[] {
+	return db
+		.prepare<[string], RealWorkSession>(
+			`SELECT session_id AS sessionId, project,
+				${RUN_TOTAL_TOKENS_SQL} AS total,
+				tool_calls AS toolCalls, file_rereads AS fileRereads,
+				duration_ms AS durationMs, completed
+			 FROM runs
+			 WHERE agent = ? AND task_hash IS NULL
+			 ORDER BY ts ASC`,
+		)
+		.all(agent);
+}
+
 /** Timestamp of the most recent benchmark run of any kind — the cooldown
  * signal for opt-in scheduled selection. Includes config='active' (the shared
  * baseline pass) deliberately: the selector spends the baseline FIRST, so a
