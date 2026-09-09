@@ -122,7 +122,8 @@ describe("computeRuleCost", () => {
 		} as Parameters<typeof computeRuleCost>[0];
 		const c = computeRuleCost(receipt, price, 3 / 1_000_000, 20);
 		expect(c.savingsDollars).toBeCloseTo(0.03, 6);
-		expect(c.rentDollars).toBeCloseTo(0.00006, 8);
+		// 20 context tokens at the sonnet-tier fallback input rate ($2/MTok).
+		expect(c.rentDollars).toBeCloseTo(0.00004, 8);
 		expect(c.breakEvenSessions).toBe(67);
 		expect(renderCosts("sql", [c], 20)).not.toContain("NaN");
 	});

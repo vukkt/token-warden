@@ -43,18 +43,30 @@ export const DEFAULT_PRICES: Record<string, Price> = {
 	"claude-opus-4-8": priced(5, 25),
 	"claude-opus-4-7": priced(5, 25),
 	"claude-opus-4-6": priced(5, 25),
-	// Sonnet 5 lists at the same $3/$15 sticker as Sonnet 4.6 (an intro $2/$10
-	// runs through 2026-08-31; the sticker is the durable value, override via
-	// TOKEN_WARDEN_PRICE_INPUT/_OUTPUT to price the intro window).
-	"claude-sonnet-5": priced(3, 15),
+	// SONNET 5 IS $2/$10, AND THIS TABLE SAID $3/$15 FOR MONTHS. The old comment
+	// here called $2/$10 an intro rate running through 2026-08-31 and $3/$15 the
+	// "durable sticker"; re-checked against the public rate card on 2026-09-09,
+	// $2/$10 is simply the price, and $3/$15 is Sonnet 4.6's. Every dollar figure
+	// this project published for a Sonnet-run agent — which is all four bundled
+	// agents and the distiller — was therefore 1.5x too high. The recurring shape
+	// again: a wrong price is a valid number, so nothing failed.
+	"claude-sonnet-5": priced(2, 10),
 	"claude-sonnet-4-6": priced(3, 15),
 	"claude-haiku-4-5": priced(1, 5),
+	// FABLE 5.1 BREAKS THE 0.1x CACHE-READ RULE that every other model on the
+	// card follows: $0.25/MTok against a $10 input rate is 0.025x, a quarter of
+	// what `priced()` would derive. Fable 5 (legacy) reads at $1/MTok, which is
+	// the standard 0.1x. So the multipliers below are a DEFAULT, not a law, and
+	// a model that departs from them has to say so here — deriving Fable 5.1's
+	// cache read would have overcharged it 4x.
+	"claude-fable-5-1": { ...priced(10, 50), cacheRead: 0.25 },
 	"claude-fable-5": priced(10, 50),
 	"claude-mythos-5": priced(10, 50),
 	opus: priced(5, 25),
-	sonnet: priced(3, 15),
+	sonnet: priced(2, 10),
 	haiku: priced(1, 5),
-	fable: priced(10, 50),
+	// `fable` follows the current default Fable model, which is 5.1.
+	fable: { ...priced(10, 50), cacheRead: 0.25 },
 };
 
 /** Fallback when a model is unknown or unset — Sonnet-tier, a reasonable middle. */

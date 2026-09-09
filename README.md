@@ -82,19 +82,19 @@ Read from the live ledger, priced at the agent's real token mix. Not a projectio
   two surviving rules      6,353 tokens/session gross
   less rent                   55 tokens/session
   ---------------------------------------------------
-  net                      6,298 tokens/session     ~ $0.0051 on Sonnet
+  net                      6,298 tokens/session     ~ $0.0034 on Sonnet
 ```
 
-Discovery cost **415 benchmark runs, 23.4M tokens, $19.13 — one-time and shared.** The
+Discovery cost **415 benchmark runs, 23.4M tokens, $12.75 — one-time and shared.** The
 saving is per-developer and recurring:
 
 | Team | Saved / year | Payback on discovery |
 |---|---|---|
-| 1 dev | $5 | 186 weeks |
-| 5 devs | $27 | 37 weeks |
-| 20 devs | $107 | 9 weeks |
-| 50 devs | $267 | 4 weeks |
-| 250 devs | $1,336 | under a week |
+| 1 dev | $3.56 | 186 weeks |
+| 5 devs | $18 | 37 weeks |
+| 20 devs | $71 | 9 weeks |
+| 50 devs | $178 | 4 weeks |
+| 250 devs | $891 | under a week |
 
 **Below roughly ten developers the arithmetic does not work on token savings alone.** What
 you are buying at that scale is the *refusal* — that a rule which does not pay is deleted
@@ -103,6 +103,12 @@ instead of quietly accumulating.
 > An earlier version of this section claimed $20/developer/year and omitted discovery cost
 > entirely. It priced savings at the raw input rate instead of the blended mix, a 3.7x
 > overstatement. Recomputed and corrected in the open.
+>
+> Corrected again on 2026-09-09: every figure here was priced at $3/$15 per MTok for
+> Sonnet 5, which is Sonnet 4.6's rate. Sonnet 5 is **$2/$10**. All four of its rates —
+> input, output, cache write, cache read — moved by exactly the same 2/3, so every dollar
+> figure above is 2/3 of what was published and the payback *ratios* are unchanged. A
+> wrong price is a valid number, so nothing failed; the test pinned the same mistake.
 
 ---
 

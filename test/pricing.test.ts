@@ -17,10 +17,25 @@ describe("rate card", () => {
 		expect(DEFAULT_PRICES["claude-fable-5"]?.output).toBe(50);
 		expect(DEFAULT_PRICES["claude-mythos-5"]?.input).toBe(10);
 		expect(DEFAULT_PRICES["claude-haiku-4-5"]?.input).toBe(1);
-		expect(DEFAULT_PRICES["claude-sonnet-5"]?.input).toBe(3);
+		// Sonnet 5 is $2/$10. This assertion said 3 for months, which is Sonnet
+		// 4.6's rate, and it agreed with a table that was also wrong -- a test
+		// pinned to the same mistake it was meant to catch.
+		expect(DEFAULT_PRICES["claude-sonnet-5"]?.input).toBe(2);
+		expect(DEFAULT_PRICES["claude-sonnet-5"]?.output).toBe(10);
+		expect(DEFAULT_PRICES["claude-sonnet-4-6"]?.input).toBe(3);
+		expect(DEFAULT_PRICES["claude-fable-5-1"]?.input).toBe(10);
 		// The default model is a real, priced entry.
 		expect(DEFAULT_PRICES[DEFAULT_MODEL]).toBeDefined();
 	});
+
+	/** Models whose cache-read rate is NOT the 0.1x default, with the published
+	 * rate. Fable 5.1 reads at $0.25/MTok against $10 input -- 0.025x -- while
+	 * Fable 5 (legacy) reads at the standard $1. An entry here is a claim about
+	 * the rate card, so it carries the number rather than an exemption. */
+	const CACHE_READ_EXCEPTIONS: Record<string, number> = {
+		"claude-fable-5-1": 0.25,
+		fable: 0.25,
+	};
 
 	it("is internally consistent: every entry derives its cache rates from input", () => {
 		for (const [model, price] of Object.entries(DEFAULT_PRICES)) {
@@ -28,8 +43,9 @@ describe("rate card", () => {
 				price.input * CACHE_WRITE_MULTIPLIER,
 				9,
 			);
+			const exception = CACHE_READ_EXCEPTIONS[model];
 			expect(price.cacheRead, model).toBeCloseTo(
-				price.input * CACHE_READ_MULTIPLIER,
+				exception ?? price.input * CACHE_READ_MULTIPLIER,
 				9,
 			);
 			// Rates are dollars per 1M tokens, never per token: a $3/MTok model
@@ -43,7 +59,10 @@ describe("rate card", () => {
 		expect(DEFAULT_PRICES.opus).toEqual(DEFAULT_PRICES["claude-opus-5"]);
 		expect(DEFAULT_PRICES.sonnet).toEqual(DEFAULT_PRICES["claude-sonnet-5"]);
 		expect(DEFAULT_PRICES.haiku).toEqual(DEFAULT_PRICES["claude-haiku-4-5"]);
-		expect(DEFAULT_PRICES.fable).toEqual(DEFAULT_PRICES["claude-fable-5"]);
+		// `fable` tracks the CURRENT default Fable model, 5.1 -- not the legacy
+		// 5, which differs from it on cache reads.
+		expect(DEFAULT_PRICES.fable).toEqual(DEFAULT_PRICES["claude-fable-5-1"]);
+		expect(DEFAULT_PRICES.fable).not.toEqual(DEFAULT_PRICES["claude-fable-5"]);
 	});
 });
 
@@ -68,10 +87,10 @@ describe("priceFor", () => {
 	});
 
 	it("falls back to the sonnet-tier default for an unknown/empty model", () => {
-		expect(priceFor("who-knows").input).toBe(3);
-		expect(priceFor(null).input).toBe(3);
-		expect(priceFor(undefined).input).toBe(3);
-		expect(priceFor("").input).toBe(3);
+		expect(priceFor("who-knows").input).toBe(2);
+		expect(priceFor(null).input).toBe(2);
+		expect(priceFor(undefined).input).toBe(2);
+		expect(priceFor("").input).toBe(2);
 	});
 
 	// DEFAULT_PRICES is an object literal, so these names resolve through
@@ -89,10 +108,10 @@ describe("priceFor", () => {
 		"toLocaleString",
 	])("treats inherited Object.prototype key %s as an unknown model", (name) => {
 		const p = priceFor(name);
-		expect(p.input).toBe(3);
-		expect(p.output).toBe(15);
-		expect(p.cacheWrite).toBeCloseTo(3.75, 6);
-		expect(p.cacheRead).toBeCloseTo(0.3, 6);
+		expect(p.input).toBe(2);
+		expect(p.output).toBe(10);
+		expect(p.cacheWrite).toBeCloseTo(2.5, 6);
+		expect(p.cacheRead).toBeCloseTo(0.2, 6);
 		for (const rate of [p.input, p.output, p.cacheWrite, p.cacheRead]) {
 			expect(Number.isFinite(rate)).toBe(true);
 		}
@@ -263,7 +282,7 @@ describe("priceFor with dated model ids", () => {
 	it("does not resolve a partial family name by accident", () => {
 		// `claude-haiku-4` is not `claude-haiku-4-5`; a bare prefix must not
 		// match, or a future family would silently inherit an older rate.
-		expect(priceFor("claude-haiku-4").input).toBe(3);
+		expect(priceFor("claude-haiku-4").input).toBe(2);
 	});
 
 	it("cannot be walked onto Object.prototype", () => {
@@ -271,7 +290,7 @@ describe("priceFor with dated model ids", () => {
 		for (const hostile of ["constructor", "__proto__", "toString", "valueOf"]) {
 			const p = priceFor(hostile);
 			expect(Number.isFinite(p.input)).toBe(true);
-			expect(p.input).toBe(3);
+			expect(p.input).toBe(2);
 		}
 	});
 });

@@ -37,8 +37,8 @@ Three of four touched the decision. None touched the estimator. The one clear
 win — Neyman allocation in v0.24.0 — is the exception that proves it: it moved
 runs to where the variance was, and it worked.
 
-The economics say the same thing in dollars. The README now records $5.34 saved
-per developer per year against a $19.13 one-time discovery cost: **the
+The economics say the same thing in dollars. The README now records $3.56 saved
+per developer per year against a $12.75 one-time discovery cost: **the
 instrument costs more than the thing it measures is worth.** Runs needed to
 resolve an effect scale as `(SE/effect)^2`, so halving SE quarters the discovery
 cost. That is the only lever with a big enough exponent to flip the sign.
@@ -474,7 +474,7 @@ enters the knapsack — but the kept set is chosen jointly.
 | --- | --- | --- |
 | Per-task variance on 2 df is unstable (runs=3) | Variance moderation | Lower variance MSE -> honestly-sized band |
 | FP 8.8% empirical, no multiplicity control (v0.35.0) | Benjamini-Hochberg | FDR bounded at q as the pool grows |
-| $19.13 discovery vs $5.34/yr savings | Successive Halving | Budget concentrates on live candidates |
+| $12.75 discovery vs $3.56/yr savings | Successive Halving | Budget concentrates on live candidates |
 | Redundant rules each pass a per-item bar | Submodular knapsack | Kept set chosen jointly under budget |
 
 And the property the project is selling — *it gets better the more you use it* —

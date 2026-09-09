@@ -232,23 +232,29 @@ its rent is `context_cost × input_$/token`. We price savings at the agent's
 at the headline output rate would inflate the number. Detectability is the same
 governing equation as before, `mean / SE`.
 
+> DOLLAR COLUMNS RE-PRICED 2026-09-09. These were computed at $3/$15 per MTok for
+> Sonnet 5, which is Sonnet 4.6's rate; Sonnet 5 is $2/$10. Every Sonnet rate moved by
+> the same 2/3, so each dollar figure below is 2/3 of what was first published and every
+> comparison between them -- including the ~500x rent multiple and both verdicts -- is
+> unchanged. The token columns were never affected: the gate runs on tokens.
+
 | Result | delta (tok/run) | SE | mean/SE | $/run (Sonnet, input-rate) | rent | verdict |
 |---|---|---|---|---|---|---|
-| Positive control (curated rule, naive agent) | **+10,699** | 6,797 (between-task) | **+1.57σ** | **$0.032** | 21 tok ≈ $0.00006 | **KEEP** |
-| Full loop (distilled rule, naive agent) | +3,048 | 7,995 (within-task) | +0.38σ | $0.009 | 32 tok | **INCONCLUSIVE** |
+| Positive control (curated rule, naive agent) | **+10,699** | 6,797 (between-task) | **+1.57σ** | **$0.021** | 21 tok ≈ $0.00004 | **KEEP** |
+| Full loop (distilled rule, naive agent) | +3,048 | 7,995 (within-task) | +0.38σ | $0.006 | 32 tok | **INCONCLUSIVE** |
 
 What this establishes:
 
-- **The two units agree.** The surviving rule nets ~**$0.032/run** and clears its
+- **The two units agree.** The surviving rule nets ~**$0.021/run** and clears its
   rent by **~500×** (10,699 / 21 tokens); it is also **+1.57σ** above zero. The
-  inconclusive rule is **~$0.009/run** *and* within noise (`|3,048| < 7,995`). The
+  inconclusive rule is **~$0.006/run** *and* within noise (`|3,048| < 7,995`). The
   dollar lens keeps what the token gate keeps and rejects what it rejects — the
   instrument is internally consistent, not just numerically lucky.
 - **Honest magnitude.** The win is real but *small in absolute dollars* — cents
   per run — because the saved tokens are mostly cheap input/cache-read, not
   expensive output. That is exactly the nuance the critics demanded and that raw
   token counts obscure. It is **not** "huge"; it is "small per run, ~500× the
-  rent, and it scales with model price and call volume" — at Fable-5 rates
+  rent, and it scales with model price and call volume" — at Fable-5.1 rates
   (`$10`/$50 per MTok) and enterprise volume the same rule is materially more
   valuable; at Haiku rates it is pennies.
 - **Statistics buy the confidence.** The positive control sits at +1.57σ at just
