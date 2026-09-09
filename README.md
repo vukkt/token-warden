@@ -9,10 +9,10 @@
 **that it saves more than it costs to carry.**
 
 ```text
-  version    1.1.0             tests       ~1,120 across 41 files
+  version    1.2.0             tests       ~1,150 across 42 files
   license    MIT               coverage    96% lines, CI-enforced floor
-  source     25 modules        commands    7
-              10.7k lines      built       2026-06 to 2026-09
+  source     26 modules        commands    7
+              11.2k lines      built       2026-06 to 2026-09
 ```
 
 ---
@@ -22,8 +22,8 @@
 Agent "memory" is a text file of advice someone wrote once. It is pasted into every call,
 forever, and nobody measures whether it helps.
 
-A rule carried by four agents across a thousand sessions a week is paid for a thousand
-times a week, silently.
+A rule carried across a thousand sessions a week is paid for a thousand times a week,
+silently.
 
 ## The loop
 
@@ -38,7 +38,13 @@ times a week, silently.
                   silently dropped         two strikes and out
 ```
 
-Seven commands. That is the whole surface.
+**Install it and that loop runs on your own sessions.** No agents to adopt, no commands to
+run: a hook records what each session costs, a suite is drafted from the sessions you have
+already had, candidates are measured against a worktree of your own repository at HEAD, and
+a rule that pays reaches your next session through the same hook. `TOKEN_WARDEN_AUTO_SELECT=0`
+switches the measuring off.
+
+The seven commands are for looking, not for driving.
 
 `/warden-status` · `/warden-power` · `/warden-bench` · `/warden-select` · `/warden-receipt` · `/warden-cost` · `/warden-draft`
 
@@ -116,7 +122,7 @@ instead of quietly accumulating.
 
 | | |
 |---|---|
-| **Tests** | 1,116 across 41 files — 17.8k lines of test against 10.7k of source |
+| **Tests** | 1,148 across 42 files — 18.4k lines of test against 11.2k of source |
 | **Coverage** | 96% lines, 90% branches, behind a floor CI fails on |
 | **Types** | Strict TypeScript. Zero `any`, zero `@ts-ignore`, zero non-null assertions |
 | **Data** | SQLite, 17 versioned migrations under `BEGIN IMMEDIATE` |
@@ -176,20 +182,44 @@ see the one that does.
 
 ## Try it
 
-Node.js 22+, Claude Code v2.1+.
+Node.js 22+, Claude Code v2.1+, and a git repository to work in.
 
 ```text
 /plugin marketplace add vukkt/token-warden
 /plugin install token-warden@vukkt-plugins
 ```
 
-Sessions are measured immediately; `/warden-status` shows the data.
+That is the whole setup. From the next session on:
+
+| | |
+|---|---|
+| **immediately** | every session's cost is recorded |
+| **once a session runs expensive** | its transcript is distilled into a candidate rule |
+| **once your recorded work holds a repeatable task** | a golden suite is drafted from it |
+| **within a day of a candidate appearing** | it is measured, with vs. without, and kept only if it pays |
+
+Nothing asks you to route work through an agent. The measured target is `main` — the
+session you are already in — and its benchmark runs in a **detached git worktree of your
+repository at HEAD**, so it sees committed code only and can never touch your working tree.
+A project that is not a git repository is refused rather than measured against a stand-in.
+
+`/warden-status` shows what has been recorded and what is pending.
+`TOKEN_WARDEN_AUTO_SELECT=0` turns off the measuring and leaves the recording.
+
+<details>
+<summary>Working on token-warden itself</summary>
+
+The four bundled agents (`sql`, `backend`, `frontend`, `testing`) and their frozen suites
+are development fixtures — every published number rests on them, which is why they never
+change. They are not something an installation needs to adopt.
 
 ```bash
 git clone https://github.com/vukkt/token-warden.git && cd token-warden && npm install
-npm run bench -- --agent all       # freeze baselines, once
+npm run bench -- --agent all       # freeze baselines against the frozen fixture
 npx tsx src/select.ts --agent sql  # measure pending candidates
 ```
+
+</details>
 
 ---
 

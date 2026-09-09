@@ -424,6 +424,7 @@ describe("runSuite environment-failure streak abort", () => {
 			successCheck: "true",
 			file: `t${i + 1}.md`,
 			weight: 1,
+			project: null,
 		}));
 
 	const options = (runs: number): SuiteOptions => ({
@@ -935,6 +936,7 @@ describe("runOnce (spawn boundary injected)", () => {
 		successCheck: "grep -qi 'create index' db/schema.sql",
 		file: "golden-01.md",
 		weight: 1,
+		project: null,
 	};
 	const definition: AgentDefinition = {
 		content: "---\nmemory: project\n---\nbody\n",
@@ -1042,6 +1044,44 @@ describe("runOnce (spawn boundary injected)", () => {
 			.get(taskId);
 		return row?.n ?? 0;
 	}
+
+	// THE MAIN TARGET carries no `--agent`: passing one would measure a
+	// subagent's context instead of the top-level session the rule is for.
+	it("spawns the main target without --agent, and a domain agent with one", () => {
+		const mainTask: GoldenTask = {
+			...task,
+			id: "main-01",
+			agent: "main",
+			project: "/tmp/some-repo",
+		};
+		const h = harness([claudeOk(), checkResult(0)]);
+		runOnce(db, mainTask, definition, [], options(), h.deps);
+		expect(h.spawns[0]?.args).not.toContain("--agent");
+		expect(h.spawns[0]?.args).toContain("-p");
+
+		const h2 = harness([claudeOk(), checkResult(0)]);
+		runOnce(db, task, definition, [], options(), h2.deps);
+		expect(h2.spawns[0]?.args).toContain("--agent");
+	});
+
+	it("passes the task through to copyFixture so a worktree can be provisioned", () => {
+		// The main-target fixture is a worktree of the task's own project, so
+		// the task -- not just the agent name -- has to reach the provisioner.
+		const seen: (GoldenTask | undefined)[] = [];
+		const h = harness([claudeOk(), checkResult(0)], {
+			copyFixture: (_dest, _agent, t) => {
+				seen.push(t);
+			},
+		});
+		const mainTask: GoldenTask = {
+			...task,
+			id: "main-02",
+			agent: "main",
+			project: "/tmp/some-repo",
+		};
+		runOnce(db, mainTask, definition, [], options(), h.deps);
+		expect(seen[0]?.project).toBe("/tmp/some-repo");
+	});
 
 	it("records a completed run and returns its parsed cost", () => {
 		const h = harness([claudeOk(), checkResult(0)]);
@@ -1380,6 +1420,7 @@ describe("runSuite contract assertions", () => {
 		successCheck: "true",
 		file: "t1.md",
 		weight: 1,
+		project: null,
 	};
 	const options = (over: Partial<SuiteOptions> = {}): SuiteOptions => ({
 		rules: [],

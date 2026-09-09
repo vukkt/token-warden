@@ -41,6 +41,12 @@ import {
 	type WardenDb,
 	withDb,
 } from "./db.js";
+import {
+	deriveAllowlist,
+	isMainTarget,
+	mainDefinition,
+	provisionMainFixture,
+} from "./main-target.js";
 import { compileMemoryMd } from "./memory.js";
 import {
 	knownAgents,
@@ -150,6 +156,19 @@ export interface GoldenTask {
 	 * up-weighted so the measured saving reflects real-work value; the verdict
 	 * estimators weight the mean and its standard error by this. */
 	weight: number;
+	/**
+	 * Absolute path of the repository this task was mined from, or null for a
+	 * task that runs against a fixture (every bundled task).
+	 *
+	 * Only main-target tasks carry it, and for them it is not optional in
+	 * practice: a task drafted from real work says "fix the N+1 in the orders
+	 * repository" and its check runs that project's own test command, so the
+	 * tree it runs against IS part of the task. `bench.ts` provisions a detached
+	 * git worktree of this path at HEAD; a task with no project cannot be
+	 * benchmarked as a main-target task at all, which is a refusal rather than a
+	 * fallback to the toy fixture.
+	 */
+	project: string | null;
 }
 
 /** A golden task's `id` and `agent` are pasted straight into filesystem paths
@@ -277,11 +296,26 @@ export function parseGoldenTask(text: string, file: string): GoldenTask {
 		}
 		weight = parsed;
 	}
+	// Optional project binding (main-target tasks). Absolute paths only: the
+	// value becomes a `git -C` argument and a worktree source, and a relative
+	// one would resolve against whatever directory the benchmark happens to run
+	// in -- a different repository on a different day.
+	const projectRaw = fields.get("project");
+	let project: string | null = null;
+	if (projectRaw !== undefined && projectRaw !== "") {
+		if (!projectRaw.startsWith("/")) {
+			throw new Error(
+				`${file}: "project" must be an absolute path (got "${projectRaw}")`,
+			);
+		}
+		project = projectRaw;
+	}
 	return {
 		id: fields.get("id") as string,
 		agent: fields.get("agent") as string,
 		prompt: fields.get("prompt") as string,
 		successCheck: fields.get("success_check") as string,
+		project,
 		file,
 		weight,
 	};
@@ -374,7 +408,29 @@ export function fixtureDirFor(agent: string): string {
 	return existsSync(custom) ? custom : fixtureDir;
 }
 
-function copyFixture(dest: string, agent: string): void {
+/** Populate a work dir for one task: a worktree of the task's own project for
+ * the main target, a copy of the frozen fixture for everything else. Exported
+ * for the tests that drive the worktree path against a real repository. */
+export function copyFixture(
+	dest: string,
+	agent: string,
+	task?: GoldenTask,
+): void {
+	// MAIN TARGET: a detached git worktree of the project the task was mined
+	// from, at a pinned HEAD. Not a copy -- see `main-target.ts` for why a copy
+	// of a real repository measures a different tree on every run.
+	if (isMainTarget(agent)) {
+		const project = task?.project ?? null;
+		if (project === null) {
+			throw new Error(
+				`main-target task "${task?.id ?? "?"}" has no "project": a task ` +
+					"mined from real work must name the repository it runs against.",
+			);
+		}
+		const fixture = provisionMainFixture(project, dest);
+		registerMainFixture(dest, fixture.release);
+		return;
+	}
 	const source = fixtureDirFor(agent);
 	cpSync(source, dest, {
 		recursive: true,
@@ -427,14 +483,44 @@ function ensureFixtureDeps(agent: string): void {
  */
 const liveWorkDirs = new Set<string>();
 
+/**
+ * Release callbacks for work dirs that are git WORKTREES rather than copies.
+ *
+ * `rmSync` alone is not enough for one: git keeps an administrative entry under
+ * the source repository's `.git/worktrees/`, so deleting the directory behind
+ * git's back leaves the user's real repository carrying a stale worktree it
+ * will report until someone prunes it. A benchmark must not leave litter in the
+ * repository it measured.
+ */
+const mainFixtureReleases = new Map<string, () => void>();
+
 /** Track a temp fixture copy so an interrupt can still remove it. */
 export function registerWorkDir(dir: string): void {
 	liveWorkDirs.add(dir);
 }
 
+/** Track a worktree-backed work dir and how to detach it. */
+function registerMainFixture(dir: string, release: () => void): void {
+	mainFixtureReleases.set(dir, release);
+}
+
+/** Detach a worktree-backed work dir, if this dir is one. Never throws. */
+function releaseMainFixture(dir: string): void {
+	const release = mainFixtureReleases.get(dir);
+	if (release === undefined) return;
+	mainFixtureReleases.delete(dir);
+	try {
+		release();
+	} catch {
+		// A failed detach must not fail the measurement; `git worktree prune`
+		// in the release path already covers the administrative entry.
+	}
+}
+
 /** Remove one tracked temp fixture copy (the normal `finally` path). */
 export function releaseWorkDir(dir: string): void {
 	liveWorkDirs.delete(dir);
+	releaseMainFixture(dir);
 	rmSync(dir, { recursive: true, force: true });
 }
 
@@ -446,6 +532,7 @@ export function cleanupWorkDirs(): number {
 	for (const dir of [...liveWorkDirs]) {
 		liveWorkDirs.delete(dir);
 		try {
+			releaseMainFixture(dir);
 			rmSync(dir, { recursive: true, force: true });
 			removed++;
 		} catch {
@@ -516,6 +603,10 @@ export function parseAgentDefinition(
 }
 
 export function loadAgentDefinition(agent: string): AgentDefinition {
+	// The main target has no definition file and never will -- it is the
+	// session, not an agent. Everything downstream needs a model, so the
+	// synthetic definition supplies one and an empty body.
+	if (isMainTarget(agent)) return mainDefinition();
 	const bundledPath = join(pluginRoot, "agents", `${agent}.md`);
 	const path = existsSync(bundledPath)
 		? bundledPath
@@ -558,20 +649,58 @@ export function installAgent(
 	agent: string,
 	definition: AgentDefinition,
 	rules: readonly RuleRow[],
+	allowlist?: readonly string[],
 ): void {
 	assertSafePathSegment(agent, "agent", "installAgent");
 	const claudeDir = join(workDir, ".claude");
-	const agentsDir = join(claudeDir, "agents");
-	mkdirSync(agentsDir, { recursive: true });
-	writeFileSync(join(agentsDir, `${agent}.md`), definition.content);
+	const main = isMainTarget(agent);
+	// THE MAIN TARGET INSTALLS NO AGENT. There is no definition to write and no
+	// `--agent` flag on the spawn: the child runs the same top-level
+	// configuration the recorded work ran under, which is the whole point of
+	// measuring `main` rather than a stand-in for it.
+	if (!main) {
+		const agentsDir = join(claudeDir, "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(join(agentsDir, `${agent}.md`), definition.content);
+	} else {
+		mkdirSync(claudeDir, { recursive: true });
+	}
+	// A derived allowlist REPLACES the bundled one rather than extending it: the
+	// bundled entries describe what the toy fixture's tasks need, and carrying
+	// them into someone else's repository would permit commands their recorded
+	// sessions never ran. The deny list is kept in both cases -- it is about the
+	// shared node_modules symlink, which exists either way.
+	const permissions =
+		allowlist === undefined
+			? BENCH_PERMISSIONS
+			: {
+					permissions: {
+						allow: [...allowlist],
+						deny: BENCH_PERMISSIONS.permissions.deny,
+					},
+				};
 	writeFileSync(
 		join(claudeDir, "settings.json"),
-		`${JSON.stringify(BENCH_PERMISSIONS, null, "\t")}\n`,
+		`${JSON.stringify(permissions, null, "\t")}\n`,
 	);
 	if (rules.length > 0) {
-		const memoryDir = join(claudeDir, "agent-memory", agent);
-		mkdirSync(memoryDir, { recursive: true });
-		writeFileSync(join(memoryDir, "MEMORY.md"), compileMemoryMd(rules));
+		if (main) {
+			// PROJECT MEMORY, NOT AGENT MEMORY. A top-level session has no
+			// `agent-memory/<name>/MEMORY.md` to read; the equivalent channel is
+			// the project's own CLAUDE.md, which is injected into exactly the
+			// context the rule is being charged rent for. In production the same
+			// bytes reach the session through the SessionStart hook instead --
+			// see `memory.ts#compileMainInjection`. The two mechanisms put the
+			// same text in the same place at the same point in the session; that
+			// equivalence is an assumption this project states rather than one it
+			// has measured, and it is the reason a main-target verdict is marked
+			// draft-derived in the receipt.
+			writeFileSync(join(workDir, "CLAUDE.md"), compileMemoryMd(rules));
+		} else {
+			const memoryDir = join(claudeDir, "agent-memory", agent);
+			mkdirSync(memoryDir, { recursive: true });
+			writeFileSync(join(memoryDir, "MEMORY.md"), compileMemoryMd(rules));
+		}
 	}
 }
 
@@ -780,12 +909,13 @@ export interface RunOnceDeps {
 	spawn: SpawnFn;
 	makeWorkDir: (task: GoldenTask) => string;
 	disposeWorkDir: (dir: string) => void;
-	copyFixture: (dest: string, agent: string) => void;
+	copyFixture: (dest: string, agent: string, task?: GoldenTask) => void;
 	installAgent: (
 		workDir: string,
 		agent: string,
 		definition: AgentDefinition,
 		rules: readonly RuleRow[],
+		allowlist?: readonly string[],
 	) => void;
 	findTranscript: (sessionId: string) => string | null;
 	/** Transcript recovery for a run whose session id never arrived (timeout). */
@@ -872,8 +1002,19 @@ export function runOnce(
 ): RunResult {
 	const workDir = deps.makeWorkDir(task);
 	try {
-		deps.copyFixture(workDir, task.agent);
-		deps.installAgent(workDir, task.agent, definition, rules);
+		const main = isMainTarget(task.agent);
+		deps.copyFixture(workDir, task.agent, task);
+		// The allowlist for a main-target run is derived from the commands its
+		// own recorded sessions ran and passed -- carried on the task as its
+		// success check, plus whatever the suite observed. Bundled agents keep
+		// the fixed bundled allowlist (`undefined` here).
+		deps.installAgent(
+			workDir,
+			task.agent,
+			definition,
+			rules,
+			main ? deriveAllowlist([task.successCheck]) : undefined,
+		);
 
 		const model = options.model ?? definition.model;
 		const claude = deps.spawn(
@@ -881,8 +1022,11 @@ export function runOnce(
 			[
 				"-p",
 				task.prompt,
-				"--agent",
-				task.agent,
+				// NO `--agent` FOR THE MAIN TARGET. Passing one would measure a
+				// subagent's context, which is precisely the thing this target
+				// exists not to be: the run has to inherit the same top-level
+				// configuration the recorded session ran under.
+				...(main ? [] : ["--agent", task.agent]),
 				"--model",
 				model,
 				"--permission-mode",

@@ -193,28 +193,32 @@ describe("sessionStart (temp db)", () => {
 		expect(spawner).not.toHaveBeenCalled();
 	});
 
-	it("nudges without spawning when auto-select is off", () => {
+	// Autopilot is the default, so the OFF switch is the case worth pinning:
+	// an installation that has opted out must still be told what is pending,
+	// and must spend nothing.
+	it("nudges without spawning when autopilot is switched off", () => {
 		seedCandidate();
 		const spawner = vi.fn();
-		const out = sessionStart(db, {}, NOW, spawner);
+		const out = sessionStart(
+			db,
+			{ TOKEN_WARDEN_AUTO_SELECT: "0" },
+			NOW,
+			spawner,
+		);
 		expect(out).toContain("pending measurement");
-		expect(out).not.toContain("auto-select");
+		expect(out).not.toContain("measuring");
 		expect(spawner).not.toHaveBeenCalled();
 	});
 
-	it("spawns the selector for the busiest agent when opted in and cold", () => {
+	it("measures the busiest agent by default, with nothing configured", () => {
 		seedCandidate("sql");
 		seedCandidate("sql");
 		seedCandidate("backend");
 		const spawner = vi.fn();
-		const out = sessionStart(
-			db,
-			{ TOKEN_WARDEN_AUTO_SELECT: "1" },
-			NOW,
-			spawner,
-		);
+		// No env at all: this is a fresh installation.
+		const out = sessionStart(db, {}, NOW, spawner);
 		expect(spawner).toHaveBeenCalledExactlyOnceWith("sql");
-		expect(out).toContain("auto-select started in the background for sql");
+		expect(out).toContain("measuring sql in the background");
 		// The hook payload is well-formed SessionStart JSON.
 		const parsed = JSON.parse(out ?? "") as {
 			hookSpecificOutput: { hookEventName: string; additionalContext: string };

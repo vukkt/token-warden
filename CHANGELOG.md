@@ -1,5 +1,75 @@
 # Changelog
 
+## v1.2.0 -- 2026-09-09
+
+**The plugin now measures the session you are already in.** Install it and the
+loop runs: no agents to adopt, no commands to run, no baseline to freeze.
+
+### `main` is a measured target
+
+Until now a rule could only be measured if the work ran through one of four
+bundled domain agents, and `collect.ts` said why in one line: rules for anything
+else "have no golden suite and could never be measured, so their candidates
+would queue forever". That was true of the world it was written in. `draft.ts`
+(v1.1.x) mines a runnable suite out of recorded sessions, so the premise is
+gone, and with it the reason main-thread work was recorded and then ignored.
+
+`main` is deliberately not an agent. It has no definition file, is never spawned
+with `--agent`, and its rules compile into project memory for the measured run
+rather than into `agent-memory/<name>/MEMORY.md`.
+
+- `src/main-target.ts` (new): synthetic definition, fixture provisioning, and a
+  DERIVED permission allowlist -- built from the commands the recorded sessions
+  actually ran and passed, never from a guess, and never including a command
+  whose effect leaves the worktree (push, publish, network, sudo, docker, ...).
+- `registry.ts` gains `measurableTargets()` and `mainTargetMeasurable()`.
+  `knownAgents()` is unchanged and still answers "what has a definition I can
+  install"; conflating the two put `main` into `--agent all` and into the
+  shipped-suite hygiene checks, where it has neither definition nor suite.
+- `GoldenTask` gains `project`, the absolute path of the repository a task was
+  mined from. Absolute only: the value becomes a `git -C` argument, and a
+  relative one would resolve against whatever directory the benchmark ran in.
+
+### The fixture is a git worktree of your own repository
+
+A task mined from real work says "fix the N+1 in the orders repository" and its
+check runs that project's own test command, so against the bundled toy fixture
+it can only fail. Main-target runs provision a detached worktree at a pinned
+HEAD instead.
+
+A worktree rather than a copy, for a measurement reason: a copy of a real
+repository is slow, unbounded, and picks up uncommitted work, so two runs of the
+same task would measure two different trees. A worktree at HEAD is byte-identical
+across runs of the same commit and cannot touch the working tree. Release runs
+`git worktree remove --force` and `prune` -- deleting the directory behind git's
+back would leave a stale worktree entry in the user's own repository, which is
+pinned as a regression test.
+
+**A project that is not a git repository is refused, not measured against a
+stand-in.** A number produced against the wrong tree is worse than no number.
+
+### Autopilot is the default; the flag is now the off switch
+
+`TOKEN_WARDEN_AUTO_SELECT=1` opted in to measurement; measurement is now on and
+`TOKEN_WARDEN_AUTO_SELECT=0` opts out. Opt-in meant the default installation
+recorded sessions, distilled candidates, and then sat on them forever -- all of
+the cost of running and none of the benefit.
+
+What bounds the spend is unchanged and was never the flag: one burn per 24h, a
+single-winner claim so concurrent sessions cannot double-spend, and the
+environment-failure abort that stops a burn cleanly when quota dies.
+
+### Also
+
+- Sonnet 5 was priced at Sonnet 4.6's rate ($3/$15 against the real $2/$10), so
+  every published dollar figure was 1.5x too high; all four of its rates moved
+  by the same 2/3, so the corrected figures are exactly 2/3 of the old ones and
+  the payback ratios are unchanged. Fable 5.1 added, with the cache-read rate
+  that breaks the 0.1x rule every other model follows ($0.25 against $10 input).
+- The four bundled agents are documented as what they have always been:
+  development fixtures the project's own published numbers rest on, not
+  something an installation adopts.
+
 ## v1.1.0 — 2026-08-22
 
 Four deletions and one bug fix. The plugin is now two theorems, six commands and

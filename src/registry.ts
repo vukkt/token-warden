@@ -12,7 +12,7 @@
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DOMAIN_AGENTS } from "./types.js";
+import { DOMAIN_AGENTS, MAIN_TARGET } from "./types.js";
 
 /** Custom-agent basenames must be a lowercase slug: leading letter, then 1-31
  * more of `[a-z0-9-]`. Anything else (uppercase, dots, over-long) is ignored so
@@ -98,12 +98,48 @@ export function knownAgents(): string[] {
 	return [...bundled, ...custom];
 }
 
+/**
+ * True when the main target has a golden suite — i.e. when drafts mined from
+ * the user's own sessions have been promoted into `<benchmarks>/main/`.
+ *
+ * This is the whole gate on measuring real work. `main` is not "known" the way
+ * an agent is known (it has no definition and never will); it becomes
+ * MEASURABLE the moment there is something to measure it against, and stops
+ * being measurable if that suite is removed. Checking the filesystem rather
+ * than caching a flag keeps those two facts from drifting apart.
+ */
+export function mainTargetMeasurable(): boolean {
+	const dir = join(userBenchmarksDir(), MAIN_TARGET);
+	try {
+		return readdirSync(dir).some((name) => /^golden-\d+\.md$/.test(name));
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Everything a verdict can be produced for: the definition-backed agents, plus
+ * the user's own session once it has a drafted suite.
+ *
+ * Separate from `knownAgents()` on purpose. `knownAgents()` answers "what has an
+ * agent definition I can install into a fixture" — the question `bench.ts` asks
+ * when it materializes a child. This answers "what can be measured", which is
+ * the question the CLI, the selector and the distiller ask. Conflating them put
+ * `main` into `--agent all` and into the shipped-suite hygiene checks, where it
+ * has no definition and no bundled suite to find.
+ */
+export function measurableTargets(): string[] {
+	const agents = knownAgents();
+	return mainTargetMeasurable() ? [MAIN_TARGET, ...agents] : agents;
+}
+
 /** Throw if `agent` is not a known agent, with the discovered list in the
- * message (mirrors the pre-BYOA `--agent must be one of: ...` error style). */
+ * message (mirrors the pre-BYOA `--agent must be one of: ...` error style).
+ * The main target passes once it has a suite — see `measurableTargets`. */
 export function assertKnownAgent(agent: string): void {
 	// One directory scan, not two (this used to re-list the agents dir just to
 	// build the error message).
-	const agents = knownAgents();
+	const agents = measurableTargets();
 	if (!agents.includes(agent)) {
 		throw new Error(
 			`--agent must be one of: ${agents.join(", ")} (got "${agent}")`,

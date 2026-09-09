@@ -29,7 +29,11 @@ import {
 	type WardenDb,
 } from "./db.js";
 import { appendLogLine } from "./logfile.js";
-import { isValidAgentName, knownAgents } from "./registry.js";
+import {
+	isValidAgentName,
+	knownAgents,
+	measurableTargets,
+} from "./registry.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -135,12 +139,18 @@ export function planAutoSelect(
 	nowMs: number,
 ): AutoSelectPlan {
 	if (!enabled) {
-		return { agent: null, reason: "TOKEN_WARDEN_AUTO_SELECT is not set" };
+		return {
+			agent: null,
+			reason: "TOKEN_WARDEN_AUTO_SELECT=0 (autopilot off)",
+		};
 	}
 	// Same one-scan-per-call rule as buildNudge; this filter is also the guard
 	// that keeps an arbitrary DB-derived string out of the spawned selector's
-	// argv (spawnAutoSelect passes `agent` as an argument).
-	const agents = knownAgents();
+	// argv (spawnAutoSelect passes `agent` as an argument). `measurableTargets`
+	// rather than `knownAgents` so the user's own session is eligible once it
+	// has a drafted suite -- on most installations it is the only target with
+	// candidates at all.
+	const agents = measurableTargets();
 	const counts = allCounts
 		.filter((c) => agents.includes(c.agent))
 		.sort((a, b) => b.pending - a.pending);
@@ -207,8 +217,23 @@ export function sessionStart(
 	const nudge = buildNudge(counts);
 	if (nudge !== null) parts.push(nudge);
 
+	// AUTOPILOT IS THE DEFAULT, and the env var is now the OFF switch.
+	//
+	// It shipped opt-in, with the reasoning that "selection spends real
+	// benchmark tokens and stays a user decision". The decision is still the
+	// user's -- it is made once, by installing a plugin whose entire purpose is
+	// to measure whether rules pay for themselves, and measuring is the only
+	// thing that spends. Opt-in meant the default installation recorded
+	// sessions, distilled candidates, and then sat on them forever: all of the
+	// cost of running and none of the benefit, which is the worst of the three
+	// possible defaults.
+	//
+	// What bounds the spend is unchanged and is not the flag: one burn per 24h
+	// (`AUTO_SELECT_COOLDOWN_MS`), a single-winner claim so concurrent sessions
+	// cannot double-spend, and the environment-failure abort that stops a burn
+	// cleanly when quota dies rather than banking garbage.
 	const plan = planAutoSelect(
-		env.TOKEN_WARDEN_AUTO_SELECT === "1",
+		env.TOKEN_WARDEN_AUTO_SELECT !== "0",
 		counts,
 		lastMeasurementTs(db),
 		nowMs,
@@ -219,7 +244,7 @@ export function sessionStart(
 	if (plan.agent !== null && claim(nowMs)) {
 		spawner(plan.agent);
 		parts.push(
-			`token-warden: auto-select started in the background for ${plan.agent} (${plan.reason}; opt-in via TOKEN_WARDEN_AUTO_SELECT=1).`,
+			`token-warden: measuring ${plan.agent} in the background (${plan.reason}). Set TOKEN_WARDEN_AUTO_SELECT=0 to stop this.`,
 		);
 	}
 

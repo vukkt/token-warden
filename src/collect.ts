@@ -20,7 +20,7 @@ import {
 } from "./db.js";
 import { shouldDistill } from "./distill.js";
 import { appendLogLine } from "./logfile.js";
-import { knownAgents } from "./registry.js";
+import { knownAgents, measurableTargets } from "./registry.js";
 import { displayText } from "./sanitize.js";
 import { median } from "./stats.js";
 import { aggregateToolCosts } from "./tool-cost.js";
@@ -325,12 +325,27 @@ export async function main(): Promise<void> {
 			parsed.outputTokens +
 			parsed.cacheCreation +
 			parsed.cacheRead;
-		// Only domain agents are distilled: rules for any other agent (incl.
-		// 'main') have no golden suite and could never be measured, so their
-		// candidates would queue forever.
+		// Distilled only for a target something can MEASURE a candidate on --
+		// which now includes `main`, the user's own session, once a suite has
+		// been drafted from its recorded work.
+		//
+		// The old rule here was "domain agents only", and its stated reason was
+		// that rules for anything else "have no golden suite and could never be
+		// measured, so their candidates would queue forever". That was true of
+		// the world it was written in: the only suites were the four frozen ones
+		// shipped with the plugin, so the main thread was recorded and then
+		// ignored, and the plugin only paid off for someone who reorganised
+		// their work around four benchmark agents. `draft.ts` mines a runnable
+		// suite out of the sessions already in the ledger, and
+		// `measurableTargets()` is the same predicate rewritten as the question
+		// it was always asking: is there something to measure this on?
+		//
+		// The queue-forever failure it guarded against is still guarded against,
+		// just at the honest boundary -- a target with no suite is not
+		// measurable, so nothing is distilled for it.
 		if (
 			process.env.TOKEN_WARDEN_NO_DISTILL !== "1" &&
-			knownAgents().includes(agent) &&
+			measurableTargets().includes(agent) &&
 			shouldDistill(db, agent, runId, total)
 		) {
 			const child = spawn(

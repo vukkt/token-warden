@@ -1,7 +1,7 @@
 {
 	"name": "token-warden",
 	"displayName": "Token Warden",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"description": "Agent memory, charged rent. A Stop hook records what each session costs; expensive runs are distilled into candidate efficiency rules; each candidate is benchmarked on a frozen golden suite and kept only if it saves at least twice its context rent. Six commands. Two theorems survived measurement and three were deleted after it.",
 	"author": {
 		"name": "Vuk Topalovic",

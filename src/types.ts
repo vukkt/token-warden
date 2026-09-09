@@ -1,7 +1,29 @@
-/** Domain agents that ship with the plugin and have golden suites.
- * ('main' — the top-level session — is tracked in `runs` but never has
- * rules: there is no suite to measure them on.) */
+/** Domain agents that ship with the plugin and have frozen golden suites.
+ *
+ * These are DEVELOPMENT FIXTURES, not the product. They exist so this
+ * repository can measure its own instrument against suites that never change,
+ * and every published number rests on them. Installing the plugin does not ask
+ * anyone to route work through them.
+ *
+ * The target that matters after installation is `MAIN_TARGET` below. */
 export const DOMAIN_AGENTS = ["frontend", "backend", "sql", "testing"] as const;
+
+/**
+ * The user's own Claude Code session — the default measured target.
+ *
+ * WHAT CHANGED, and why the old comment here was a design constraint rather
+ * than a fact. It read: "'main' is tracked in `runs` but never has rules: there
+ * is no suite to measure them on." True when the only suites were the four
+ * frozen ones shipped above. `draft.ts` mines a runnable suite out of recorded
+ * sessions, so the premise is gone, and with it the reason main-thread work was
+ * recorded and then ignored.
+ *
+ * `main` is deliberately NOT in `DOMAIN_AGENTS`: it has no agent definition
+ * file, is never spawned with `--agent`, and its rules compile into the
+ * SessionStart context injection rather than an agent-memory file. It is the
+ * session you are already in, not an agent you have to adopt.
+ */
+export const MAIN_TARGET = "main";
 
 /**
  * One tool invocation's raw footprint, extracted from the transcript with no
