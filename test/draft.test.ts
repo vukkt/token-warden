@@ -14,6 +14,7 @@
  *
  * Zero tokens: no model is involved.
  */
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -769,6 +770,133 @@ describe("main (end to end)", () => {
 		}
 		return lines.join("\n");
 	}
+
+	/**
+	 * `--auto` is the hands-off path the SessionStart hook runs: probe every
+	 * derived check against a real worktree, promote what survives into the
+	 * suite, and hold back the rest as drafts. It is the step that lets an
+	 * installation measure real work without anyone typing anything, so what it
+	 * REFUSES to promote matters more than what it promotes.
+	 */
+	describe("--auto", () => {
+		/** Turn the recorded project into a real repository whose test command
+		 * fails on a clean tree, so the derived check is not a dead sensor. */
+		function makeProjectRepo(failing: boolean): string {
+			const repo = mkdtempSync(join(tmpdir(), "warden-auto-repo-"));
+			const git = (args: string[]): void => {
+				execFileSync("git", args, { cwd: repo, stdio: "pipe" });
+			};
+			git(["init", "--quiet"]);
+			git(["config", "user.email", "t@example.com"]);
+			git(["config", "user.name", "t"]);
+			writeFileSync(
+				join(repo, "package.json"),
+				JSON.stringify({
+					name: "p",
+					scripts: { test: failing ? "exit 1" : "exit 0" },
+				}),
+			);
+			git(["add", "."]);
+			git(["commit", "--quiet", "-m", "init"]);
+			return repo;
+		}
+
+		/** Point the recorded sessions at a real repository. */
+		function repointLedger(project: string): void {
+			const db2 = openDb(process.env.TOKEN_WARDEN_DB as string);
+			db2.prepare("UPDATE runs SET project = ?").run(project);
+			db2.close();
+		}
+
+		it("promotes a probed, project-bound task into the suite", () => {
+			const repo = makeProjectRepo(true);
+			try {
+				repointLedger(repo);
+				run([
+					"--agent",
+					"payments",
+					"--projects",
+					join(root, "projects"),
+					"--auto",
+				]);
+				const promoted = join(benchmarksDir, "payments", "golden-01.md");
+				expect(existsSync(promoted)).toBe(true);
+				const content = readFileSync(promoted, "utf8");
+				// The project binding is what makes the task runnable later.
+				expect(content).toContain(`project: "${repo}"`);
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		});
+
+		it("holds back a task whose check passes on the clean tree", () => {
+			// A check that already passes is a dead sensor: it would pass with and
+			// without a rule, turning every verdict it touches into noise.
+			const repo = makeProjectRepo(false);
+			try {
+				repointLedger(repo);
+				run([
+					"--agent",
+					"payments",
+					"--projects",
+					join(root, "projects"),
+					"--auto",
+				]);
+				expect(
+					existsSync(join(benchmarksDir, "payments", "golden-01.md")),
+				).toBe(false);
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		});
+
+		it("promotes nothing when the project is not a git repository", () => {
+			// Nothing can be probed, so nothing can be vouched for -- but the
+			// drafts are still written for a human to read.
+			const plain = mkdtempSync(join(tmpdir(), "warden-auto-plain-"));
+			try {
+				repointLedger(plain);
+				run([
+					"--agent",
+					"payments",
+					"--projects",
+					join(root, "projects"),
+					"--auto",
+				]);
+				expect(
+					existsSync(join(benchmarksDir, "payments", "golden-01.md")),
+				).toBe(false);
+				expect(
+					existsSync(join(benchmarksDir, "payments", "drafts", "golden-01.md")),
+				).toBe(true);
+			} finally {
+				rmSync(plain, { recursive: true, force: true });
+			}
+		});
+
+		it("leaves no worktree behind in the probed repository", () => {
+			const repo = makeProjectRepo(true);
+			try {
+				repointLedger(repo);
+				run([
+					"--agent",
+					"payments",
+					"--projects",
+					join(root, "projects"),
+					"--auto",
+				]);
+				const listed = execFileSync("git", ["worktree", "list"], {
+					cwd: repo,
+					encoding: "utf8",
+				});
+				// One line: the repository itself. A leaked probe worktree would
+				// litter the user's own repository on every drafting attempt.
+				expect(listed.trim().split("\n")).toHaveLength(1);
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		});
+	});
 
 	it("writes nothing without --write", () => {
 		const out = run([

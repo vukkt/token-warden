@@ -9,11 +9,18 @@
 **that it saves more than it costs to carry.**
 
 ```text
-  version    1.2.0             tests       ~1,150 across 42 files
+  version    1.2.0             tests       ~1,180 across 42 files
   license    MIT               coverage    96% lines, CI-enforced floor
   source     26 modules        commands    7
-              11.3k lines      built       2026-06 to 2026-09
+              11.5k lines      built       2026-06 to 2026-09
 ```
+
+```text
+/plugin marketplace add vukkt/token-warden
+/plugin install token-warden@vukkt-plugins
+```
+
+That is the whole setup. Nothing to configure, no agent to adopt, no command to run.
 
 ---
 
@@ -38,15 +45,42 @@ silently.
                   silently dropped         two strikes and out
 ```
 
-**Install it and that loop runs on your own sessions.** No agents to adopt, no commands to
-run: a hook records what each session costs, a suite is drafted from the sessions you have
-already had, candidates are measured against a worktree of your own repository at HEAD, and
-a rule that pays reaches your next session through the same hook. `TOKEN_WARDEN_AUTO_SELECT=0`
-switches the measuring off.
+**That loop runs on your own sessions, unattended.** What each step does without being
+asked:
 
-The seven commands are for looking, not for driving.
+| | when | what happens |
+|---|---|---|
+| **record** | every session | a Stop hook writes what it cost |
+| **draft** | after ~5 recorded sessions | recurring tasks are mined into a golden suite; each derived check is run against a clean worktree first, and one that already passes is thrown away as a dead sensor |
+| **distill** | when a session runs expensive | one model call reads the transcript for a rule |
+| **measure** | within a day of a candidate | the suite runs with the rule and without it, in a worktree of your repo at HEAD |
+| **keep** | only if it clears twice its rent | the rule is injected into your next session by the same hook |
+| **re-audit** | later | two sub-threshold strikes and it is gone |
 
+The seven commands are for looking, not for driving:
 `/warden-status` · `/warden-power` · `/warden-bench` · `/warden-select` · `/warden-receipt` · `/warden-cost` · `/warden-draft`
+
+<details>
+<summary>What it does to your machine, exactly</summary>
+
+- **Writes** one SQLite ledger at `~/.token-warden/`, drafted suites under
+  `~/.token-warden/benchmarks/main/`, and nothing else. It never edits your `CLAUDE.md`
+  or any file in your repository — surviving rules are injected at session start and
+  vanish when the plugin is removed.
+- **Benchmarks in a detached git worktree** of your project at a pinned commit. Your
+  working tree is never touched, uncommitted work is never read, and the worktree is
+  detached through git afterwards rather than deleted behind its back.
+- **Runs `claude` with `acceptEdits`**, never `bypassPermissions`, under a Bash allowlist
+  **derived from commands your own sessions already ran successfully**. Anything whose
+  effect leaves the worktree — push, publish, network, sudo, docker — is refused whatever
+  the transcript shows.
+- **Spends tokens** only when measuring a candidate: at most one burn per 24h, one session
+  wins the claim, and a burn aborts cleanly rather than banking garbage when quota dies.
+  `TOKEN_WARDEN_AUTO_SELECT=0` turns measuring off and leaves recording on.
+- **Refuses** rather than guesses: a project that is not a git repository is not measured
+  at all, because a number produced against the wrong tree is worse than no number.
+
+</details>
 
 ---
 
@@ -82,7 +116,10 @@ rule effect on record, the adjustment subtracts **105.4%** of the saving away.
 
 ## What it actually saves
 
-Read from the live ledger, priced at the agent's real token mix. Not a projection.
+Read from the live ledger, priced at the agent's real token mix. Not a projection —
+but measured on the bundled `sql` fixture, which is the only workload that has run
+enough here to say anything. What the same loop finds on real work is the open question
+below, and v1.2.0 is the first version that can ask it.
 
 ```text
   two surviving rules      6,353 tokens/session gross
@@ -122,7 +159,7 @@ instead of quietly accumulating.
 
 | | |
 |---|---|
-| **Tests** | 1,153 across 42 files — 18.4k lines of test against 11.3k of source |
+| **Tests** | 1,175 across 42 files — 18.7k lines of test against 11.5k of source |
 | **Coverage** | 96% lines, 90% branches, behind a floor CI fails on |
 | **Types** | Strict TypeScript. Zero `any`, zero `@ts-ignore`, zero non-null assertions |
 | **Data** | SQLite, 17 versioned migrations under `BEGIN IMMEDIATE` |
@@ -148,8 +185,10 @@ see the one that does.
 ## Limits
 
 - **No rule distilled from real production work has yet survived the gate.** Survivors so
-  far come from benchmark runs. Whether real workloads hold catchable waste is the open
-  question, and it is open.
+  far come from benchmark runs against the bundled fixtures. Until v1.2.0 that was
+  partly circular — main-thread work was recorded and then ignored, because nothing
+  could measure it — and the machinery to ask the question honestly now exists. The
+  answer does not.
 - **The noise floor is the binding constraint, and it cannot be borrowed away.** One
   integer — the agent's turn count — explains ~94% of within-task spread. Conditioning on
   it (CUPED/ANCOVA) halves the minimum detectable saving under the additive effect every
@@ -180,7 +219,7 @@ see the one that does.
 
 ---
 
-## Try it
+## Install
 
 Node.js 22+, Claude Code v2.1+, and a git repository to work in.
 
@@ -189,22 +228,8 @@ Node.js 22+, Claude Code v2.1+, and a git repository to work in.
 /plugin install token-warden@vukkt-plugins
 ```
 
-That is the whole setup. From the next session on:
-
-| | |
-|---|---|
-| **immediately** | every session's cost is recorded |
-| **once a session runs expensive** | its transcript is distilled into a candidate rule |
-| **once your recorded work holds a repeatable task** | a golden suite is drafted from it |
-| **within a day of a candidate appearing** | it is measured, with vs. without, and kept only if it pays |
-
-Nothing asks you to route work through an agent. The measured target is `main` — the
-session you are already in — and its benchmark runs in a **detached git worktree of your
-repository at HEAD**, so it sees committed code only and can never touch your working tree.
-A project that is not a git repository is refused rather than measured against a stand-in.
-
-`/warden-status` shows what has been recorded and what is pending.
-`TOKEN_WARDEN_AUTO_SELECT=0` turns off the measuring and leaves the recording.
+Then keep working. `/warden-status` shows what has been recorded and what is pending;
+nothing else is required of you at any point.
 
 <details>
 <summary>Working on token-warden itself</summary>

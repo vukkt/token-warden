@@ -133,6 +133,25 @@ export function measurableTargets(): string[] {
 	return mainTargetMeasurable() ? [MAIN_TARGET, ...agents] : agents;
 }
 
+/**
+ * Throw unless `agent` is a target a SUITE COULD BE DRAFTED FOR.
+ *
+ * Deliberately looser than `assertKnownAgent`: the main target is measurable
+ * only once it has a suite, and drafting is what produces that suite, so
+ * validating the drafter's `--agent` against measurability is a cycle nothing
+ * can enter. The drafter refused `main` with "must be one of: frontend,
+ * backend, sql, testing" on a fresh installation -- the hook would have spawned
+ * it every six hours forever, to be turned away every time.
+ */
+export function assertDraftTarget(agent: string): void {
+	const targets = [MAIN_TARGET, ...knownAgents()];
+	if (!targets.includes(agent)) {
+		throw new Error(
+			`--agent must be one of: ${targets.join(", ")} (got "${agent}")`,
+		);
+	}
+}
+
 /** Throw if `agent` is not a known agent, with the discovered list in the
  * message (mirrors the pre-BYOA `--agent must be one of: ...` error style).
  * The main target passes once it has a suite — see `measurableTargets`. */

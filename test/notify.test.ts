@@ -18,11 +18,14 @@ import {
 	type WardenDb,
 } from "../src/db.js";
 import {
+	autoDraftMarkerPath,
 	autoSelectMarkerPath,
+	claimAutoDraft,
 	claimAutoSelect,
 	installFailOpenHandlers,
 	planAutoSelect,
 	sessionStart,
+	spawnAutoDraft,
 	spawnAutoSelect,
 } from "../src/notify.js";
 
@@ -85,6 +88,47 @@ describe("planAutoSelect", () => {
 		expect(
 			planAutoSelect(true, counts({ sql: 2 }), "not-a-date", NOW).agent,
 		).toBe("sql");
+	});
+});
+
+describe("spawnAutoDraft", () => {
+	beforeEach(() => {
+		spawnMock.mockClear();
+	});
+
+	it("spawns the drafter detached, in the promoting mode", () => {
+		// `--auto` is the whole point: it probes derived checks against a real
+		// worktree and promotes what survives, which plain `--write` does not.
+		spawnAutoDraft("main");
+		expect(spawnMock).toHaveBeenCalledTimes(1);
+		const [cmd, argv] = spawnMock.mock.calls[0] as unknown as [
+			string,
+			string[],
+		];
+		expect(cmd).toBe("npx");
+		expect(argv).toContain("--auto");
+		expect(argv.slice(-3, -1)).toEqual(["--agent", "main"]);
+	});
+
+	it("refuses a name that could be read as a flag or a path", () => {
+		for (const agent of ["../../evil", "-rf", "main; rm -rf /", ""]) {
+			spawnAutoDraft(agent);
+		}
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("claimAutoDraft", () => {
+	it("wins once, then refuses inside its window", () => {
+		// Drafting spends no model tokens, so this is a RETRY guard, not a spend
+		// guard: without it a ledger with nothing draftable in it would spawn a
+		// drafter on every session start forever.
+		expect(claimAutoDraft(NOW)).toBe(true);
+		expect(claimAutoDraft(NOW)).toBe(false);
+	});
+
+	it("uses a marker of its own, so drafting and selecting cannot block each other", () => {
+		expect(autoDraftMarkerPath()).not.toBe(autoSelectMarkerPath());
 	});
 });
 

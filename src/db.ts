@@ -1247,6 +1247,31 @@ export function latestReceipts(db: WardenDb, agent: string): ReceiptRow[] {
 }
 
 /** Pending candidate counts per agent — the SessionStart nudge. */
+/**
+ * How many distinct real-work sessions an agent has recorded.
+ *
+ * The trigger for auto-drafting, and it deliberately counts SESSIONS rather
+ * than candidate rules. Candidates for a target appear only once that target is
+ * measurable, and a target becomes measurable only once it has a suite, so
+ * gating drafting on candidates would be a cycle nothing could enter: no suite,
+ * no candidates, no drafting, no suite.
+ *
+ * Same real-work predicate as `recentRealWorkTotals` (`task_hash IS NULL`), so
+ * golden runs never look like the user's own work, and index-served on the v16
+ * partial index.
+ */
+export function realWorkSessionCount(db: WardenDb, agent: string): number {
+	// `runs.session_id` is UNIQUE, so rows and sessions are the same thing here
+	// -- COUNT(DISTINCT ...) would imply a duplicate the schema forbids.
+	const row = db
+		.prepare<[string], { n: number }>(
+			`SELECT COUNT(*) AS n FROM runs
+			 WHERE agent = ? AND task_hash IS NULL AND completed = 1`,
+		)
+		.get(agent);
+	return row?.n ?? 0;
+}
+
 export function candidateCounts(
 	db: WardenDb,
 ): { agent: string; pending: number }[] {

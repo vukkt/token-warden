@@ -26,6 +26,7 @@ import {
 	defaultDbPath,
 	lastMeasurementTs,
 	openDb,
+	realWorkSessionCount,
 	type WardenDb,
 } from "./db.js";
 import { appendLogLine } from "./logfile.js";
@@ -33,13 +34,25 @@ import { compileMainInjection } from "./memory.js";
 import {
 	isValidAgentName,
 	knownAgents,
+	mainTargetMeasurable,
 	measurableTargets,
 } from "./registry.js";
+import { MAIN_TARGET } from "./types.js";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Minimum gap between auto-spawned selector runs. */
 const AUTO_SELECT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/** Minimum gap between drafting attempts. Shorter than the selector's window
+ * because drafting spends no model tokens; long enough that a ledger with
+ * nothing draftable in it is not re-mined every session. */
+const AUTO_DRAFT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
+/** Recorded sessions before the drafter is worth spawning at all. Below this
+ * the planner's own repeatability gate would refuse everything anyway; this
+ * just avoids paying for the process to find that out. */
+const MIN_SESSIONS_TO_DRAFT = 5;
 
 /** Diagnostics for a hook that is otherwise silent by design. Best-effort:
  * a failure to log must never become a failure to start a session. */
@@ -74,7 +87,28 @@ export function autoSelectMarkerPath(): string {
  * IS the desired semantics and a stale-PID takeover would defeat it.
  */
 export function claimAutoSelect(nowMs: number = Date.now()): boolean {
-	const path = autoSelectMarkerPath();
+	return claimMarker(autoSelectMarkerPath(), AUTO_SELECT_COOLDOWN_MS, nowMs);
+}
+
+/** Marker recording that an auto-DRAFT was attempted, next to the DB. */
+export function autoDraftMarkerPath(): string {
+	return join(dirname(defaultDbPath()), "auto-draft.attempt");
+}
+
+/**
+ * Claim the right to spawn one drafting attempt.
+ *
+ * Drafting spends no model tokens, so this is not a spend guard -- it is a
+ * retry guard. A ledger with recorded work but nothing repeatable enough to
+ * draft would otherwise spawn a drafter on every single session start, forever,
+ * for a result that cannot change until more work is recorded.
+ */
+export function claimAutoDraft(nowMs: number = Date.now()): boolean {
+	return claimMarker(autoDraftMarkerPath(), AUTO_DRAFT_COOLDOWN_MS, nowMs);
+}
+
+/** Win-once-per-window file lock shared by both claims. */
+function claimMarker(path: string, windowMs: number, nowMs: number): boolean {
 	try {
 		mkdirSync(dirname(path), { recursive: true });
 	} catch {
@@ -98,7 +132,7 @@ export function claimAutoSelect(nowMs: number = Date.now()): boolean {
 			} catch {
 				return false;
 			}
-			if (ageMs < AUTO_SELECT_COOLDOWN_MS) return false;
+			if (ageMs < windowMs) return false;
 			try {
 				rmSync(path, { force: true });
 			} catch {
@@ -174,6 +208,30 @@ export function planAutoSelect(
 
 /** Detached fire-and-forget selector spawn — the distill-spawn pattern:
  * SessionStart must return immediately, the benchmark runs on its own. */
+/**
+ * Spawn the drafter, detached, for a target that has no suite yet.
+ *
+ * The FIRST half of making an installation self-starting. `spawnAutoSelect`
+ * measures pending candidates; this produces the thing they can be measured
+ * ON, by mining the sessions already in the ledger. Zero model tokens -- it
+ * clusters recorded transcripts and runs shell checks in a throwaway worktree
+ * -- so unlike selection it needs no cooldown for cost reasons; the
+ * `mainTargetMeasurable()` check upstream is what stops it repeating, because
+ * a successful draft makes the target measurable and the condition false.
+ */
+export function spawnAutoDraft(agent: string): void {
+	if (!isValidAgentName(agent)) return;
+	const child = spawn(
+		"npx",
+		["tsx", join(pluginRoot, "src", "draft.ts"), "--agent", agent, "--auto"],
+		{ cwd: pluginRoot, detached: true, stdio: "ignore" },
+	);
+	child.on("error", (err: Error) => {
+		logLine(`auto-draft spawn failed for ${agent}: ${err.message}`);
+	});
+	child.unref();
+}
+
 export function spawnAutoSelect(agent: string): void {
 	// Defence in depth: callers already filter through knownAgents(), but this
 	// value ends up in an argv, so a name that could be read as a flag or a
@@ -212,6 +270,8 @@ export function sessionStart(
 	nowMs: number = Date.now(),
 	spawner: (agent: string) => void = spawnAutoSelect,
 	claim: (nowMs: number) => boolean = claimAutoSelect,
+	draftSpawner: (agent: string) => void = spawnAutoDraft,
+	claimDraft: (nowMs: number) => boolean = claimAutoDraft,
 ): string | null {
 	const counts = candidateCounts(db);
 	const parts: string[] = [];
@@ -224,6 +284,19 @@ export function sessionStart(
 	if (rules !== null) parts.push(rules);
 	const nudge = buildNudge(counts);
 	if (nudge !== null) parts.push(nudge);
+
+	// NOTHING TO MEASURE ON YET: draft a suite from the work already recorded.
+	// This is what makes a fresh installation self-starting -- without it the
+	// main target can never become measurable, because a suite only ever
+	// appeared when someone ran a command. Costs no model tokens.
+	if (
+		env.TOKEN_WARDEN_AUTO_SELECT !== "0" &&
+		!mainTargetMeasurable() &&
+		realWorkSessionCount(db, MAIN_TARGET) >= MIN_SESSIONS_TO_DRAFT &&
+		claimDraft(nowMs)
+	) {
+		draftSpawner(MAIN_TARGET);
+	}
 
 	// AUTOPILOT IS THE DEFAULT, and the env var is now the OFF switch.
 	//

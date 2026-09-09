@@ -48,6 +48,32 @@ pinned as a regression test.
 **A project that is not a git repository is refused, not measured against a
 stand-in.** A number produced against the wrong tree is worse than no number.
 
+### Drafting and promotion are automatic
+
+The last manual step is gone. The SessionStart hook spawns the drafter when the
+main target has recorded work but no suite (`--auto`), and a draft is PROMOTED
+into the suite only when autopilot could verify it by itself: the repeatability
+gate passed, the derived check was probed against a pristine worktree and FAILED
+there, and the task names the repository it runs in. Everything else stays in
+`drafts/` for a human to judge -- an unprobed check may be a dead sensor, and a
+dead sensor passes with and without a rule, which turns every verdict it touches
+into noise.
+
+Drafting spends no model tokens, so its 6h window is a retry guard rather than a
+spend guard: without it, a ledger with nothing draftable in it would spawn a
+drafter on every session start forever.
+
+Two cycles had to be broken to make this work, and both were live bugs:
+
+- the drafting trigger counted CANDIDATES, which only appear for a measurable
+  target, which requires a suite, which is what drafting produces. It now counts
+  recorded sessions (`realWorkSessionCount`).
+- `draft.ts` validated `--agent` against `measurableTargets()`, so on a fresh
+  installation it refused `main` with "must be one of: frontend, backend, sql,
+  testing" -- the hook would have spawned it every six hours forever, to be
+  turned away every time. `assertDraftTarget` is the looser boundary that
+  drafting actually needs.
+
 ### Surviving rules reach the session through the hook
 
 The main target has no `agent-memory/<name>/MEMORY.md` to be written into, and

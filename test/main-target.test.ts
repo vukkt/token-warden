@@ -24,7 +24,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { copyFixture, installAgent } from "../src/bench.js";
-import { getActiveRules, openDb } from "../src/db.js";
+import { getActiveRules, openDb, realWorkSessionCount } from "../src/db.js";
+import { type DraftedTask, modalProject, promotable } from "../src/draft.js";
 import {
 	deriveAllowlist,
 	isMainTarget,
@@ -32,7 +33,11 @@ import {
 	provisionMainFixture,
 } from "../src/main-target.js";
 import { compileMainInjection, compileMemoryMd } from "../src/memory.js";
-import { mainTargetMeasurable, measurableTargets } from "../src/registry.js";
+import {
+	assertDraftTarget,
+	mainTargetMeasurable,
+	measurableTargets,
+} from "../src/registry.js";
 
 describe("isMainTarget", () => {
 	it("is true only for the main target", () => {
@@ -509,5 +514,169 @@ describe("compileMainInjection", () => {
 		addRule("main", "Grep before reading.", "active");
 		const rules = getActiveRules(db, "main");
 		expect(compileMainInjection(db)).toBe(compileMemoryMd(rules));
+	});
+});
+
+/**
+ * AUTOPILOT DRAFTING -- the step that makes a fresh installation self-starting.
+ * Promotion is where a bad task would cost tokens forever after, so the bar is
+ * narrower than the bar for drafting, and these pin the difference.
+ */
+describe("promotable", () => {
+	const task = (over: Partial<DraftedTask>): DraftedTask =>
+		({
+			id: "main-01",
+			fileName: "golden-01.md",
+			prompt: "p",
+			successCheck: "npm test",
+			repeatability: {
+				n: 6,
+				meanTokens: 1_000,
+				spread: 0.1,
+				toolCallSpread: null,
+				medianSeconds: null,
+			},
+			failsPristine: true,
+			content: '---\nid: "main-01"\nproject: "/repo"\n---\n',
+			...over,
+		}) as DraftedTask;
+
+	it("promotes a probed, project-bound draft", () => {
+		expect(promotable([task({})])).toHaveLength(1);
+	});
+
+	it("refuses a check that passes on the pristine tree", () => {
+		// A dead sensor passes with and without a rule, which turns every verdict
+		// it touches into noise.
+		expect(promotable([task({ failsPristine: false })])).toEqual([]);
+	});
+
+	it("refuses an UNPROBED check, though a human may still judge it", () => {
+		// null is good enough to sit in drafts/, not good enough to promote:
+		// autopilot promotes only what it could verify by itself.
+		expect(promotable([task({ failsPristine: null })])).toEqual([]);
+	});
+
+	it("refuses a draft that names no project", () => {
+		expect(
+			promotable([task({ content: '---\nid: "main-01"\n---\n' })]),
+		).toEqual([]);
+	});
+});
+
+describe("modalProject", () => {
+	const session = (project: string | null) =>
+		({
+			sessionId: `s-${Math.random()}`,
+			project,
+			total: 1,
+			toolCalls: 1,
+			fileRereads: 0,
+			durationMs: null,
+			completed: 1,
+		}) as Parameters<typeof modalProject>[0][number];
+
+	it("picks the repository the work mostly happened in", () => {
+		expect(
+			modalProject([
+				session("/a"),
+				session("/b"),
+				session("/b"),
+				session("/b"),
+			]),
+		).toBe("/b");
+	});
+
+	it("ignores rows with no project, and returns null when none have one", () => {
+		expect(modalProject([session(null), session("/a")])).toBe("/a");
+		expect(modalProject([session(null)])).toBeNull();
+		expect(modalProject([])).toBeNull();
+	});
+
+	it("breaks ties deterministically rather than on insertion order", () => {
+		const forward = modalProject([session("/b"), session("/a")]);
+		const backward = modalProject([session("/a"), session("/b")]);
+		expect(forward).toBe(backward);
+	});
+});
+
+describe("realWorkSessionCount", () => {
+	let dir: string;
+	let db: ReturnType<typeof openDb>;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "warden-count-"));
+		db = openDb(join(dir, "w.db"));
+	});
+
+	afterEach(() => {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	function addRun(
+		agent: string,
+		sessionId: string,
+		taskHash: string | null,
+		completed: number,
+	): void {
+		db.prepare(
+			`INSERT INTO runs (agent, session_id, task_hash, input_tokens,
+			 output_tokens, cache_creation, cache_read, tool_calls, file_rereads,
+			 completed, ruleset_version, ts)
+			 VALUES (?, ?, ?, 10, 10, 0, 0, 1, 0, ?, 0, '2026-09-09T00:00:00.000Z')`,
+		).run(agent, sessionId, taskHash, completed);
+	}
+
+	it("counts recorded real-work sessions", () => {
+		addRun("main", "s1", null, 1);
+		addRun("main", "s2", null, 1);
+		expect(realWorkSessionCount(db, "main")).toBe(2);
+	});
+
+	it("cannot double-count a session: session_id is UNIQUE", () => {
+		addRun("main", "s1", null, 1);
+		expect(() => {
+			addRun("main", "s1", null, 1);
+		}).toThrow(/UNIQUE/);
+	});
+
+	it("excludes golden runs and incomplete sessions", () => {
+		// A golden run is the benchmark measuring itself, not the user's work;
+		// counting it would let a burn bootstrap its own drafting trigger.
+		addRun("main", "g1", "main-01", 1);
+		addRun("main", "s3", null, 0);
+		expect(realWorkSessionCount(db, "main")).toBe(0);
+	});
+
+	it("is per agent", () => {
+		addRun("sql", "s4", null, 1);
+		expect(realWorkSessionCount(db, "main")).toBe(0);
+		expect(realWorkSessionCount(db, "sql")).toBe(1);
+	});
+});
+
+describe("assertDraftTarget", () => {
+	// The cycle this exists to break: main is measurable only once it has a
+	// suite, and drafting is what makes the suite. Validating the drafter
+	// against measurability turned the hook into a no-op that would have
+	// re-spawned every six hours forever.
+	it("accepts the main target before it has any suite", () => {
+		expect(mainTargetMeasurable()).toBe(false);
+		expect(() => {
+			assertDraftTarget("main");
+		}).not.toThrow();
+	});
+
+	it("accepts a definition-backed agent", () => {
+		expect(() => {
+			assertDraftTarget("sql");
+		}).not.toThrow();
+	});
+
+	it("still refuses an unknown target", () => {
+		expect(() => {
+			assertDraftTarget("not-a-target");
+		}).toThrow(/must be one of/);
 	});
 });

@@ -62,8 +62,9 @@ import {
 import { numericFlag, runCli } from "./cli.js";
 import { type RealWorkSession, realWorkSessions, withDb } from "./db.js";
 import { formatRounded } from "./format.js";
+import { type MainFixture, provisionMainFixture } from "./main-target.js";
 import {
-	assertKnownAgent,
+	assertDraftTarget,
 	userBenchmarksDir,
 	userFixturesDir,
 } from "./registry.js";
@@ -594,6 +595,10 @@ export function renderDraft(
 		repeatability: Repeatability;
 		failsPristine: boolean | null;
 		sessionIds: readonly string[];
+		/** Repository the sessions ran in. Stamped into the task because a
+		 * main-target benchmark runs in a worktree of it; a task without one
+		 * cannot be benchmarked at all. */
+		project?: string | null;
 	},
 ): DraftedTask {
 	const id = `${agent}-${String(index).padStart(2, "0")}`;
@@ -615,6 +620,7 @@ export function renderDraft(
 		`agent: "${agent}"`,
 		`prompt: "${prompt}"`,
 		`success_check: "${check}"`,
+		...(draft.project ? [`project: "${draft.project}"`] : []),
 		"---",
 		"",
 		`Drafted from ${rep.n} recorded sessions of a recurring task. Mean cost`,
@@ -720,6 +726,10 @@ export interface DraftPlan {
 export interface PlanOptions extends RepeatabilityGate {
 	/** Pristine tree to probe derived checks against; null to skip probing. */
 	fixtureDir: string | null;
+	/** Absolute path of the repository these sessions ran in, stamped into each
+	 * drafted task. Main-target tasks are benchmarked in a worktree of it, so a
+	 * task without one cannot be run at all. */
+	project?: string | null;
 	spawn?: typeof spawnSync;
 }
 
@@ -807,6 +817,7 @@ export function planDrafts(
 				repeatability,
 				failsPristine,
 				sessionIds: cluster.sessionIds,
+				project: options.project ?? null,
 			}),
 		);
 	}
@@ -892,6 +903,9 @@ export interface DraftArgs {
 	maxSpread: number;
 	fixtureDir: string | null;
 	write: boolean;
+	/** Draft, probe against a real worktree, and promote what survives -- the
+	 * hands-off path the SessionStart hook runs. */
+	auto: boolean;
 	json: boolean;
 }
 
@@ -904,6 +918,7 @@ export function parseDraftArgs(argv: string[]): DraftArgs {
 	let fixture: string | null = null;
 	let noFixture = false;
 	let write = false;
+	let auto = false;
 	let json = false;
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
@@ -936,6 +951,9 @@ export function parseDraftArgs(argv: string[]): DraftArgs {
 			case "--no-fixture":
 				noFixture = true;
 				break;
+			case "--auto":
+				auto = true;
+				break;
 			case "--write":
 				write = true;
 				break;
@@ -946,7 +964,7 @@ export function parseDraftArgs(argv: string[]): DraftArgs {
 				throw new Error(`unknown flag: ${flag}`);
 		}
 	}
-	assertKnownAgent(agent);
+	assertDraftTarget(agent);
 	if (!Number.isInteger(minSessions) || minSessions < 2) {
 		throw new Error("--min-sessions must be an integer >= 2");
 	}
@@ -977,12 +995,81 @@ export function parseDraftArgs(argv: string[]): DraftArgs {
 		maxSpread,
 		fixtureDir,
 		write,
+		auto,
 		json,
 	};
 }
 
+/**
+ * The repository the recorded sessions mostly ran in.
+ *
+ * A main-target task is benchmarked in a worktree of ONE repository, so the
+ * suite has to pick one, and "where this work actually happened" is the only
+ * defensible choice available from the ledger. Sessions from other projects are
+ * simply not drafted; a second project gets its own suite the day someone asks
+ * for one, rather than a suite that silently mixes two trees.
+ */
+export function modalProject(
+	ledger: readonly RealWorkSession[],
+): string | null {
+	const counts = new Map<string, number>();
+	for (const row of ledger) {
+		if (row.project === null || row.project === "") continue;
+		counts.set(row.project, (counts.get(row.project) ?? 0) + 1);
+	}
+	let best: string | null = null;
+	let bestCount = 0;
+	// Ties break on the lexically first path, so the choice is deterministic
+	// across runs rather than dependent on Map insertion order.
+	for (const [project, count] of [...counts].sort((a, b) =>
+		a[0].localeCompare(b[0]),
+	)) {
+		if (count > bestCount) {
+			best = project;
+			bestCount = count;
+		}
+	}
+	return best;
+}
+
+/**
+ * Which drafts may be PROMOTED into the suite without a human reading them.
+ *
+ * Promotion is the step that lets autopilot measure real work, and it is the
+ * step where a bad task costs real tokens forever after, so the bar is narrower
+ * than the bar for drafting:
+ *
+ *   - the repeatability gate already passed (the planner refuses anything else);
+ *   - the derived check was PROBED against a pristine tree and FAILED there.
+ *     `null` -- probed nowhere -- is not good enough here, though it is good
+ *     enough to sit in `drafts/` for a human to judge. An unprobed check may be
+ *     a dead sensor, and a dead sensor passes with and without a rule, which
+ *     turns every verdict it touches into noise;
+ *   - the task names the repository it runs in, because a main-target benchmark
+ *     with no tree is not a measurement.
+ *
+ * Everything else stays a draft. This is the one place where "plug and play"
+ * and "measure honestly" pull against each other, and the resolution is that
+ * autopilot promotes only what it could verify by itself.
+ */
+export function promotable(drafted: readonly DraftedTask[]): DraftedTask[] {
+	return drafted.filter(
+		(task) => task.failsPristine === true && task.content.includes("project: "),
+	);
+}
+
 export function main(argv: string[]): number {
 	const args = parseDraftArgs(argv);
+	// AUTOPILOT DRAFTING. `--auto` is what the SessionStart hook runs when the
+	// main target still has no suite: resolve the repository the work happened
+	// in, probe every derived check against a pristine worktree of it, and
+	// promote what survives straight into the suite. The probe is why this
+	// cannot simply be `--write` with a different output directory -- a check
+	// that already passes on an untouched tree is a dead sensor, and only a real
+	// tree can say which checks those are. Zero model tokens: it runs shell
+	// commands in a throwaway worktree, and spawns no agent.
+	let probeFixture: MainFixture | null = null;
+	let project: string | null = null;
 	const plan = withDb((db) => {
 		const ledger = realWorkSessions(db, args.agent);
 		const transcripts: SessionTranscript[] = [];
@@ -991,17 +1078,58 @@ export function main(argv: string[]): number {
 			if (path === null) continue;
 			transcripts.push({ sessionId, jsonl: readFileSync(path, "utf8") });
 		}
+		let fixtureDir = args.fixtureDir;
+		if (args.auto) {
+			project = modalProject(ledger);
+			if (project !== null) {
+				try {
+					probeFixture = provisionMainFixture(
+						project,
+						mkdtempSync(join(tmpdir(), "warden-draft-probe-")),
+					);
+					fixtureDir = probeFixture.dir;
+				} catch {
+					// Not a git repository, or git refused. Drafting still runs --
+					// the drafts are useful to a human -- but nothing can be probed,
+					// so nothing will be promotable.
+					probeFixture = null;
+				}
+			}
+		}
 		return planDrafts(args.agent, ledger, transcripts, {
 			minSessions: args.minSessions,
 			maxSpread: args.maxSpread,
-			fixtureDir: args.fixtureDir,
+			fixtureDir,
+			project,
 		});
 	});
-	if (args.write && plan.drafted.length > 0) {
-		mkdirSync(args.out, { recursive: true });
-		for (const task of plan.drafted) {
-			writeFileSync(join(args.out, task.fileName), task.content);
+	const promoted = args.auto ? promotable(plan.drafted) : [];
+	try {
+		if (args.auto) {
+			// Promoted tasks go to the suite; everything else stays a draft, so a
+			// human still sees what autopilot would not vouch for.
+			const suiteDir = join(userBenchmarksDir(), args.agent);
+			if (promoted.length > 0) {
+				mkdirSync(suiteDir, { recursive: true });
+				for (const task of promoted) {
+					writeFileSync(join(suiteDir, task.fileName), task.content);
+				}
+			}
+			const held = plan.drafted.filter((task) => !promoted.includes(task));
+			if (held.length > 0) {
+				mkdirSync(args.out, { recursive: true });
+				for (const task of held) {
+					writeFileSync(join(args.out, task.fileName), task.content);
+				}
+			}
+		} else if (args.write && plan.drafted.length > 0) {
+			mkdirSync(args.out, { recursive: true });
+			for (const task of plan.drafted) {
+				writeFileSync(join(args.out, task.fileName), task.content);
+			}
 		}
+	} finally {
+		if (probeFixture !== null) (probeFixture as MainFixture).release();
 	}
 	if (args.json) {
 		console.log(
