@@ -29,6 +29,7 @@ import {
 	type WardenDb,
 } from "./db.js";
 import { appendLogLine } from "./logfile.js";
+import { compileMainInjection } from "./memory.js";
 import {
 	isValidAgentName,
 	knownAgents,
@@ -214,6 +215,13 @@ export function sessionStart(
 ): string | null {
 	const counts = candidateCounts(db);
 	const parts: string[] = [];
+	// SURVIVING MAIN-TARGET RULES RIDE THIS HOOK. It is the delivery half of the
+	// loop for the one target that has no agent-memory file to read: rules that
+	// beat twice their rent on the user's own work are injected here, into the
+	// session they were measured for. Placed FIRST so the rules land ahead of
+	// any operational chatter about pending candidates.
+	const rules = compileMainInjection(db);
+	if (rules !== null) parts.push(rules);
 	const nudge = buildNudge(counts);
 	if (nudge !== null) parts.push(nudge);
 

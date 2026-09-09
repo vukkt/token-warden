@@ -48,6 +48,19 @@ pinned as a regression test.
 **A project that is not a git repository is refused, not measured against a
 stand-in.** A number produced against the wrong tree is worse than no number.
 
+### Surviving rules reach the session through the hook
+
+The main target has no `agent-memory/<name>/MEMORY.md` to be written into, and
+writing into the user's own `CLAUDE.md` would put a build artifact in a file
+they hand-edit and commit. `memory.ts#compileMainInjection` renders the active
+main rules and the SessionStart hook injects them, so nothing is written,
+nothing drifts, and removing the plugin removes the rules.
+
+A stated assumption, not a measured one: a main-target rule is MEASURED with
+these bytes in the benchmark worktree's project memory and DELIVERED with the
+same bytes in a hook injection. Same text, same session, same rent -- but two
+mechanisms, which is part of why a main-target verdict is marked draft-derived.
+
 ### Autopilot is the default; the flag is now the off switch
 
 `TOKEN_WARDEN_AUTO_SELECT=1` opted in to measurement; measurement is now on and

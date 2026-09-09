@@ -39,6 +39,7 @@ import { packRules } from "./knapsack.js";
 import { trigramSimilarity } from "./rules.js";
 import { displayText } from "./sanitize.js";
 import { memoryContextBudget } from "./stats.js";
+import { MAIN_TARGET } from "./types.js";
 
 /** Compile rule bodies into the MEMORY.md injected into the agent's prompt.
  * Overwritten wholesale by the selector — never hand-edited (invariant #2). A
@@ -57,6 +58,35 @@ export function compileMemoryMd(
 		...lines,
 		"",
 	].join("\n");
+}
+
+/**
+ * The main target's rules, as the text a SessionStart hook injects.
+ *
+ * WHY THIS EXISTS RATHER THAN A FILE. Every other target compiles to
+ * `agent-memory/<name>/MEMORY.md`, which Claude Code injects when that agent
+ * runs. A top-level session reads no such file; its equivalents are the user's
+ * own `CLAUDE.md` files, and writing into those would mean this tool editing
+ * the user's repository -- a build artifact (invariant #2) landing in a file
+ * they hand-edit and commit. The SessionStart hook already injects context, so
+ * surviving rules ride that channel instead: nothing is written, nothing to
+ * drift, and removing the plugin removes the rules.
+ *
+ * THE STATED ASSUMPTION. A main-target rule is MEASURED with these bytes in the
+ * benchmark's project memory (`installAgent` writes `CLAUDE.md` into the
+ * throwaway worktree) and DELIVERED with the same bytes in a SessionStart
+ * injection. Both put the same text in the same session at the same point, and
+ * the rent charged is the same token count either way -- but they are two
+ * mechanisms, and this project does not claim to have measured that they are
+ * interchangeable. It is why a main-target verdict is marked draft-derived.
+ *
+ * Returns null when there is nothing to inject, so the hook stays silent rather
+ * than emitting an empty header.
+ */
+export function compileMainInjection(db: WardenDb): string | null {
+	const rules = memorySafeRules(getActiveRules(db, MAIN_TARGET));
+	if (rules.length === 0) return null;
+	return compileMemoryMd(packToBudget(rules));
 }
 
 /** Where compiled agent memory lives. Overridable for tests so they never

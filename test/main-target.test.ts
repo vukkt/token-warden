@@ -24,12 +24,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { copyFixture, installAgent } from "../src/bench.js";
+import { getActiveRules, openDb } from "../src/db.js";
 import {
 	deriveAllowlist,
 	isMainTarget,
 	mainDefinition,
 	provisionMainFixture,
 } from "../src/main-target.js";
+import { compileMainInjection, compileMemoryMd } from "../src/memory.js";
 import { mainTargetMeasurable, measurableTargets } from "../src/registry.js";
 
 describe("isMainTarget", () => {
@@ -437,5 +439,75 @@ describe("copyFixture for the main target", () => {
 		expect(() => copyFixture(join(scratch, "wt2"), "main", task(null))).toThrow(
 			/no "project"/,
 		);
+	});
+});
+
+/**
+ * Delivery. A rule that survives on the main target has no agent-memory file to
+ * be written into; it reaches the next session through the SessionStart hook.
+ */
+describe("compileMainInjection", () => {
+	let dbDir: string;
+	let db: ReturnType<typeof openDb>;
+
+	beforeEach(() => {
+		dbDir = mkdtempSync(join(tmpdir(), "warden-inject-"));
+		db = openDb(join(dbDir, "w.db"));
+	});
+
+	afterEach(() => {
+		db.close();
+		rmSync(dbDir, { recursive: true, force: true });
+	});
+
+	function addRule(agent: string, body: string, status: string): void {
+		db.prepare(
+			`INSERT INTO rules (agent, body, status, context_cost, created_at)
+			 VALUES (?, ?, ?, 20, '2026-09-09T00:00:00.000Z')`,
+		).run(agent, body, status);
+	}
+
+	it("is null when nothing has survived, so the hook stays silent", () => {
+		expect(compileMainInjection(db)).toBeNull();
+	});
+
+	it("carries active main rules and nothing else", () => {
+		addRule("main", "Grep before reading.", "active");
+		addRule("main", "An evicted idea.", "evicted");
+		addRule("sql", "A rule for another target.", "active");
+		const out = compileMainInjection(db);
+		expect(out).toContain("Grep before reading.");
+		expect(out).not.toContain("An evicted idea.");
+		expect(out).not.toContain("A rule for another target.");
+	});
+
+	it("renders a scoped rule with its condition", () => {
+		db.prepare(
+			`INSERT INTO rules (agent, body, status, context_cost, scope, created_at)
+			 VALUES ('main', 'Batch the reads.', 'active', 20, 'in migrations',
+			 '2026-09-09T00:00:00.000Z')`,
+		).run();
+		expect(compileMainInjection(db)).toContain("(when in migrations)");
+	});
+
+	it("respects a context budget, as the packer does for any other target", () => {
+		process.env.WARDEN_CONTEXT_BUDGET = "1";
+		try {
+			addRule("main", "A rule too large for a one-token budget.", "active");
+			// Nothing fits, so nothing is injected -- and the hook stays silent
+			// rather than emitting an empty header.
+			expect(compileMainInjection(db)).toBe(compileMemoryMd([]));
+		} finally {
+			delete process.env.WARDEN_CONTEXT_BUDGET;
+		}
+	});
+
+	it("emits the same bytes the benchmark measured", () => {
+		// The measured side writes `compileMemoryMd` into the worktree's
+		// CLAUDE.md; delivery must not quietly reformat it, or the rule that was
+		// charged rent is not the rule that ships.
+		addRule("main", "Grep before reading.", "active");
+		const rules = getActiveRules(db, "main");
+		expect(compileMainInjection(db)).toBe(compileMemoryMd(rules));
 	});
 });

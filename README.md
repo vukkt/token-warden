@@ -12,7 +12,7 @@
   version    1.2.0             tests       ~1,150 across 42 files
   license    MIT               coverage    96% lines, CI-enforced floor
   source     26 modules        commands    7
-              11.2k lines      built       2026-06 to 2026-09
+              11.3k lines      built       2026-06 to 2026-09
 ```
 
 ---
@@ -122,7 +122,7 @@ instead of quietly accumulating.
 
 | | |
 |---|---|
-| **Tests** | 1,148 across 42 files — 18.4k lines of test against 11.2k of source |
+| **Tests** | 1,153 across 42 files — 18.4k lines of test against 11.3k of source |
 | **Coverage** | 96% lines, 90% branches, behind a floor CI fails on |
 | **Types** | Strict TypeScript. Zero `any`, zero `@ts-ignore`, zero non-null assertions |
 | **Data** | SQLite, 17 versioned migrations under `BEGIN IMMEDIATE` |
